@@ -1,6 +1,6 @@
 {
   "name": "gltf-parser-plugin",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "A plugin for parsing GLTF files",
   "type": "module",
   "main": "./build/gltf-parser-plugin.module.js",
