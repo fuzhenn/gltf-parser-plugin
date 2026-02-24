@@ -66,5 +66,62 @@ export function processGLTFData(data: any): {
     }
   }
 
+  // Process EXT_mesh_gpu_instancing on scene nodes
+  if (data.scenes) {
+    const processNode = (node: any) => {
+      const instancingExt =
+        node.extensions?.EXT_mesh_gpu_instancing;
+      if (instancingExt?.attributes) {
+        const attrs = instancingExt.attributes;
+        const translationAttr = attrs.TRANSLATION;
+        const rotationAttr = attrs.ROTATION;
+        const scaleAttr = attrs.SCALE;
+
+        // Derive instance count from the first available attribute
+        const refAttr = translationAttr || rotationAttr || scaleAttr;
+        if (refAttr) {
+          const refArray = refAttr.array || refAttr;
+          const itemSize =
+            refAttr.itemSize || (refAttr === rotationAttr ? 4 : 3);
+          const count = refArray.length / itemSize;
+
+          const instanceData: Record<string, any> = { count };
+
+          if (translationAttr) {
+            const arr = translationAttr.array || translationAttr;
+            instanceData.TRANSLATION = arr;
+            addTransferable(arr);
+          }
+          if (rotationAttr) {
+            const arr = rotationAttr.array || rotationAttr;
+            instanceData.ROTATION = arr;
+            addTransferable(arr);
+          }
+          if (scaleAttr) {
+            const arr = scaleAttr.array || scaleAttr;
+            instanceData.SCALE = arr;
+            addTransferable(arr);
+          }
+
+          node.instanceData = instanceData;
+        }
+      }
+
+      if (node.children) {
+        for (const child of node.children) {
+          processNode(child);
+        }
+      }
+    };
+
+    for (const scene of data.scenes) {
+      if (scene.nodes) {
+        for (const node of scene.nodes) {
+          processNode(node);
+        }
+      }
+    }
+  }
+
   return { data, transferables };
 }

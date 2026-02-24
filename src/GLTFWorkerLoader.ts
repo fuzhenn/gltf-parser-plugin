@@ -1,11 +1,14 @@
 import {
   Group,
+  InstancedMesh,
   LoadingManager,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  Quaternion,
   Scene,
   Texture,
+  Vector3,
   Loader,
 } from "three";
 import {
@@ -170,16 +173,79 @@ export class GLTFWorkerLoader extends Loader {
 
       const primitiveDataList = meshMap.get(nodeData.mesh);
       if (primitiveDataList) {
-        for (const {
-          geometry,
-          material,
-          primitiveIndex,
-        } of primitiveDataList) {
-          const mesh = new Mesh(geometry, material);
-          // Record original GLTF index corresponding to the mesh
-          mesh.userData._gltfMeshIndex = nodeData.mesh;
-          mesh.userData._gltfPrimitiveIndex = primitiveIndex;
-          node.add(mesh);
+        if (nodeData.instanceData) {
+          // EXT_mesh_gpu_instancing: create InstancedMesh per primitive
+          const { count, TRANSLATION, ROTATION, SCALE } =
+            nodeData.instanceData;
+
+          for (const {
+            geometry,
+            material,
+            primitiveIndex,
+          } of primitiveDataList) {
+            const instancedMesh = new InstancedMesh(
+              geometry,
+              material,
+              count,
+            );
+
+            const tmpMatrix = new Matrix4();
+            const tmpPos = new Vector3();
+            const tmpQuat = new Quaternion();
+            const tmpScale = new Vector3(1, 1, 1);
+
+            for (let i = 0; i < count; i++) {
+              if (TRANSLATION) {
+                tmpPos.set(
+                  TRANSLATION[i * 3],
+                  TRANSLATION[i * 3 + 1],
+                  TRANSLATION[i * 3 + 2],
+                );
+              } else {
+                tmpPos.set(0, 0, 0);
+              }
+
+              if (ROTATION) {
+                tmpQuat.set(
+                  ROTATION[i * 4],
+                  ROTATION[i * 4 + 1],
+                  ROTATION[i * 4 + 2],
+                  ROTATION[i * 4 + 3],
+                );
+              } else {
+                tmpQuat.identity();
+              }
+
+              if (SCALE) {
+                tmpScale.set(
+                  SCALE[i * 3],
+                  SCALE[i * 3 + 1],
+                  SCALE[i * 3 + 2],
+                );
+              } else {
+                tmpScale.set(1, 1, 1);
+              }
+
+              tmpMatrix.compose(tmpPos, tmpQuat, tmpScale);
+              instancedMesh.setMatrixAt(i, tmpMatrix);
+            }
+
+            instancedMesh.instanceMatrix.needsUpdate = true;
+            instancedMesh.userData._gltfMeshIndex = nodeData.mesh;
+            instancedMesh.userData._gltfPrimitiveIndex = primitiveIndex;
+            node.add(instancedMesh);
+          }
+        } else {
+          for (const {
+            geometry,
+            material,
+            primitiveIndex,
+          } of primitiveDataList) {
+            const mesh = new Mesh(geometry, material);
+            mesh.userData._gltfMeshIndex = nodeData.mesh;
+            mesh.userData._gltfPrimitiveIndex = primitiveIndex;
+            node.add(mesh);
+          }
         }
       }
 

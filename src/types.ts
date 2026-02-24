@@ -160,11 +160,11 @@ export interface GLTFWorkerData {
           TANGENT?: { array: Float32Array; itemSize: number };
           // Feature ID attributes (e.g., _FEATURE_ID_0)
           [key: string]:
-            | {
-                array: Float32Array | Uint16Array | Uint32Array;
-                itemSize: number;
-              }
-            | undefined;
+          | {
+            array: Float32Array | Uint16Array | Uint32Array;
+            itemSize: number;
+          }
+          | undefined;
         };
         indices?: { array: Uint16Array | Uint32Array };
         material?: number;
@@ -198,6 +198,13 @@ export interface GLTFWorkerData {
   };
 }
 
+export interface InstanceData {
+  count: number;
+  TRANSLATION?: Float32Array;
+  ROTATION?: Float32Array;
+  SCALE?: Float32Array;
+}
+
 export interface GLTFNodeData {
   name?: string;
   mesh: number;
@@ -206,6 +213,7 @@ export interface GLTFNodeData {
   rotation?: number[];
   scale?: number[];
   children?: GLTFNodeData[];
+  instanceData?: InstanceData;
 }
 
 export type MaterialBuilder = (
