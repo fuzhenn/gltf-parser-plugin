@@ -1,3 +1,6 @@
+import { dequantizeAttribute } from "./dequantize";
+import type { AttributeData } from "./types";
+import { decodeTangent } from "./tangent";
 
 /**
  * Process and dequantize GLTF data
@@ -20,15 +23,21 @@ export function processGLTFData(data: any): {
     key: string,
     itemSize: number,
     attributes: Record<string, any>,
+    decoder?: (attr: AttributeData) => any,
   ) => {
     const attr = attributes[key];
-    if (!attr?.array) return null;
-
-    // Update attribute structure and add to transferables
-    attributes[key] = { array: attr.array, itemSize };
-    addTransferable(attr.array);
-
-    return attr.array;
+    if (attr && attr.array) {
+      // if else
+      const processed = decoder
+        ? decoder(attr)
+        : attr.quantization
+          ? dequantizeAttribute(attr, itemSize)
+          : attr.array;
+      attributes[key] = { array: processed, itemSize };
+      addTransferable(processed);
+      return processed;
+    }
+    return null;
   };
 
   if (data.meshes) {
@@ -54,7 +63,7 @@ export function processGLTFData(data: any): {
         }
 
         // Process tangents
-        processAttribute("TANGENT", 4, attributes);
+        processAttribute("TANGENT", 4, attributes, decodeTangent);
 
         // Process Feature ID attributes (for EXT_mesh_features)
         for (const attrName in attributes) {
@@ -69,8 +78,7 @@ export function processGLTFData(data: any): {
   // Process EXT_mesh_gpu_instancing on scene nodes
   if (data.scenes) {
     const processNode = (node: any) => {
-      const instancingExt =
-        node.extensions?.EXT_mesh_gpu_instancing;
+      const instancingExt = node.extensions?.EXT_mesh_gpu_instancing;
       if (instancingExt?.attributes) {
         const attrs = instancingExt.attributes;
         const translationAttr = attrs.TRANSLATION;
