@@ -36,9 +36,7 @@ function defaultMaterialBuilder(
   matData: any,
   textureMap: Map<number, Texture>,
 ): Material {
-  const material = new MeshStandardMaterial({
-    flatShading: true,
-  });
+  const material = new MeshStandardMaterial();
 
   // PBR material properties
   if (matData.pbrMetallicRoughness) {

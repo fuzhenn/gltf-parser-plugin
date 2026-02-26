@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Material } from "three";
+import { BufferAttribute, BufferGeometry, Material, MeshStandardMaterial } from "three";
 import type { GLTFWorkerData, PrimitiveExtensions } from "../types";
 
 export interface PrimitiveData {
@@ -113,6 +113,10 @@ export function buildMeshPrimitives(
         primitive.material !== undefined
           ? materialMap.get(primitive.material) || defaultMaterial
           : defaultMaterial;
+
+      if (!geometry.hasAttribute("normal") && material instanceof MeshStandardMaterial) {
+        material.flatShading = true;
+      }
 
       primitiveDataList.push({
         geometry,
