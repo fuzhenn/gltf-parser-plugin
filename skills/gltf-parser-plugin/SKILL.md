@@ -1,12 +1,13 @@
 ---
 name: gltf-parser-plugin
-description: High-performance GLTF/GLB loader plugin for 3d-tiles-renderer using Web Workers. Use when integrating 3D Tiles with Three.js, configuring tile loading, enabling metadata extensions, customizing materials, or setting up IndexedDB caching.
+description: High-performance GLTF/GLB loader plugin for 3d-tiles-renderer with Web Worker parsing, feature-level operations (query, hide, split by OID), and MeshCollector. Use when integrating 3D Tiles with Three.js, configuring tile loading, enabling metadata extensions, customizing materials, setting up IndexedDB caching, querying features from raycaster hits, hiding/showing features by OID, or extracting individual meshes by OID.
 ---
 
 # GLTF Parser Plugin
 
 基于 Web Worker 的高性能 GLTF/GLB 加载器插件，专为 `3d-tiles-renderer` + `Three.js` 设计。
 在 Worker 线程完成 GLTF 解析和 Draco 解压，主线程零阻塞构建 Three.js 场景。
+同时集成了要素级操作能力：通过 OID 查询、隐藏、拆分单体化 Mesh。
 
 ## Quick Start
 
@@ -17,12 +18,12 @@ import { GLTFParserPlugin } from "gltf-parser-plugin";
 const tiles = new TilesRenderer("https://example.com/tileset.json");
 
 // 注册插件（替换默认的 GLTFLoader）
-tiles.registerPlugin(new GLTFParserPlugin());
+// 传入 renderer 以启用要素操作功能（hideByOids、getMeshCollectorByOid 等）
+const plugin = new GLTFParserPlugin({ renderer });
+tiles.registerPlugin(plugin);
 
-// 添加到 Three.js 场景
 scene.add(tiles.group);
 
-// 渲染循环中更新
 function animate() {
   tiles.update();
   renderer.render(scene, camera);
@@ -34,12 +35,124 @@ function animate() {
 
 ```typescript
 new GLTFParserPlugin({
+  renderer,                  // WebGLRenderer 实例，启用要素操作功能时必传
   metadata: true,            // 启用 3D Tiles 元数据扩展（默认 true）
   maxWorkers: 4,             // Worker 池大小（默认 navigator.hardwareConcurrency）
   materialBuilder: myBuilder, // 自定义材质构建函数
   useIndexedDB: false,       // IndexedDB 瓦片缓存（默认 false）
+  beforeParseTile: async (buffer, tile, ext, uri, signal) => buffer, // 解析前预处理回调
 });
 ```
+
+| 选项 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `renderer` | `WebGLRenderer` | — | 启用 hideByOids 等要素操作功能时必须传入 |
+| `metadata` | `boolean` | `true` | 启用 EXT_mesh_features / EXT_structural_metadata 解析 |
+| `maxWorkers` | `number` | `hardwareConcurrency` | Worker 池大小 |
+| `materialBuilder` | `MaterialBuilder` | — | 自定义材质构建函数 |
+| `beforeParseTile` | `Function` | — | 解析前 buffer 预处理回调 |
+| `useIndexedDB` | `boolean` | `false` | 启用 IndexedDB 瓦片缓存 |
+
+## 要素查询
+
+通过射线拾取获取要素信息（OID、featureId、属性数据）。
+
+```typescript
+import { GLTFParserPlugin, FeatureInfo } from "gltf-parser-plugin";
+
+const raycaster = new THREE.Raycaster();
+
+function onMouseClick(event: MouseEvent) {
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(tiles.group, true);
+
+  if (intersects.length > 0) {
+    const result: FeatureInfo = plugin.queryFeatureFromIntersection(intersects[0]);
+
+    if (result.isValid) {
+      console.log("OID:", result.oid);
+      console.log("Feature ID:", result.featureId);
+      console.log("属性数据:", result.propertyData);
+    }
+  }
+}
+```
+
+### FeatureInfo 结构
+
+```typescript
+interface FeatureInfo {
+  oid?: number;          // 对象标识符
+  featureId?: number;    // 要素 ID
+  features?: number[];   // 要素 ID 数组
+  propertyData?: object; // 结构化属性数据
+  isValid: boolean;      // 查询是否成功
+  error?: string;        // 失败时的错误信息
+}
+```
+
+## 要素隐藏 / 显示
+
+通过 OID 控制要素的可见性，基于 shader 注入实现（fragment discard），不修改几何体。
+需要在构造时传入 `renderer` 参数。
+
+```typescript
+const plugin = new GLTFParserPlugin({ renderer });
+tiles.registerPlugin(plugin);
+
+// 隐藏指定 OID 对应的要素
+plugin.hideByOids([1001, 1002, 1003]);
+
+// 恢复部分 OID 的显示
+plugin.unhideByOids([1002]);
+
+// 恢复全部显示
+plugin.unhide();
+```
+
+### 实现原理
+
+- 插件在模型加载时自动构建 OID → FeatureId 映射表（存储在 `mesh.userData.idMap`）
+- 通过 `material.onBeforeCompile` 注入自定义 shader 代码
+- 顶点着色器传递 `_feature_id_0` 属性到 fragment
+- 片段着色器根据 `hiddenFeatureIds` uniform 数组执行 `discard`
+- `FEATURE_ID_COUNT` 根据隐藏数量动态调整（2 的幂次，最小 32），受 WebGL `MAX_FRAGMENT_UNIFORM_VECTORS` 限制
+
+## MeshCollector
+
+按 OID 获取独立的单体化 Mesh，随瓦片加载/卸载自动更新。
+适用于对特定要素进行独立渲染（高亮、替换材质、包围盒计算等）。
+
+```typescript
+import { MeshCollector } from "gltf-parser-plugin";
+
+// 创建收集器，监听 OID 为 1001 的 mesh 变化
+const collector = plugin.getMeshCollectorByOid(1001);
+
+// 获取当前 meshes
+console.log(collector.meshes);
+
+// 监听 mesh 变化（瓦片加载/卸载时触发）
+collector.addEventListener("mesh-change", (event) => {
+  const meshes = event.meshes;
+  // meshes 是按 OID 从瓦片中拆分出的独立 Mesh 数组
+  // 每个 mesh 的 userData 包含 featureId、oid、propertyData 等
+  meshes.forEach((mesh) => {
+    mesh.material = highlightMaterial; // 替换材质实现高亮
+    scene.add(mesh);
+  });
+});
+
+// 不再需要时销毁
+collector.dispose();
+```
+
+### MeshCollector 特性
+
+- 基于 Three.js `EventDispatcher`，通过 `addEventListener` / `removeEventListener` 管理事件
+- 瓦片加载完成时自动触发 `mesh-change` 事件
+- 拆分后的 mesh 共享原始几何体的 attribute buffer（仅重建 index），内存占用低
+- 拆分后的 mesh `userData` 包含：`featureId`、`oid`、`originalMesh`、`propertyData`、`isSplit: true`
 
 ## 自定义材质
 
@@ -64,7 +177,6 @@ const materialBuilder = (
     clearcoat: 1.0,
   });
 
-  // 应用贴图
   if (pbr.baseColorTexture) {
     material.map = textureMap.get(pbr.baseColorTexture.index) ?? null;
   }
@@ -104,119 +216,36 @@ await plugin.clearCache();
 | `EXT_mesh_features` | 要素 ID（属性/纹理） | `mesh.userData.meshFeatures` |
 | `EXT_mesh_gpu_instancing` | GPU 实例化渲染 | 自动构建为 `THREE.InstancedMesh` |
 
-### 读取元数据
+### 自动构建的 userData 字段
 
-```typescript
-import { StructuralMetadata } from "3d-tiles-renderer/src/three/plugins/gltf/metadata/classes/StructuralMetadata.js";
-import { MeshFeatures } from "3d-tiles-renderer/src/three/plugins/gltf/metadata/classes/MeshFeatures.js";
-
-// 场景级结构化元数据
-tiles.group.traverse((child) => {
-  if (child.isScene) {
-    const metadata: StructuralMetadata = child.userData.structuralMetadata;
-    if (metadata) {
-      // 访问属性表
-      const table = metadata.getPropertyTable(0);
-      const value = table.getPropertyValue(featureId, "propertyName");
-    }
-  }
-});
-
-// Mesh 级要素数据
-tiles.group.traverse((child) => {
-  if (child.isMesh) {
-    const features: MeshFeatures = child.userData.meshFeatures;
-    if (features) {
-      // 获取要素 ID
-      const featureId = features.getFeatureId(faceIndex);
-    }
-
-    // Mesh 级结构化元数据
-    const meshMetadata: StructuralMetadata = child.userData.structuralMetadata;
-  }
-});
-```
-
-### 基于要素的拾取与高亮
-
-```typescript
-const raycaster = new THREE.Raycaster();
-
-function onMouseClick(event: MouseEvent) {
-  raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObject(tiles.group, true);
-
-  if (intersects.length > 0) {
-    const hit = intersects[0];
-    const mesh = hit.object as THREE.Mesh;
-
-    // 获取 MeshFeatures
-    const features: MeshFeatures = mesh.userData.meshFeatures;
-    if (features) {
-      const featureId = features.getFeatureId(hit.faceIndex!);
-      console.log("Feature ID:", featureId);
-
-      // 通过 StructuralMetadata 查询属性
-      const metadata: StructuralMetadata = mesh.userData.structuralMetadata;
-      if (metadata) {
-        const table = metadata.getPropertyTable(0);
-        const name = table.getPropertyValue(featureId, "name");
-        const height = table.getPropertyValue(featureId, "height");
-        console.log(`${name}: ${height}m`);
-      }
-    }
-  }
-}
-```
-
-## GPU 实例化
-
-包含 `EXT_mesh_gpu_instancing` 扩展的节点会自动构建为 `THREE.InstancedMesh`，无需额外配置。
-
-```typescript
-// 遍历场景中的 InstancedMesh
-tiles.group.traverse((child) => {
-  if (child instanceof THREE.InstancedMesh) {
-    console.log(`实例数量: ${child.count}`);
-
-    // 读取单个实例的变换矩阵
-    const matrix = new THREE.Matrix4();
-    child.getMatrixAt(0, matrix);
-
-    // Raycasting 返回 instanceId
-    const intersects = raycaster.intersectObject(child);
-    if (intersects.length > 0) {
-      console.log("Instance ID:", intersects[0].instanceId);
-    }
-  }
-});
-```
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `mesh.userData.meshFeatures` | `MeshFeatures` | 要素 ID 访问接口 |
+| `mesh.userData.structuralMetadata` | `StructuralMetadata` | 结构化属性查询接口 |
+| `mesh.userData.idMap` | `Record<number, number>` | OID → FeatureId 映射表（插件自动构建） |
 
 ## 与 3d-tiles-renderer 的集成
 
 ### 插件生命周期
 
-插件通过 `tiles.registerPlugin()` 注册，自动接管 GLTF/GLB 文件的加载流程：
-
 ```
 TilesRenderer 请求瓦片
-  → GLTFParserPlugin.fetchData()     // 可选 IndexedDB 缓存
-  → GLTFWorkerLoader.parseAsync()    // Worker 解析 + 主线程构建场景
-  → 返回与 GLTFLoader 兼容的结果格式  // { scene, scenes, animations, ... }
+  → GLTFParserPlugin.fetchData()           // 可选 IndexedDB 缓存
+  → GLTFParserPlugin.parseTile()           // 可选 beforeParseTile 预处理
+  → GLTFWorkerLoader.parseAsync()          // Worker 解析 + 主线程构建场景
+  → load-model 事件 → 构建 idMap + 注入 shader  // 要素操作准备
+  → tiles-load-end 事件 → 通知 MeshCollector 更新  // 收集器同步
 ```
 
 ### 搭配其他插件
 
 ```typescript
-import { TilesRenderer } from "3d-tiles-renderer";
-import { CesiumIonAuthPlugin } from "3d-tiles-renderer";
+import { TilesRenderer, CesiumIonAuthPlugin } from "3d-tiles-renderer";
 import { GLTFParserPlugin } from "gltf-parser-plugin";
 
 const tiles = new TilesRenderer();
-
-// GLTFParserPlugin 与其他 3d-tiles-renderer 插件兼容
 tiles.registerPlugin(new CesiumIonAuthPlugin({ assetId: 12345, accessToken: "..." }));
-tiles.registerPlugin(new GLTFParserPlugin({ metadata: true }));
+tiles.registerPlugin(new GLTFParserPlugin({ renderer, metadata: true }));
 ```
 
 ### 销毁清理
@@ -225,52 +254,54 @@ tiles.registerPlugin(new GLTFParserPlugin({ metadata: true }));
 // 插件会在 TilesRenderer 销毁时自动清理
 tiles.dispose();
 
-// 或手动调用
+// 或手动调用（会清理 loader、事件监听、collectors、splitMeshCache）
 plugin.dispose();
 ```
 
-## 与 Three.js 的关系
+## 公开 API 一览
 
-### 依赖版本
+| 方法 | 说明 |
+|---|---|
+| `queryFeatureFromIntersection(hit)` | 从射线交点查询要素信息（OID、featureId、属性） |
+| `hideByOids(oids)` | 通过 shader discard 隐藏指定 OID 的要素 |
+| `unhideByOids(oids)` | 恢复指定 OID 的要素显示 |
+| `unhide()` | 恢复全部要素显示 |
+| `getMeshCollectorByOid(oid)` | 获取 MeshCollector，监听特定 OID 的 mesh 变化 |
+| `getFeatureIdCount()` | 获取当前 shader uniform 数组大小 |
+| `clearCache()` | 清除 IndexedDB 缓存 |
+| `dispose()` | 销毁插件，释放所有资源 |
+
+## 依赖版本
 
 | 包 | 版本要求 | 关系 |
 |---|---|---|
 | `three` | `^0.183.1` | peerDependency，需项目自行安装 |
 | `3d-tiles-renderer` | `^0.4.21` | 运行时依赖 |
 
-### 构建产物映射
+## 源码结构
 
-插件在 Worker 中解析 GLTF 二进制数据，在主线程构建为标准 Three.js 对象：
-
-| GLTF 概念 | Three.js 对象 |
-|---|---|
-| Scene / Node | `THREE.Scene` / `THREE.Group` |
-| Mesh | `THREE.Mesh` |
-| Instanced Mesh | `THREE.InstancedMesh` |
-| Material (PBR) | `THREE.MeshStandardMaterial` |
-| Texture (pixel data) | `THREE.DataTexture` |
-| Geometry (vertices) | `THREE.BufferGeometry` |
-
-### 与 Three.js GLTFLoader 的区别
-
-| 特性 | GLTFLoader | GLTFParserPlugin |
-|---|---|---|
-| 解析线程 | 主线程 | Web Worker |
-| Draco 解压 | 需手动配置 DRACOLoader | 内置 Worker 端 Draco |
-| 3D Tiles 元数据 | 不支持 | 原生支持 |
-| 瓦片缓存 | 无 | 可选 IndexedDB |
-| 适用场景 | 通用 GLTF 加载 | 3D Tiles 大规模瓦片场景 |
+```
+src/
+├── GLTFParserPlugin.ts        # 主插件（GLTF 加载 + 要素操作）
+├── GLTFWorkerLoader.ts        # Worker 加载器
+├── MeshCollector.ts           # OID Mesh 收集器
+├── mesh-helper/               # 要素操作工具
+│   ├── idmap.ts               #   OID → FeatureId 映射构建
+│   ├── intersection.ts        #   射线交点要素查询
+│   ├── mesh.ts                #   按 OID 拆分 mesh
+│   └── FeatureIdUniforms.ts   #   Shader uniform 管理
+├── worker/                    # Worker 端 GLTF 解析
+├── db/                        # IndexedDB 缓存
+├── utils/                     # 材质/纹理/几何体构建
+├── types.ts                   # 类型定义
+└── index.ts                   # 入口导出
+```
 
 ## 性能建议
 
 1. **Worker 数量**：默认使用 `navigator.hardwareConcurrency`，移动端建议设为 2-4
 2. **IndexedDB 缓存**：对重复访问的瓦片场景开启，减少网络请求
 3. **自定义材质**：复杂 shader 应在 `materialBuilder` 中统一构建，避免运行时修改
-4. **元数据**：如不需要属性查询，设置 `metadata: false` 可减少解析开销
-
-## See Also
-
-- `3d-tiles-renderer` — 3D Tiles 渲染引擎
-- `threejs-fundamentals` — Three.js 场景基础
-- `threejs-materials` — Three.js 材质类型
-- `threejs-geometry` — Three.js 几何体构建
+4. **元数据**：如不需要属性查询和要素操作，设置 `metadata: false` 可减少解析开销
+5. **要素隐藏数量**：受 WebGL `MAX_FRAGMENT_UNIFORM_VECTORS` 限制，数组大小自动按 2 的幂次递增
+6. **MeshCollector**：拆分 mesh 共享原始 attribute buffer，但每次瓦片更新会重建 index，频繁创建应注意性能
