@@ -89,6 +89,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private maxUniformVectors: number = 1024;
   private featureIdCount: number = 32;
   private collectors: Set<MeshCollector> = new Set();
+  private collectorCache: Map<number, MeshCollector> = new Map();
 
   /**
    * Create a GLTFParserPlugin instance
@@ -248,6 +249,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   _unregisterCollector(collector: MeshCollector): void {
     this.collectors.delete(collector);
+    this.collectorCache.delete(collector.getOid());
   }
 
   private _updateWebGLLimits() {
@@ -393,9 +395,16 @@ export class GLTFParserPlugin implements MeshHelperHost {
   /**
    * 根据 oid 获取 MeshCollector
    * MeshCollector 会监听瓦片变化，自动更新 meshes 并触发 mesh-change 事件
+   * 内部缓存：相同 oid 多次调用会返回同一个 collector 实例
    */
   getMeshCollectorByOid(oid: number): MeshCollector {
-    return new MeshCollector(oid, this);
+    const existing = this.collectorCache.get(oid);
+    if (existing) {
+      return existing;
+    }
+    const collector = new MeshCollector(oid, this);
+    this.collectorCache.set(oid, collector);
+    return collector;
   }
 
   /**
@@ -449,6 +458,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       collector.dispose();
     }
     this.collectors.clear();
+    this.collectorCache.clear();
 
     this.splitMeshCache.clear();
 
