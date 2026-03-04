@@ -29,6 +29,26 @@ interface TileWithCache {
 }
 
 /**
+ * structure.json 中的树节点结构
+ */
+export interface StructureNode {
+  id?: number;
+  name?: string;
+  bbox?: number[];
+  children?: StructureNode[];
+  [key: string]: unknown;
+}
+
+/**
+ * structure.json 的完整数据结构
+ */
+export interface StructureData {
+  defaultTree?: number;
+  idField?: string;
+  trees: StructureNode[];
+}
+
+/**
  * GLTFParserPlugin configuration options
  */
 export interface GLTFParserPluginOptions {
@@ -81,6 +101,11 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _loader: GLTFWorkerLoader | null = null;
   private readonly _gltfRegex = /\.(gltf|glb)$/g;
   private readonly _options: GLTFParserPluginOptions;
+
+  // --- Structure data properties ---
+  private _structureData: StructureData | null = null;
+  private _oidNodeMap: Map<number, StructureNode> = new Map();
+  private _structurePromise: Promise<StructureData | null> | null = null;
 
   // --- Mesh helper properties ---
   oids: number[] = [];
@@ -206,6 +231,103 @@ export class GLTFParserPlugin implements MeshHelperHost {
       );
     }
     return this.tiles!.parseTile(buffer, tile, extension, uri, abortSignal);
+  }
+
+  // =============================================
+  // Structure Data Methods
+  // =============================================
+
+  private _getStructureUrl(): string | null {
+    const rootURL = this.tiles?.rootURL as string | undefined;
+    if (!rootURL) return null;
+    return rootURL.replace(/[^/]+$/, "structure.json");
+  }
+
+  private _buildOidNodeMap(
+    node: StructureNode,
+    map: Map<number, StructureNode>,
+  ): void {
+    if (node.id !== undefined) {
+      map.set(node.id, node);
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        this._buildOidNodeMap(child, map);
+      }
+    }
+  }
+
+  private async _fetchStructureData(): Promise<StructureData | null> {
+    const url = this._getStructureUrl();
+    if (!url) {
+      console.warn("[GLTFParserPlugin] Cannot derive structure.json URL: tiles not initialized");
+      return null;
+    }
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`[GLTFParserPlugin] Failed to fetch structure.json: ${response.status}`);
+        return null;
+      }
+      const data: StructureData = await response.json();
+      this._structureData = data;
+
+      this._oidNodeMap.clear();
+      if (data.trees) {
+        for (const tree of data.trees) {
+          this._buildOidNodeMap(tree, this._oidNodeMap);
+        }
+      }
+
+      return data;
+    } catch (error) {
+      console.error("[GLTFParserPlugin] Error loading structure.json:", error);
+      return null;
+    }
+  }
+
+  private async _ensureStructureLoaded(): Promise<StructureData | null> {
+    if (this._structureData) return this._structureData;
+    if (!this._structurePromise) {
+      this._structurePromise = this._fetchStructureData();
+    }
+    return this._structurePromise;
+  }
+
+  /**
+   * 根据 oid 获取 structure.json 中对应的节点树数据
+   * 包含 bbox、children、name 等完整结构信息
+   * 首次调用时会自动从 tileset URL 推导并请求 structure.json
+   */
+  async getNodeTreeByOid(oid: number): Promise<StructureNode | null> {
+    await this._ensureStructureLoaded();
+    return this._oidNodeMap.get(oid) ?? null;
+  }
+
+  /**
+   * 根据 oid 数组批量获取 structure.json 中对应的节点树数据
+   */
+  async getNodeTreeByOids(
+    oids: number[],
+  ): Promise<Map<number, StructureNode>> {
+    await this._ensureStructureLoaded();
+    const result = new Map<number, StructureNode>();
+    for (const oid of oids) {
+      const node = this._oidNodeMap.get(oid);
+      if (node) {
+        result.set(oid, node);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 获取完整的 structure.json 数据
+   * 首次调用时会自动请求
+   */
+  async getStructureData(): Promise<StructureData | null> {
+    return this._ensureStructureLoaded();
   }
 
   // =============================================
@@ -461,6 +583,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this.collectorCache.clear();
 
     this.splitMeshCache.clear();
+
+    this._structureData = null;
+    this._oidNodeMap.clear();
+    this._structurePromise = null;
 
     this._loader = null;
     this.tiles = null;
