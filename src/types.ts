@@ -160,11 +160,11 @@ export interface GLTFWorkerData {
           TANGENT?: { array: Float32Array; itemSize: number };
           // Feature ID attributes (e.g., _FEATURE_ID_0)
           [key: string]:
-          | {
-            array: Float32Array | Uint16Array | Uint32Array;
-            itemSize: number;
-          }
-          | undefined;
+            | {
+                array: Float32Array | Uint16Array | Uint32Array;
+                itemSize: number;
+              }
+            | undefined;
         };
         indices?: { array: Uint16Array | Uint32Array };
         material?: number;
@@ -194,7 +194,7 @@ export interface GLTFWorkerData {
   structuralMetadata?: {
     schema: StructuralMetadataExtension["schema"];
     propertyTables: StructuralMetadataExtension["propertyTables"];
-    buffers: Array<ArrayBuffer | null>;
+    buffers: Array<ArrayBuffer>;
   };
 }
 

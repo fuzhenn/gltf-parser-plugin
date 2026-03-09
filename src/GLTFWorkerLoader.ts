@@ -20,8 +20,9 @@ import {
   getWorkers,
 } from "./utils";
 import type { GLTFNodeData, GLTFWorkerData, MaterialBuilder } from "./types";
-import { StructuralMetadata } from "3d-tiles-renderer/src/three/plugins/gltf/metadata/classes/StructuralMetadata.js";
-import { MeshFeatures } from "3d-tiles-renderer/src/three/plugins/gltf/metadata/classes/MeshFeatures.js";
+import { StructuralMetadata, MeshFeatures } from "3d-tiles-renderer/plugins";
+
+// 隔离接收oid数组
 
 // Extension names
 const EXT_STRUCTURAL_METADATA = "EXT_structural_metadata";
@@ -175,19 +176,14 @@ export class GLTFWorkerLoader extends Loader {
       if (primitiveDataList) {
         if (nodeData.instanceData) {
           // EXT_mesh_gpu_instancing: create InstancedMesh per primitive
-          const { count, TRANSLATION, ROTATION, SCALE } =
-            nodeData.instanceData;
+          const { count, TRANSLATION, ROTATION, SCALE } = nodeData.instanceData;
 
           for (const {
             geometry,
             material,
             primitiveIndex,
           } of primitiveDataList) {
-            const instancedMesh = new InstancedMesh(
-              geometry,
-              material,
-              count,
-            );
+            const instancedMesh = new InstancedMesh(geometry, material, count);
 
             const tmpMatrix = new Matrix4();
             const tmpPos = new Vector3();
@@ -217,11 +213,7 @@ export class GLTFWorkerLoader extends Loader {
               }
 
               if (SCALE) {
-                tmpScale.set(
-                  SCALE[i * 3],
-                  SCALE[i * 3 + 1],
-                  SCALE[i * 3 + 2],
-                );
+                tmpScale.set(SCALE[i * 3], SCALE[i * 3 + 1], SCALE[i * 3 + 2]);
               } else {
                 tmpScale.set(1, 1, 1);
               }
