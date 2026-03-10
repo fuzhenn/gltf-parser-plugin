@@ -49,6 +49,19 @@ export interface StructureData {
 }
 
 /**
+ * modelInfo.json 的数据结构
+ */
+export interface ModelInfo {
+  animatable: boolean;
+  images: number;
+  materials: number;
+  pbr: boolean;
+  textures: number;
+  triangles: number;
+  vertices: number;
+}
+
+/**
  * GLTFParserPlugin configuration options
  */
 export interface GLTFParserPluginOptions {
@@ -106,6 +119,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _structureData: StructureData | null = null;
   private _oidNodeMap: Map<number, StructureNode> = new Map();
   private _structurePromise: Promise<StructureData | null> | null = null;
+
+  // --- Model info properties ---
+  private _modelInfo: ModelInfo | null = null;
+  private _modelInfoPromise: Promise<ModelInfo | null> | null = null;
 
   // --- Interaction filter properties ---
   private _frozenOids: Set<number> = new Set();
@@ -335,6 +352,55 @@ export class GLTFParserPlugin implements MeshHelperHost {
    */
   async getStructureData(): Promise<StructureData | null> {
     return this._ensureStructureLoaded();
+  }
+
+  // =============================================
+  // Model Info Methods
+  // =============================================
+
+  private _getModelInfoUrl(): string | null {
+    const rootURL = this.tiles?.rootURL as string | undefined;
+    if (!rootURL) return null;
+    return rootURL.replace(/[^/]+$/, "modelInfo.json");
+  }
+
+  private async _fetchModelInfo(): Promise<ModelInfo | null> {
+    const url = this._getModelInfoUrl();
+    if (!url) {
+      console.warn("[GLTFParserPlugin] Cannot derive modelInfo.json URL: tiles not initialized");
+      return null;
+    }
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`[GLTFParserPlugin] Failed to fetch modelInfo.json: ${response.status}`);
+        return null;
+      }
+      const data: ModelInfo = await response.json();
+      this._modelInfo = data;
+      return data;
+    } catch (error) {
+      console.error("[GLTFParserPlugin] Error loading modelInfo.json:", error);
+      return null;
+    }
+  }
+
+  private async _ensureModelInfoLoaded(): Promise<ModelInfo | null> {
+    if (this._modelInfo) return this._modelInfo;
+    if (!this._modelInfoPromise) {
+      this._modelInfoPromise = this._fetchModelInfo();
+    }
+    return this._modelInfoPromise;
+  }
+
+  /**
+   * 获取 modelInfo.json 数据
+   * 包含模型的基本信息：动画支持、材质数量、顶点数、三角形数等
+   * 首次调用时会自动从 tileset URL 推导并请求 modelInfo.json
+   */
+  async getModelInfo(): Promise<ModelInfo | null> {
+    return this._ensureModelInfoLoaded();
   }
 
   // =============================================
@@ -789,6 +855,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._structureData = null;
     this._oidNodeMap.clear();
     this._structurePromise = null;
+
+    // Clear model info data
+    this._modelInfo = null;
+    this._modelInfoPromise = null;
 
     for (const [, meshSet] of this._trackedMeshes) {
       for (const mesh of meshSet) {
