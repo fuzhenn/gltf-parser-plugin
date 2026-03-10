@@ -107,6 +107,13 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _oidNodeMap: Map<number, StructureNode> = new Map();
   private _structurePromise: Promise<StructureData | null> | null = null;
 
+  // --- Interaction filter properties ---
+  private _frozenOids: Set<number> = new Set();
+  private _isolatedOids: Set<number> = new Set();
+  private _trackedMeshes: Map<number, Set<Mesh>> = new Map();
+  private _meshListeners: Map<Mesh, { onAdded: () => void; onRemoved: () => void }> = new Map();
+  private _isPluginRemoving = false;
+
   // --- Mesh helper properties ---
   oids: number[] = [];
   private renderer: WebGLRenderer | null = null;
@@ -370,8 +377,17 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   _unregisterCollector(collector: MeshCollector): void {
+    const oid = collector.getOid();
     this.collectors.delete(collector);
-    this.collectorCache.delete(collector.getOid());
+    this.collectorCache.delete(oid);
+
+    const tracked = this._trackedMeshes.get(oid);
+    if (tracked) {
+      for (const mesh of tracked) {
+        this._untrackMesh(mesh);
+      }
+      this._trackedMeshes.delete(oid);
+    }
   }
 
   private _updateWebGLLimits() {
@@ -486,9 +502,188 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   /**
    * Query feature information from intersection
+   * Respects freeze and isolate filters
    */
   queryFeatureFromIntersection(hit: Intersection): FeatureInfo {
-    return queryFeatureFromIntersection(hit);
+    const result = queryFeatureFromIntersection(hit);
+
+    if (result.isValid && result.oid !== undefined) {
+      if (this._frozenOids.has(result.oid)) {
+        return { isValid: false, error: "Component is frozen" };
+      }
+      if (this._isolatedOids.size > 0 && !this._isolatedOids.has(result.oid)) {
+        return { isValid: false, error: "Component is not in isolated set" };
+      }
+    }
+
+    return result;
+  }
+
+  // =============================================
+  // Interaction Filter Methods
+  // =============================================
+
+  private _isOidBlocked(oid: number): boolean {
+    if (this._frozenOids.has(oid)) return true;
+    if (this._isolatedOids.size > 0 && !this._isolatedOids.has(oid)) return true;
+    return false;
+  }
+
+  private _trackMesh(mesh: Mesh, oid: number): void {
+    if (this._meshListeners.has(mesh)) return;
+
+    const onAdded = () => {
+      if (this._isPluginRemoving) return;
+      mesh.userData._detachedParent = null;
+      if (this._isOidBlocked(oid) && mesh.parent) {
+        const parent = mesh.parent;
+        this._isPluginRemoving = true;
+        mesh.userData._detachedParent = parent;
+        parent.remove(mesh);
+        this._isPluginRemoving = false;
+      }
+    };
+
+    const onRemoved = () => {
+      if (this._isPluginRemoving) return;
+      mesh.userData._detachedParent = null;
+    };
+
+    mesh.addEventListener("added", onAdded);
+    mesh.addEventListener("removed", onRemoved);
+    this._meshListeners.set(mesh, { onAdded, onRemoved });
+  }
+
+  private _untrackMesh(mesh: Mesh): void {
+    const listeners = this._meshListeners.get(mesh);
+    if (listeners) {
+      mesh.removeEventListener("added", listeners.onAdded);
+      mesh.removeEventListener("removed", listeners.onRemoved);
+      this._meshListeners.delete(mesh);
+    }
+    mesh.userData._detachedParent = null;
+  }
+
+  private _onCollectorMeshChange(oid: number, newMeshes: Mesh[]): void {
+    const tracked = this._trackedMeshes.get(oid);
+    const newSet = new Set(newMeshes);
+
+    if (tracked) {
+      for (const mesh of tracked) {
+        if (!newSet.has(mesh)) {
+          this._untrackMesh(mesh);
+          tracked.delete(mesh);
+        }
+      }
+    }
+
+    const trackSet = tracked || new Set<Mesh>();
+    for (const mesh of newMeshes) {
+      if (!trackSet.has(mesh)) {
+        this._trackMesh(mesh, oid);
+        trackSet.add(mesh);
+      }
+    }
+    this._trackedMeshes.set(oid, trackSet);
+  }
+
+  private _syncCollectorMeshes(): void {
+    this._isPluginRemoving = true;
+
+    for (const [oid, collector] of this.collectorCache) {
+      const blocked = this._isOidBlocked(oid);
+
+      for (const mesh of collector.meshes) {
+        if (!this._meshListeners.has(mesh)) continue;
+
+        if (blocked) {
+          if (mesh.parent && !mesh.userData._detachedParent) {
+            const parent = mesh.parent;
+            mesh.userData._detachedParent = parent;
+            // parent.remove(mesh);
+            this.unhideByOids([oid]);
+          }
+        } else {
+          const storedParent = mesh.userData._detachedParent;
+          if (storedParent && !mesh.parent) {
+            storedParent.add(mesh);
+            mesh.userData._detachedParent = null;
+          }
+        }
+      }
+    }
+
+    this._isPluginRemoving = false;
+  }
+
+  /**
+   * 冻结指定构件，被冻结的构件不再响应任何交互和事件
+   */
+  freezeByOids(oids: number[]): void {
+    for (const oid of oids) {
+      this._frozenOids.add(oid);
+    }
+    this._syncCollectorMeshes();
+  }
+
+  /**
+   * 解冻指定构件
+   */
+  unfreezeByOids(oids: number[]): void {
+    for (const oid of oids) {
+      this._frozenOids.delete(oid);
+    }
+    this._syncCollectorMeshes();
+  }
+
+  /**
+   * 解冻全部构件
+   */
+  unfreeze(): void {
+    this._frozenOids.clear();
+    this._syncCollectorMeshes();
+  }
+
+  /**
+   * 获取当前被冻结的 OID 数组
+   */
+  getFrozenOids(): number[] {
+    return Array.from(this._frozenOids);
+  }
+
+  /**
+   * 隔离指定构件，隔离模式下只有被隔离的构件才能响应交互和事件
+   */
+  isolateByOids(oids: number[]): void {
+    for (const oid of oids) {
+      this._isolatedOids.add(oid);
+    }
+    this._syncCollectorMeshes();
+  }
+
+  /**
+   * 取消隔离指定构件
+   */
+  unisolateByOids(oids: number[]): void {
+    for (const oid of oids) {
+      this._isolatedOids.delete(oid);
+    }
+    this._syncCollectorMeshes();
+  }
+
+  /**
+   * 取消全部隔离，恢复所有构件的交互能力
+   */
+  unisolate(): void {
+    this._isolatedOids.clear();
+    this._syncCollectorMeshes();
+  }
+
+  /**
+   * 获取当前被隔离的 OID 数组
+   */
+  getIsolatedOids(): number[] {
+    return Array.from(this._isolatedOids);
   }
 
   /**
@@ -526,6 +721,13 @@ export class GLTFParserPlugin implements MeshHelperHost {
     }
     const collector = new MeshCollector(oid, this);
     this.collectorCache.set(oid, collector);
+
+    this._onCollectorMeshChange(oid, collector.meshes);
+
+    collector.addEventListener("mesh-change", (event) => {
+      this._onCollectorMeshChange(oid, event.meshes);
+    });
+
     return collector;
   }
 
@@ -587,6 +789,16 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._structureData = null;
     this._oidNodeMap.clear();
     this._structurePromise = null;
+
+    for (const [, meshSet] of this._trackedMeshes) {
+      for (const mesh of meshSet) {
+        this._untrackMesh(mesh);
+      }
+    }
+    this._trackedMeshes.clear();
+    this._meshListeners.clear();
+    this._frozenOids.clear();
+    this._isolatedOids.clear();
 
     this._loader = null;
     this.tiles = null;
