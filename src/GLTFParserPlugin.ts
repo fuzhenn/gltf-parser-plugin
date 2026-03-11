@@ -8,6 +8,7 @@ import {
   Vector2,
   WebGLRenderer,
 } from "three";
+import type { Vector3 } from "three";
 import {
   FeatureIdUniforms,
   FeatureInfo,
@@ -512,7 +513,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   /**
    * 选择多边形（平面投影）范围内的构件（包含相交和包含两种情况）
-   * @param polygon 多边形顶点数组（Vector2），按顺序连接构成闭合多边形
+   * @param polygon 多边形顶点数组（Vector3），按顺序连接构成闭合多边形
    * @param axis 投影平面，决定使用 bbox 的哪两个轴做 2D 判定
    *   - 'xz'（默认）：俯视图，取 bbox 的 x/z 坐标
    *   - 'xy'：正视图，取 bbox 的 x/y 坐标
@@ -520,11 +521,22 @@ export class GLTFParserPlugin implements MeshHelperHost {
    * @returns 范围内所有构件的 oid 数组
    */
   async selectByPolygon(
-    polygon: Vector2[],
+    polygon: Vector3[],
     axis: "xy" | "xz" | "yz" = "xz",
   ): Promise<number[]> {
     await this._ensureStructureLoaded();
     const result: number[] = [];
+    const polygon2D: Vector2[] = polygon.map((p) => {
+      switch (axis) {
+        case "xy":
+          return new Vector2(p.x, p.y);
+        case "yz":
+          return new Vector2(p.y, p.z);
+        case "xz":
+        default:
+          return new Vector2(p.x, p.z);
+      }
+    });
 
     for (const [oid, node] of this._oidNodeMap) {
       if (!node.bbox || node.bbox.length < 6) continue;
@@ -551,7 +563,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
           break;
       }
 
-      if (this._polygonIntersectsRect(polygon, minU, minV, maxU, maxV)) {
+      if (this._polygonIntersectsRect(polygon2D, minU, minV, maxU, maxV)) {
         result.push(oid);
       }
     }
