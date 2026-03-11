@@ -1,9 +1,11 @@
 import {
+  Box3,
   DoubleSide,
   Intersection,
   Material,
   Mesh,
   Object3D,
+  Vector2,
   WebGLRenderer,
 } from "three";
 import {
@@ -128,7 +130,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _frozenOids: Set<number> = new Set();
   private _isolatedOids: Set<number> = new Set();
   private _trackedMeshes: Map<number, Set<Mesh>> = new Map();
-  private _meshListeners: Map<Mesh, { onAdded: () => void; onRemoved: () => void }> = new Map();
+  private _meshListeners: Map<
+    Mesh,
+    { onAdded: () => void; onRemoved: () => void }
+  > = new Map();
   private _isPluginRemoving = false;
 
   // --- Mesh helper properties ---
@@ -284,14 +289,18 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private async _fetchStructureData(): Promise<StructureData | null> {
     const url = this._getStructureUrl();
     if (!url) {
-      console.warn("[GLTFParserPlugin] Cannot derive structure.json URL: tiles not initialized");
+      console.warn(
+        "[GLTFParserPlugin] Cannot derive structure.json URL: tiles not initialized",
+      );
       return null;
     }
 
     try {
       const response = await fetch(url);
       if (!response.ok) {
-        console.warn(`[GLTFParserPlugin] Failed to fetch structure.json: ${response.status}`);
+        console.warn(
+          `[GLTFParserPlugin] Failed to fetch structure.json: ${response.status}`,
+        );
         return null;
       }
       const data: StructureData = await response.json();
@@ -332,9 +341,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   /**
    * 根据 oid 数组批量获取 structure.json 中对应的节点树数据
    */
-  async getNodeTreeByOids(
-    oids: number[],
-  ): Promise<Map<number, StructureNode>> {
+  async getNodeTreeByOids(oids: number[]): Promise<Map<number, StructureNode>> {
     await this._ensureStructureLoaded();
     const result = new Map<number, StructureNode>();
     for (const oid of oids) {
@@ -355,6 +362,204 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   // =============================================
+  // Spatial Query Methods
+  // =============================================
+
+  private _pointInPolygon(px: number, py: number, polygon: Vector2[]): boolean {
+    let inside = false;
+    const n = polygon.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const xi = polygon[i].x,
+        yi = polygon[i].y;
+      const xj = polygon[j].x,
+        yj = polygon[j].y;
+      if (
+        yi > py !== yj > py &&
+        px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
+      ) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  private _segmentsIntersect(
+    ax1: number,
+    ay1: number,
+    ax2: number,
+    ay2: number,
+    bx1: number,
+    by1: number,
+    bx2: number,
+    by2: number,
+  ): boolean {
+    const cross = (
+      ox: number,
+      oy: number,
+      ax: number,
+      ay: number,
+      bx: number,
+      by: number,
+    ) => (ax - ox) * (by - oy) - (ay - oy) * (bx - ox);
+
+    const d1 = cross(bx1, by1, bx2, by2, ax1, ay1);
+    const d2 = cross(bx1, by1, bx2, by2, ax2, ay2);
+    const d3 = cross(ax1, ay1, ax2, ay2, bx1, by1);
+    const d4 = cross(ax1, ay1, ax2, ay2, bx2, by2);
+
+    if (
+      ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+    ) {
+      return true;
+    }
+
+    const onSeg = (
+      px: number,
+      py: number,
+      qx: number,
+      qy: number,
+      rx: number,
+      ry: number,
+    ) =>
+      Math.min(px, qx) <= rx &&
+      rx <= Math.max(px, qx) &&
+      Math.min(py, qy) <= ry &&
+      ry <= Math.max(py, qy);
+
+    if (d1 === 0 && onSeg(bx1, by1, bx2, by2, ax1, ay1)) return true;
+    if (d2 === 0 && onSeg(bx1, by1, bx2, by2, ax2, ay2)) return true;
+    if (d3 === 0 && onSeg(ax1, ay1, ax2, ay2, bx1, by1)) return true;
+    if (d4 === 0 && onSeg(ax1, ay1, ax2, ay2, bx2, by2)) return true;
+
+    return false;
+  }
+
+  private _polygonIntersectsRect(
+    polygon: Vector2[],
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+  ): boolean {
+    const n = polygon.length;
+
+    for (let i = 0; i < n; i++) {
+      const p = polygon[i];
+      if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) {
+        return true;
+      }
+    }
+
+    if (
+      this._pointInPolygon(minX, minY, polygon) ||
+      this._pointInPolygon(maxX, minY, polygon) ||
+      this._pointInPolygon(maxX, maxY, polygon) ||
+      this._pointInPolygon(minX, maxY, polygon)
+    ) {
+      return true;
+    }
+
+    const rx = [minX, maxX, maxX, minX];
+    const ry = [minY, minY, maxY, maxY];
+
+    for (let i = 0; i < n; i++) {
+      const a = polygon[i];
+      const b = polygon[(i + 1) % n];
+      for (let j = 0; j < 4; j++) {
+        const k = (j + 1) % 4;
+        if (
+          this._segmentsIntersect(
+            a.x,
+            a.y,
+            b.x,
+            b.y,
+            rx[j],
+            ry[j],
+            rx[k],
+            ry[k],
+          )
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * 选择包围盒范围内的构件（包含相交和包含两种情况）
+   * @param box 查询用的 Box3 范围，坐标系与 structure.json 中 bbox 一致
+   * @returns 范围内所有构件的 oid 数组
+   */
+  async selectByBox(box: Box3): Promise<number[]> {
+    await this._ensureStructureLoaded();
+    const result: number[] = [];
+    const nodeBox = new Box3();
+
+    for (const [oid, node] of this._oidNodeMap) {
+      if (!node.bbox || node.bbox.length < 6) continue;
+      nodeBox.min.set(node.bbox[0], node.bbox[1], node.bbox[2]);
+      nodeBox.max.set(node.bbox[3], node.bbox[4], node.bbox[5]);
+      if (box.intersectsBox(nodeBox)) {
+        result.push(oid);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * 选择多边形（平面投影）范围内的构件（包含相交和包含两种情况）
+   * @param polygon 多边形顶点数组（Vector2），按顺序连接构成闭合多边形
+   * @param axis 投影平面，决定使用 bbox 的哪两个轴做 2D 判定
+   *   - 'xz'（默认）：俯视图，取 bbox 的 x/z 坐标
+   *   - 'xy'：正视图，取 bbox 的 x/y 坐标
+   *   - 'yz'：侧视图，取 bbox 的 y/z 坐标
+   * @returns 范围内所有构件的 oid 数组
+   */
+  async selectByPolygon(
+    polygon: Vector2[],
+    axis: "xy" | "xz" | "yz" = "xz",
+  ): Promise<number[]> {
+    await this._ensureStructureLoaded();
+    const result: number[] = [];
+
+    for (const [oid, node] of this._oidNodeMap) {
+      if (!node.bbox || node.bbox.length < 6) continue;
+
+      let minU: number, minV: number, maxU: number, maxV: number;
+      switch (axis) {
+        case "xy":
+          minU = node.bbox[0];
+          minV = node.bbox[1];
+          maxU = node.bbox[3];
+          maxV = node.bbox[4];
+          break;
+        case "xz":
+          minU = node.bbox[0];
+          minV = node.bbox[2];
+          maxU = node.bbox[3];
+          maxV = node.bbox[5];
+          break;
+        case "yz":
+          minU = node.bbox[1];
+          minV = node.bbox[2];
+          maxU = node.bbox[4];
+          maxV = node.bbox[5];
+          break;
+      }
+
+      if (this._polygonIntersectsRect(polygon, minU, minV, maxU, maxV)) {
+        result.push(oid);
+      }
+    }
+
+    return result;
+  }
+
+  // =============================================
   // Model Info Methods
   // =============================================
 
@@ -367,14 +572,18 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private async _fetchModelInfo(): Promise<ModelInfo | null> {
     const url = this._getModelInfoUrl();
     if (!url) {
-      console.warn("[GLTFParserPlugin] Cannot derive modelInfo.json URL: tiles not initialized");
+      console.warn(
+        "[GLTFParserPlugin] Cannot derive modelInfo.json URL: tiles not initialized",
+      );
       return null;
     }
 
     try {
       const response = await fetch(url);
       if (!response.ok) {
-        console.warn(`[GLTFParserPlugin] Failed to fetch modelInfo.json: ${response.status}`);
+        console.warn(
+          `[GLTFParserPlugin] Failed to fetch modelInfo.json: ${response.status}`,
+        );
         return null;
       }
       const data: ModelInfo = await response.json();
@@ -471,7 +680,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
     if (currentOidCount > maxUniformVectors) {
       throw new Error(
-        `The number of OIDs to hide (${currentOidCount}) exceeds the WebGL MAX_FRAGMENT_UNIFORM_VECTORS limit (${maxUniformVectors}).`
+        `The number of OIDs to hide (${currentOidCount}) exceeds the WebGL MAX_FRAGMENT_UNIFORM_VECTORS limit (${maxUniformVectors}).`,
       );
     }
 
@@ -531,13 +740,13 @@ export class GLTFParserPlugin implements MeshHelperHost {
         "#include <common>",
         `#include <common>
              attribute float _feature_id_0;
-             varying float vFeatureId;`
+             varying float vFeatureId;`,
       );
 
       shader.vertexShader = shader.vertexShader.replace(
         "#include <begin_vertex>",
         `#include <begin_vertex>
-             vFeatureId = _feature_id_0;`
+             vFeatureId = _feature_id_0;`,
       );
 
       shader.fragmentShader = shader.fragmentShader.replace(
@@ -553,7 +762,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
                  }
                }
                return false;
-             }`
+             }`,
       );
 
       shader.fragmentShader = shader.fragmentShader.replace(
@@ -561,7 +770,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
         `void main() {
            if(shouldHideFeature(vFeatureId)) {
              discard;
-           }`
+           }`,
       );
     };
   }
@@ -591,7 +800,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   private _isOidBlocked(oid: number): boolean {
     if (this._frozenOids.has(oid)) return true;
-    if (this._isolatedOids.size > 0 && !this._isolatedOids.has(oid)) return true;
+    if (this._isolatedOids.size > 0 && !this._isolatedOids.has(oid))
+      return true;
     return false;
   }
 
@@ -693,12 +903,28 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
+   * 冻结单个构件
+   */
+  freezeByOid(oid: number): void {
+    this._frozenOids.add(oid);
+    this._syncCollectorMeshes();
+  }
+
+  /**
    * 解冻指定构件
    */
   unfreezeByOids(oids: number[]): void {
     for (const oid of oids) {
       this._frozenOids.delete(oid);
     }
+    this._syncCollectorMeshes();
+  }
+
+  /**
+   * 解冻单个构件
+   */
+  unfreezeByOid(oid: number): void {
+    this._frozenOids.delete(oid);
     this._syncCollectorMeshes();
   }
 
@@ -728,12 +954,28 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
+   * 往隔离集合中添加单个构件
+   */
+  isolateByOid(oid: number): void {
+    this._isolatedOids.add(oid);
+    this._syncCollectorMeshes();
+  }
+
+  /**
    * 取消隔离指定构件
    */
   unisolateByOids(oids: number[]): void {
     for (const oid of oids) {
       this._isolatedOids.delete(oid);
     }
+    this._syncCollectorMeshes();
+  }
+
+  /**
+   * 从隔离集合中移除单个构件
+   */
+  unisolateByOid(oid: number): void {
+    this._isolatedOids.delete(oid);
     this._syncCollectorMeshes();
   }
 
