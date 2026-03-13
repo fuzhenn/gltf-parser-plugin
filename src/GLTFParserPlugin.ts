@@ -5,7 +5,6 @@ import {
   Material,
   Mesh,
   Object3D,
-  Vector2,
   WebGLRenderer,
 } from "three";
 import type { Vector3 } from "three";
@@ -20,94 +19,33 @@ import {
 
 import { MeshCollector, type MeshHelperHost } from "./MeshCollector";
 import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
-import type { MaterialBuilder } from "./types";
+import { InteractionFilter } from "./plugin/InteractionFilter";
 import { setMaxWorkers } from "./utils";
+import {
+  selectByBoxFromOidMap,
+  selectByPolygonFromOidMap,
+} from "./utils/spatial-query";
 import { tileCache } from "./db";
 import { TilesRenderer } from "3d-tiles-renderer";
+
+import type {
+  GLTFParserPluginOptions,
+  ModelInfo,
+  StructureData,
+  StructureNode,
+} from "./plugin-types";
+
+export type {
+  GLTFParserPluginOptions,
+  ModelInfo,
+  StructureData,
+  StructureNode,
+};
 
 interface TileWithCache {
   cached?: {
     scene: Object3D;
   };
-}
-
-/**
- * structure.json 中的树节点结构
- */
-export interface StructureNode {
-  id?: number;
-  name?: string;
-  bbox?: number[];
-  children?: StructureNode[];
-  [key: string]: unknown;
-}
-
-/**
- * structure.json 的完整数据结构
- */
-export interface StructureData {
-  defaultTree?: number;
-  idField?: string;
-  trees: StructureNode[];
-}
-
-/**
- * modelInfo.json 的数据结构
- */
-export interface ModelInfo {
-  animatable: boolean;
-  images: number;
-  materials: number;
-  pbr: boolean;
-  textures: number;
-  triangles: number;
-  vertices: number;
-}
-
-/**
- * GLTFParserPlugin configuration options
- */
-export interface GLTFParserPluginOptions {
-  /**
-   * WebGLRenderer instance, required for mesh helper features (hideByOids, etc.)
-   */
-  renderer?: WebGLRenderer;
-  /**
-   * Whether to enable metadata support
-   * Includes EXT_mesh_features and EXT_structural_metadata extensions
-   * @default true
-   */
-  metadata?: boolean;
-  /**
-   * Maximum number of workers in the worker pool
-   * Maximum value is navigator.hardwareConcurrency
-   * @default navigator.hardwareConcurrency
-   */
-  maxWorkers?: number;
-
-  /**
-   * Custom material builder function
-   * Used to handle GLTF material extensions or custom material logic
-   */
-  materialBuilder?: MaterialBuilder;
-
-  /**
-   * Callback function before parsing
-   * Used to preprocess the buffer before parsing GLTF
-   */
-  beforeParseTile?: (
-    buffer: ArrayBuffer,
-    tile: any,
-    extension: any,
-    uri: string,
-    abortSignal: AbortSignal,
-  ) => Promise<ArrayBuffer>;
-
-  /**
-   * Whether to enable IndexedDB caching for tile data
-   * @default false
-   */
-  useIndexedDB?: boolean;
 }
 
 export class GLTFParserPlugin implements MeshHelperHost {
@@ -127,15 +65,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _modelInfo: ModelInfo | null = null;
   private _modelInfoPromise: Promise<ModelInfo | null> | null = null;
 
-  // --- Interaction filter properties ---
-  private _frozenOids: Set<number> = new Set();
-  private _isolatedOids: Set<number> = new Set();
-  private _trackedMeshes: Map<number, Set<Mesh>> = new Map();
-  private _meshListeners: Map<
-    Mesh,
-    { onAdded: () => void; onRemoved: () => void }
-  > = new Map();
-  private _isPluginRemoving = false;
+  private _interactionFilter: InteractionFilter;
 
   // --- Mesh helper properties ---
   oids: number[] = [];
@@ -161,6 +91,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
     if (options?.renderer) {
       this.renderer = options.renderer;
     }
+
+    this._interactionFilter = new InteractionFilter({
+      getCollectorCache: () => this.collectorCache,
+    });
 
     setMaxWorkers(this._options.maxWorkers!);
   }
@@ -362,133 +296,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
     return this._ensureStructureLoaded();
   }
 
-  // =============================================
-  // Spatial Query Methods
-  // =============================================
-
-  private _pointInPolygon(px: number, py: number, polygon: Vector2[]): boolean {
-    let inside = false;
-    const n = polygon.length;
-    for (let i = 0, j = n - 1; i < n; j = i++) {
-      const xi = polygon[i].x,
-        yi = polygon[i].y;
-      const xj = polygon[j].x,
-        yj = polygon[j].y;
-      if (
-        yi > py !== yj > py &&
-        px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
-      ) {
-        inside = !inside;
-      }
-    }
-    return inside;
-  }
-
-  private _segmentsIntersect(
-    ax1: number,
-    ay1: number,
-    ax2: number,
-    ay2: number,
-    bx1: number,
-    by1: number,
-    bx2: number,
-    by2: number,
-  ): boolean {
-    const cross = (
-      ox: number,
-      oy: number,
-      ax: number,
-      ay: number,
-      bx: number,
-      by: number,
-    ) => (ax - ox) * (by - oy) - (ay - oy) * (bx - ox);
-
-    const d1 = cross(bx1, by1, bx2, by2, ax1, ay1);
-    const d2 = cross(bx1, by1, bx2, by2, ax2, ay2);
-    const d3 = cross(ax1, ay1, ax2, ay2, bx1, by1);
-    const d4 = cross(ax1, ay1, ax2, ay2, bx2, by2);
-
-    if (
-      ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
-    ) {
-      return true;
-    }
-
-    const onSeg = (
-      px: number,
-      py: number,
-      qx: number,
-      qy: number,
-      rx: number,
-      ry: number,
-    ) =>
-      Math.min(px, qx) <= rx &&
-      rx <= Math.max(px, qx) &&
-      Math.min(py, qy) <= ry &&
-      ry <= Math.max(py, qy);
-
-    if (d1 === 0 && onSeg(bx1, by1, bx2, by2, ax1, ay1)) return true;
-    if (d2 === 0 && onSeg(bx1, by1, bx2, by2, ax2, ay2)) return true;
-    if (d3 === 0 && onSeg(ax1, ay1, ax2, ay2, bx1, by1)) return true;
-    if (d4 === 0 && onSeg(ax1, ay1, ax2, ay2, bx2, by2)) return true;
-
-    return false;
-  }
-
-  private _polygonIntersectsRect(
-    polygon: Vector2[],
-    minX: number,
-    minY: number,
-    maxX: number,
-    maxY: number,
-  ): boolean {
-    const n = polygon.length;
-
-    for (let i = 0; i < n; i++) {
-      const p = polygon[i];
-      if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) {
-        return true;
-      }
-    }
-
-    if (
-      this._pointInPolygon(minX, minY, polygon) ||
-      this._pointInPolygon(maxX, minY, polygon) ||
-      this._pointInPolygon(maxX, maxY, polygon) ||
-      this._pointInPolygon(minX, maxY, polygon)
-    ) {
-      return true;
-    }
-
-    const rx = [minX, maxX, maxX, minX];
-    const ry = [minY, minY, maxY, maxY];
-
-    for (let i = 0; i < n; i++) {
-      const a = polygon[i];
-      const b = polygon[(i + 1) % n];
-      for (let j = 0; j < 4; j++) {
-        const k = (j + 1) % 4;
-        if (
-          this._segmentsIntersect(
-            a.x,
-            a.y,
-            b.x,
-            b.y,
-            rx[j],
-            ry[j],
-            rx[k],
-            ry[k],
-          )
-        ) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
   /**
    * 选择包围盒范围内的构件（包含相交和包含两种情况）
    * @param box 查询用的 Box3 范围，坐标系与 structure.json 中 bbox 一致
@@ -496,19 +303,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
    */
   async selectByBox(box: Box3): Promise<number[]> {
     await this._ensureStructureLoaded();
-    const result: number[] = [];
-    const nodeBox = new Box3();
-
-    for (const [oid, node] of this._oidNodeMap) {
-      if (!node.bbox || node.bbox.length < 6) continue;
-      nodeBox.min.set(node.bbox[0], node.bbox[1], node.bbox[2]);
-      nodeBox.max.set(node.bbox[3], node.bbox[4], node.bbox[5]);
-      if (box.intersectsBox(nodeBox)) {
-        result.push(oid);
-      }
-    }
-
-    return result;
+    return selectByBoxFromOidMap(this._oidNodeMap, box);
   }
 
   /**
@@ -525,50 +320,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     axis: "xy" | "xz" | "yz" = "xz",
   ): Promise<number[]> {
     await this._ensureStructureLoaded();
-    const result: number[] = [];
-    const polygon2D: Vector2[] = polygon.map((p) => {
-      switch (axis) {
-        case "xy":
-          return new Vector2(p.x, p.y);
-        case "yz":
-          return new Vector2(p.y, p.z);
-        case "xz":
-        default:
-          return new Vector2(p.x, p.z);
-      }
-    });
-
-    for (const [oid, node] of this._oidNodeMap) {
-      if (!node.bbox || node.bbox.length < 6) continue;
-
-      let minU: number, minV: number, maxU: number, maxV: number;
-      switch (axis) {
-        case "xy":
-          minU = node.bbox[0];
-          minV = node.bbox[1];
-          maxU = node.bbox[3];
-          maxV = node.bbox[4];
-          break;
-        case "xz":
-          minU = node.bbox[0];
-          minV = node.bbox[2];
-          maxU = node.bbox[3];
-          maxV = node.bbox[5];
-          break;
-        case "yz":
-          minU = node.bbox[1];
-          minV = node.bbox[2];
-          maxU = node.bbox[4];
-          maxV = node.bbox[5];
-          break;
-      }
-
-      if (this._polygonIntersectsRect(polygon2D, minU, minV, maxU, maxV)) {
-        result.push(oid);
-      }
-    }
-
-    return result;
+    return selectByPolygonFromOidMap(this._oidNodeMap, polygon, axis);
   }
 
   // =============================================
@@ -667,14 +419,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     const oid = collector.getOid();
     this.collectors.delete(collector);
     this.collectorCache.delete(oid);
-
-    const tracked = this._trackedMeshes.get(oid);
-    if (tracked) {
-      for (const mesh of tracked) {
-        this._untrackMesh(mesh);
-      }
-      this._trackedMeshes.delete(oid);
-    }
+    this._interactionFilter.onUnregisterCollector(oid);
   }
 
   private _updateWebGLLimits() {
@@ -795,11 +540,13 @@ export class GLTFParserPlugin implements MeshHelperHost {
     const result = queryFeatureFromIntersection(hit);
 
     if (result.isValid && result.oid !== undefined) {
-      if (this._frozenOids.has(result.oid)) {
-        return { isValid: false, error: "Component is frozen" };
-      }
-      if (this._isolatedOids.size > 0 && !this._isolatedOids.has(result.oid)) {
-        return { isValid: false, error: "Component is not in isolated set" };
+      if (this._interactionFilter.isOidBlocked(result.oid)) {
+        return {
+          isValid: false,
+          error: this._interactionFilter.getFrozenOids().includes(result.oid)
+            ? "Component is frozen"
+            : "Component is not in isolated set",
+        };
       }
     }
 
@@ -807,203 +554,55 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   // =============================================
-  // Interaction Filter Methods
+  // Interaction Filter Methods (delegated)
   // =============================================
 
-  private _isOidBlocked(oid: number): boolean {
-    if (this._frozenOids.has(oid)) return true;
-    if (this._isolatedOids.size > 0 && !this._isolatedOids.has(oid))
-      return true;
-    return false;
-  }
-
-  private _trackMesh(mesh: Mesh, oid: number): void {
-    if (this._meshListeners.has(mesh)) return;
-
-    const onAdded = () => {
-      if (this._isPluginRemoving) return;
-      mesh.userData._detachedParent = null;
-      if (this._isOidBlocked(oid) && mesh.parent) {
-        const parent = mesh.parent;
-        this._isPluginRemoving = true;
-        mesh.userData._detachedParent = parent;
-        parent.remove(mesh);
-        this._isPluginRemoving = false;
-      }
-    };
-
-    const onRemoved = () => {
-      if (this._isPluginRemoving) return;
-      mesh.userData._detachedParent = null;
-    };
-
-    mesh.addEventListener("added", onAdded);
-    mesh.addEventListener("removed", onRemoved);
-    this._meshListeners.set(mesh, { onAdded, onRemoved });
-  }
-
-  private _untrackMesh(mesh: Mesh): void {
-    const listeners = this._meshListeners.get(mesh);
-    if (listeners) {
-      mesh.removeEventListener("added", listeners.onAdded);
-      mesh.removeEventListener("removed", listeners.onRemoved);
-      this._meshListeners.delete(mesh);
-    }
-    mesh.userData._detachedParent = null;
-  }
-
-  private _onCollectorMeshChange(oid: number, newMeshes: Mesh[]): void {
-    const tracked = this._trackedMeshes.get(oid);
-    const newSet = new Set(newMeshes);
-
-    if (tracked) {
-      for (const mesh of tracked) {
-        if (!newSet.has(mesh)) {
-          this._untrackMesh(mesh);
-          tracked.delete(mesh);
-        }
-      }
-    }
-
-    const trackSet = tracked || new Set<Mesh>();
-    for (const mesh of newMeshes) {
-      if (!trackSet.has(mesh)) {
-        this._trackMesh(mesh, oid);
-        trackSet.add(mesh);
-      }
-    }
-    this._trackedMeshes.set(oid, trackSet);
-  }
-
-  private _syncCollectorMeshes(): void {
-    this._isPluginRemoving = true;
-
-    for (const [oid, collector] of this.collectorCache) {
-      const blocked = this._isOidBlocked(oid);
-
-      for (const mesh of collector.meshes) {
-        if (!this._meshListeners.has(mesh)) continue;
-
-        if (blocked) {
-          if (mesh.parent && !mesh.userData._detachedParent) {
-            const parent = mesh.parent;
-            mesh.userData._detachedParent = parent;
-            // parent.remove(mesh);
-            this.unhideByOids([oid]);
-          }
-        } else {
-          const storedParent = mesh.userData._detachedParent;
-          if (storedParent && !mesh.parent) {
-            storedParent.add(mesh);
-            mesh.userData._detachedParent = null;
-          }
-        }
-      }
-    }
-
-    this._isPluginRemoving = false;
-  }
-
-  /**
-   * 冻结指定构件，被冻结的构件不再响应任何交互和事件
-   */
   freezeByOids(oids: number[]): void {
-    for (const oid of oids) {
-      this._frozenOids.add(oid);
-    }
-    this._syncCollectorMeshes();
+    this._interactionFilter.freezeByOids(oids);
   }
 
-  /**
-   * 冻结单个构件
-   */
   freezeByOid(oid: number): void {
-    this._frozenOids.add(oid);
-    this._syncCollectorMeshes();
+    this._interactionFilter.freezeByOid(oid);
   }
 
-  /**
-   * 解冻指定构件
-   */
   unfreezeByOids(oids: number[]): void {
-    for (const oid of oids) {
-      this._frozenOids.delete(oid);
-    }
-    this._syncCollectorMeshes();
+    this._interactionFilter.unfreezeByOids(oids);
   }
 
-  /**
-   * 解冻单个构件
-   */
   unfreezeByOid(oid: number): void {
-    this._frozenOids.delete(oid);
-    this._syncCollectorMeshes();
+    this._interactionFilter.unfreezeByOid(oid);
   }
 
-  /**
-   * 解冻全部构件
-   */
   unfreeze(): void {
-    this._frozenOids.clear();
-    this._syncCollectorMeshes();
+    this._interactionFilter.unfreeze();
   }
 
-  /**
-   * 获取当前被冻结的 OID 数组
-   */
   getFrozenOids(): number[] {
-    return Array.from(this._frozenOids);
+    return this._interactionFilter.getFrozenOids();
   }
 
-  /**
-   * 隔离指定构件，隔离模式下只有被隔离的构件才能响应交互和事件
-   */
   isolateByOids(oids: number[]): void {
-    for (const oid of oids) {
-      this._isolatedOids.add(oid);
-    }
-    this._syncCollectorMeshes();
+    this._interactionFilter.isolateByOids(oids);
   }
 
-  /**
-   * 往隔离集合中添加单个构件
-   */
   isolateByOid(oid: number): void {
-    this._isolatedOids.add(oid);
-    this._syncCollectorMeshes();
+    this._interactionFilter.isolateByOid(oid);
   }
 
-  /**
-   * 取消隔离指定构件
-   */
   unisolateByOids(oids: number[]): void {
-    for (const oid of oids) {
-      this._isolatedOids.delete(oid);
-    }
-    this._syncCollectorMeshes();
+    this._interactionFilter.unisolateByOids(oids);
   }
 
-  /**
-   * 从隔离集合中移除单个构件
-   */
   unisolateByOid(oid: number): void {
-    this._isolatedOids.delete(oid);
-    this._syncCollectorMeshes();
+    this._interactionFilter.unisolateByOid(oid);
   }
 
-  /**
-   * 取消全部隔离，恢复所有构件的交互能力
-   */
   unisolate(): void {
-    this._isolatedOids.clear();
-    this._syncCollectorMeshes();
+    this._interactionFilter.unisolate();
   }
 
-  /**
-   * 获取当前被隔离的 OID 数组
-   */
   getIsolatedOids(): number[] {
-    return Array.from(this._isolatedOids);
+    return this._interactionFilter.getIsolatedOids();
   }
 
   /**
@@ -1042,10 +641,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
     const collector = new MeshCollector(oid, this);
     this.collectorCache.set(oid, collector);
 
-    this._onCollectorMeshChange(oid, collector.meshes);
+    this._interactionFilter.onCollectorMeshChange(oid, collector.meshes);
 
     collector.addEventListener("mesh-change", (event) => {
-      this._onCollectorMeshChange(oid, event.meshes);
+      this._interactionFilter.onCollectorMeshChange(oid, event.meshes);
     });
 
     return collector;
@@ -1114,15 +713,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._modelInfo = null;
     this._modelInfoPromise = null;
 
-    for (const [, meshSet] of this._trackedMeshes) {
-      for (const mesh of meshSet) {
-        this._untrackMesh(mesh);
-      }
-    }
-    this._trackedMeshes.clear();
-    this._meshListeners.clear();
-    this._frozenOids.clear();
-    this._isolatedOids.clear();
+    this._interactionFilter.dispose();
 
     this._loader = null;
     this.tiles = null;

@@ -10,3 +10,10 @@ export {
   getWorkers,
   clearSchemaCache,
 } from "./worker-pool";
+export {
+  pointInPolygon,
+  segmentsIntersect,
+  polygonIntersectsRect,
+  selectByBoxFromOidMap,
+  selectByPolygonFromOidMap,
+} from "./spatial-query";
