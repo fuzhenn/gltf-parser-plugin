@@ -202,7 +202,7 @@ export class ComponentColorHelper {
 
       const collector = this.context.getMeshCollectorByOid(oid);
       collector.meshes.forEach((mesh) => {
-        if (!mesh.parent) scene.add(mesh);
+        scene.add(mesh);
         const mat = colorMat
           ? (this.materialByOid.get(oid) as Material)
           : (mesh.material as Material);
