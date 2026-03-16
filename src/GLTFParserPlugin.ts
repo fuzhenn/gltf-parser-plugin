@@ -23,6 +23,7 @@ import {
   PartColorHelper,
   type ColorInput,
 } from "./plugin/PartColorHelper";
+import { PartBlinkHelper } from "./plugin/PartBlinkHelper";
 import { InteractionFilter } from "./plugin/InteractionFilter";
 import { setMaxWorkers } from "./utils";
 import {
@@ -71,6 +72,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   private _interactionFilter: InteractionFilter;
   private _partColorHelper: PartColorHelper | null = null;
+  private _partBlinkHelper: PartBlinkHelper | null = null;
 
   // --- Mesh helper properties ---
   oids: number[] = [];
@@ -111,6 +113,13 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this.tiles = tiles;
 
     this._partColorHelper = new PartColorHelper({
+      hideByOids: (oids) => this.hideByOids(oids),
+      unhideByOids: (oids) => this.unhideByOids(oids),
+      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getScene: () => this.tiles?.group ?? null,
+    });
+
+    this._partBlinkHelper = new PartBlinkHelper({
       hideByOids: (oids) => this.hideByOids(oids),
       unhideByOids: (oids) => this.unhideByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
@@ -717,6 +726,37 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
+   * 设置需要闪烁的构件
+   * @param oids 构件 OID 数组
+   */
+  setBlinkPartsByOids(oids: number[]): void {
+    this._partBlinkHelper?.setBlinkPartsByOids(oids);
+  }
+
+  /**
+   * 设置闪烁颜色
+   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
+   */
+  setBlinkColor(color: ColorInput): void {
+    this._partBlinkHelper?.setBlinkColor(color);
+  }
+
+  /**
+   * 设置闪烁周期时间（毫秒）
+   * @param ms 一个完整闪烁周期（暗->亮->暗）的时长，默认 1000
+   */
+  setBlinkIntervalTime(ms: number): void {
+    this._partBlinkHelper?.setBlinkIntervalTime(ms);
+  }
+
+  /**
+   * 清除所有闪烁构件
+   */
+  clearAllBlinkParts(): void {
+    this._partBlinkHelper?.clearAllBlinkParts();
+  }
+
+  /**
    * Restore the original materials of the mesh
    */
   unhide(): void {
@@ -763,6 +803,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
     this._interactionFilter.dispose();
     this._partColorHelper = null;
+    this._partBlinkHelper?.dispose();
+    this._partBlinkHelper = null;
 
     this._loader = null;
     this.tiles = null;

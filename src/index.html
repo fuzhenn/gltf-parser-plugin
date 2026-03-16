@@ -2,7 +2,8 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Component Positioning - gltf-parser-plugin</title>
+    <title>Emphasis Component - gltf-parser-plugin</title>
+    <link rel="stylesheet" href="./index.css" />
     <style>
       #info {
         position: fixed;
@@ -15,37 +16,12 @@
         font-size: 14px;
         z-index: 100;
       }
-      #loading {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: rgba(0, 0, 0, 0.8);
-        color: white;
-        padding: 20px;
-        border-radius: 8px;
-        z-index: 9999;
-        font-size: 16px;
-        display: none;
-      }
     </style>
   </head>
   <body>
     <div id="container"></div>
-    <div id="info">点击构件进行定位</div>
-    <div id="loading">模型加载中...</div>
-
-    <script type="importmap">
-      {
-        "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@latest/build/three.module.js",
-          "three/examples/": "https://cdn.jsdelivr.net/npm/three@latest/examples/",
-          "3d-tiles-renderer": "https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.4.21/build/index.js",
-          "gltf-parser-plugin": "https://cdn.jsdelivr.net/npm/gltf-parser-plugin@1.0.9/build/gltf-parser-plugin.module.js"
-        }
-      }
-    </script>
-
+    <div id="info">点击构件使其闪烁强调</div>
+    
     <script type="module">
       import { TilesRenderer, EnvironmentControls } from "3d-tiles-renderer";
       import { GLTFParserPlugin } from "gltf-parser-plugin";
@@ -57,9 +33,6 @@
         PerspectiveCamera,
         Raycaster,
         Vector2,
-        Vector3,
-        Box3,
-        Box3Helper,
         Color,
       } from "three";
 
@@ -106,57 +79,13 @@
         return { scene, camera, renderer, controls };
       }
 
-      function setupPositioning(
-        tilesRenderer,
-        gltfPlugin,
-        scene,
-        camera,
-        controls,
-      ) {
+      // ============================================
+      // gltf-parser-plugin 核心功能演示 - 构件强调（闪烁效果）
+      // 使用插件封装的 setBlinkPartsByOids、clearAllBlinkParts 等接口
+      // ============================================
+      function setupEmphasis(tilesRenderer, gltfPlugin, camera) {
         const raycaster = new Raycaster();
         const mouse = new Vector2();
-        let boxHelper = null;
-
-        function flyToComponent(boundingBox) {
-          const center = boundingBox.getCenter(new Vector3());
-          const size = boundingBox.getSize(new Vector3());
-          const maxDim = Math.max(size.x, size.y, size.z);
-          const distance = maxDim * 2;
-
-          const offset = new Vector3(
-            distance * 0.8,
-            distance * 0.6,
-            distance * 0.8,
-          );
-          const targetPosition = center.clone().add(offset);
-
-          const startPos = camera.position.clone();
-          const startTime = performance.now();
-          const duration = 1000;
-
-          function animate(currentTime) {
-            const elapsed = currentTime - startTime;
-            const progress = Math.min(elapsed / duration, 1);
-            const easeProgress = 1 - Math.pow(1 - progress, 3);
-
-            camera.position.lerpVectors(startPos, targetPosition, easeProgress);
-            camera.lookAt(center);
-
-            if (progress < 1) {
-              requestAnimationFrame(animate);
-            }
-          }
-
-          requestAnimationFrame(animate);
-        }
-
-        function showBoundingBox(boundingBox) {
-          if (boxHelper) {
-            scene.remove(boxHelper);
-          }
-          boxHelper = new Box3Helper(boundingBox, 0x00aaff);
-          scene.add(boxHelper);
-        }
 
         window.addEventListener("click", (event) => {
           mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
@@ -172,31 +101,21 @@
             const featureInfo = gltfPlugin.queryFeatureFromIntersection(
               intersects[0],
             );
-
             if (featureInfo.isValid && featureInfo.oid !== undefined) {
-              gltfPlugin.getNodeTreeByOid(featureInfo.oid).then((node) => {
-                if (node && node.bbox) {
-                  const boundingBox = new Box3(
-                    new Vector3(node.bbox[0], node.bbox[1], node.bbox[2]),
-                    new Vector3(node.bbox[3], node.bbox[4], node.bbox[5]),
-                  );
-                  showBoundingBox(boundingBox);
-                  flyToComponent(boundingBox);
-                  console.log("构件信息:", node);
-                }
-              });
+              gltfPlugin.setBlinkPartsByOids([featureInfo.oid]);
+            } else {
+              gltfPlugin.clearAllBlinkParts();
             }
+          } else {
+            gltfPlugin.clearAllBlinkParts();
           }
         });
       }
 
       async function main() {
         const container = document.getElementById("container");
-        const loadingElement = document.getElementById("loading");
 
         const { scene, camera, renderer, controls } = initScene(container);
-
-        loadingElement.style.display = "block";
 
         const tilesRenderer = new TilesRenderer(`${baseUrl}/tileset.json`);
         tilesRenderer.setCamera(camera);
@@ -209,21 +128,7 @@
         tilesRenderer.registerPlugin(gltfPlugin);
         scene.add(tilesRenderer.group);
 
-        tilesRenderer.addEventListener("tiles-load-start", () => {
-          loadingElement.style.display = "block";
-        });
-
-        tilesRenderer.addEventListener("tiles-load-end", () => {
-          loadingElement.style.display = "none";
-        });
-
-        setupPositioning(
-          tilesRenderer,
-          gltfPlugin,
-          scene,
-          camera,
-          controls,
-        );
+        setupEmphasis(tilesRenderer, gltfPlugin, camera);
 
         function animate() {
           requestAnimationFrame(animate);
