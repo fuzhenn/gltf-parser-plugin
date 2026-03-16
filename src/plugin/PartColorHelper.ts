@@ -10,7 +10,7 @@ import {
 export type ColorInput = number | string | Color;
 
 /** 内部使用：插件需提供的接口 */
-interface ComponentColorHelperContext {
+interface PartColorHelperContext {
   hideByOids(oids: number[]): void;
   unhideByOids(oids: number[]): void;
   getMeshCollectorByOid(oid: number): MeshCollector;
@@ -47,7 +47,7 @@ const materialCache = new Map<number, MeshStandardMaterial>();
  * 构件着色/透明度辅助器，参考 example 逻辑：hideByOids -> 修改材质 -> scene.add -> mesh-change 监听
  * 由 GLTFParserPlugin 内部使用，scene 通过 tiles.group 获取
  */
-export class ComponentColorHelper {
+export class PartColorHelper {
   private coloredOids = new Set<number>();
   private materialByOid = new Map<number, MeshStandardMaterial>();
   private originalMaterialByMesh = new Map<string, Material>();
@@ -56,7 +56,7 @@ export class ComponentColorHelper {
   private originalOpacityByMaterial = new Map<Material, number>();
   private meshChangeHandlers = new Map<number, () => void>();
 
-  constructor(private context: ComponentColorHelperContext) {}
+  constructor(private context: PartColorHelperContext) {}
 
   private getAllModifiedOids(): number[] {
     return Array.from(new Set([...this.coloredOids, ...this.opacityModifiedOids]));
@@ -94,7 +94,7 @@ export class ComponentColorHelper {
    * 根据 oid 数组设置构件颜色
    * 隐藏原 mesh，将 split mesh 替换材质后加入场景
    */
-  setComponentColorByOids(oids: number[], color: ColorInput): void {
+  setPartColorByOids(oids: number[], color: ColorInput): void {
     const scene = this.context.getScene();
     if (!scene) return;
 
@@ -128,7 +128,7 @@ export class ComponentColorHelper {
    * 恢复指定构件的颜色
    * 若该 oid 已无颜色且无透明度修改，则从场景移除 split mesh 并 unhide 原 mesh
    */
-  restoreComponentColorByOids(oids: number[]): void {
+  restorePartColorByOids(oids: number[]): void {
     const scene = this.context.getScene();
     if (!scene) return;
 
@@ -181,7 +181,7 @@ export class ComponentColorHelper {
    * @param oids 构件 OID 数组
    * @param opacity 透明度，0-1，0 完全透明，1 完全不透明
    */
-  setComponentOpacityByOids(oids: number[], opacity: number): void {
+  setPartOpacityByOids(oids: number[], opacity: number): void {
     const scene = this.context.getScene();
     if (!scene) return;
 
@@ -228,7 +228,7 @@ export class ComponentColorHelper {
    * 恢复指定构件的透明度
    * 若该 oid 已无颜色且无透明度修改，则从场景移除 split mesh 并 unhide 原 mesh
    */
-  restoreComponentOpacityByOids(oids: number[]): void {
+  restorePartOpacityByOids(oids: number[]): void {
     const scene = this.context.getScene();
     if (!scene) return;
 

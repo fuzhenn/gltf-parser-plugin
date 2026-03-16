@@ -20,9 +20,9 @@ import {
 import { MeshCollector, type MeshHelperHost } from "./MeshCollector";
 import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
 import {
-  ComponentColorHelper,
+  PartColorHelper,
   type ColorInput,
-} from "./plugin/ComponentColorHelper";
+} from "./plugin/PartColorHelper";
 import { InteractionFilter } from "./plugin/InteractionFilter";
 import { setMaxWorkers } from "./utils";
 import {
@@ -70,7 +70,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _modelInfoPromise: Promise<ModelInfo | null> | null = null;
 
   private _interactionFilter: InteractionFilter;
-  private _componentColorHelper: ComponentColorHelper | null = null;
+  private _partColorHelper: PartColorHelper | null = null;
 
   // --- Mesh helper properties ---
   oids: number[] = [];
@@ -110,7 +110,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   init(tiles: TilesRenderer) {
     this.tiles = tiles;
 
-    this._componentColorHelper = new ComponentColorHelper({
+    this._partColorHelper = new PartColorHelper({
       hideByOids: (oids) => this.hideByOids(oids),
       unhideByOids: (oids) => this.unhideByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
@@ -686,8 +686,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
    * @param oids 构件 OID 数组
    * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
    */
-  setComponentColorByOids(oids: number[], color: ColorInput): void {
-    this._componentColorHelper?.setComponentColorByOids(oids, color);
+  setPartColorByOids(oids: number[], color: ColorInput): void {
+    this._partColorHelper?.setPartColorByOids(oids, color);
   }
 
   /**
@@ -695,8 +695,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
    * 从场景移除 split mesh，unhide 原 mesh
    * @param oids 构件 OID 数组
    */
-  restoreComponentColorByOids(oids: number[]): void {
-    this._componentColorHelper?.restoreComponentColorByOids(oids);
+  restorePartColorByOids(oids: number[]): void {
+    this._partColorHelper?.restorePartColorByOids(oids);
   }
 
   /**
@@ -704,16 +704,16 @@ export class GLTFParserPlugin implements MeshHelperHost {
    * @param oids 构件 OID 数组
    * @param opacity 透明度，0-1，0 完全透明，1 完全不透明
    */
-  setComponentOpacityByOids(oids: number[], opacity: number): void {
-    this._componentColorHelper?.setComponentOpacityByOids(oids, opacity);
+  setPartOpacityByOids(oids: number[], opacity: number): void {
+    this._partColorHelper?.setPartOpacityByOids(oids, opacity);
   }
 
   /**
    * 恢复指定构件的透明度
    * @param oids 构件 OID 数组
    */
-  restoreComponentOpacityByOids(oids: number[]): void {
-    this._componentColorHelper?.restoreComponentOpacityByOids(oids);
+  restorePartOpacityByOids(oids: number[]): void {
+    this._partColorHelper?.restorePartOpacityByOids(oids);
   }
 
   /**
@@ -762,7 +762,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._modelInfoPromise = null;
 
     this._interactionFilter.dispose();
-    this._componentColorHelper = null;
+    this._partColorHelper = null;
 
     this._loader = null;
     this.tiles = null;
