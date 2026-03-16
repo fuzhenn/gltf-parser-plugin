@@ -2,7 +2,8 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Component Coloring - gltf-parser-plugin</title>
+    <title>Custom Wireframe - gltf-parser-plugin</title>
+    <link rel="stylesheet" href="./index.css" />
     <style>
       #info {
         position: fixed;
@@ -19,17 +20,10 @@
   </head>
   <body>
     <div id="container"></div>
-    <div id="info">点击构件着色为黄色，点击空白区域重置</div>
-    <script type="importmap">
-      {
-        "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@latest/build/three.module.js",
-          "three/examples/": "https://cdn.jsdelivr.net/npm/three@latest/examples/",
-          "3d-tiles-renderer": "https://cdn.jsdelivr.net/npm/3d-tiles-renderer@latest/build/index.js",
-          "gltf-parser-plugin": "https://cdn.jsdelivr.net/npm/gltf-parser-plugin@latest/build/gltf-parser-plugin.module.js"
-        }
-      }
-    </script>
+    <div id="info">点击构件以线框模式显示</div>
+
+    
+
     <script type="module">
       import { TilesRenderer, EnvironmentControls } from "3d-tiles-renderer";
       import { GLTFParserPlugin } from "gltf-parser-plugin";
@@ -42,7 +36,9 @@
         Raycaster,
         Vector2,
         Color,
-        MeshStandardMaterial,
+        MeshBasicMaterial,
+        LineSegments,
+        EdgesGeometry,
       } from "three";
 
       const baseUrl = "http://localhost:5173/docs/school";
@@ -88,52 +84,123 @@
         return { scene, camera, renderer, controls };
       }
 
-      function setupColoring(tilesRenderer, gltfPlugin, scene, camera) {
+      // ============================================
+      // gltf-parser-plugin 核心功能演示 - 自定义线框显示
+      // 点击获取构件后，用线框模式渲染该构件
+      // ============================================
+      function setupWireframe(tilesRenderer, gltfPlugin, scene, camera) {
         const raycaster = new Raycaster();
         const mouse = new Vector2();
-        let currentCollector = null;
-        let currentOid = null;
 
-        const yellowMaterial = new MeshStandardMaterial({
-          color: 0xffff00,
-          roughness: 0.5,
-          metalness: 0.1,
+        // 当前线框状态
+        let currentOid = null;
+        let currentCollector = null;
+        let wireframeMeshes = [];
+
+        // 填充材质（半透明青色）
+        const fillMaterial = new MeshBasicMaterial({
+          color: 0x00d4aa,
+          transparent: true,
+          opacity: 0.3,
+          side: 2,
+          depthWrite: false,
         });
 
-        function resetColor() {
+        // 边框材质
+        const edgeMaterial = new MeshBasicMaterial({
+          color: 0x00d4aa,
+          transparent: true,
+          opacity: 0.8,
+        });
+
+        // 清除线框
+        function clearWireframe() {
+          if (currentOid === null) return;
+
+          // 恢复原始材质
+          wireframeMeshes.forEach((mesh) => {
+            if (mesh.userData.originalMaterial) {
+              mesh.material = mesh.userData.originalMaterial;
+              delete mesh.userData.originalMaterial;
+            }
+          });
+
+          // 移除边框线（LineSegments）
+          wireframeMeshes.forEach((mesh) => {
+            if (mesh.isLineSegments) {
+              scene.remove(mesh);
+            }
+          });
+          wireframeMeshes = [];
+
+          // 显示原始构件
+          gltfPlugin.unhideByOids([currentOid]);
+
+          // 清理 collector
           if (currentCollector) {
-            currentCollector.meshes.forEach((mesh) => scene.remove(mesh));
             currentCollector.dispose();
-            currentCollector = null;
           }
-          if (currentOid !== null) {
-            gltfPlugin.unhideByOids([currentOid]);
-            currentOid = null;
-          }
+
+          currentOid = null;
+          currentCollector = null;
         }
 
-        function colorOid(oid) {
+        // 创建线框效果（填充面 + 边框线）
+        function createWireframeMesh(mesh) {
+          const meshes = [];
+
+          // 直接使用原 mesh，只修改材质，并添加到 scene
+          if (!mesh.userData.originalMaterial) {
+            mesh.userData.originalMaterial = mesh.material;
+          }
+          mesh.material = fillMaterial;
+          scene.add(mesh);
+          meshes.push(mesh);
+
+          // 创建边框线
+          const edges = new EdgesGeometry(mesh.geometry, 15);
+          const line = new LineSegments(edges, edgeMaterial);
+          line.matrix.copy(mesh.matrixWorld);
+          line.matrixAutoUpdate = false;
+          scene.add(line);
+          meshes.push(line);
+
+          return meshes;
+        }
+
+        // 设置构件为线框模式
+        function setWireframe(oid) {
+          // 如果点击的是当前已线框显示的构件，不做任何操作
           if (currentOid === oid) return;
 
-          resetColor();
+          // 清除之前的线框
+          clearWireframe();
 
+          // 隐藏原始构件
           gltfPlugin.hideByOids([oid]);
-          const collector = gltfPlugin.getMeshCollectorByOid(oid);
 
-          collector.meshes.forEach((mesh) => {
-            mesh.material = yellowMaterial;
-            scene.add(mesh);
+          // 获取 mesh collector
+          currentOid = oid;
+          currentCollector = gltfPlugin.getMeshCollectorByOid(oid);
+
+          // 创建线框 mesh
+          currentCollector.meshes.forEach((mesh) => {
+            const meshes = createWireframeMesh(mesh);
+            wireframeMeshes.push(...meshes);
           });
 
-          collector.addEventListener("mesh-change", () => {
-            collector.meshes.forEach((mesh) => {
-              mesh.material = yellowMaterial;
-              scene.add(mesh);
+          // 监听 mesh 变化事件
+          currentCollector.addEventListener("mesh-change", () => {
+            // 移除旧线框
+            wireframeMeshes.forEach((mesh) => scene.remove(mesh));
+            wireframeMeshes = [];
+
+            // 创建新线框
+            currentCollector.meshes.forEach((mesh) => {
+              const meshes = createWireframeMesh(mesh);
+              wireframeMeshes.push(...meshes);
             });
           });
-
-          currentCollector = collector;
-          currentOid = oid;
         }
 
         window.addEventListener("click", (event) => {
@@ -151,12 +218,8 @@
               intersects[0],
             );
             if (featureInfo.isValid && featureInfo.oid !== undefined) {
-              colorOid(featureInfo.oid);
-            } else {
-              resetColor();
+              setWireframe(featureInfo.oid);
             }
-          } else {
-            resetColor();
           }
         });
       }
@@ -176,7 +239,7 @@
         tilesRenderer.registerPlugin(gltfPlugin);
         scene.add(tilesRenderer.group);
 
-        setupColoring(tilesRenderer, gltfPlugin, scene, camera);
+        setupWireframe(tilesRenderer, gltfPlugin, scene, camera);
 
         function animate() {
           requestAnimationFrame(animate);

@@ -24,6 +24,7 @@ import {
   type ColorInput,
 } from "./plugin/PartColorHelper";
 import { PartBlinkHelper } from "./plugin/PartBlinkHelper";
+import { PartFrameHelper } from "./plugin/PartFrameHelper";
 import { InteractionFilter } from "./plugin/InteractionFilter";
 import { setMaxWorkers } from "./utils";
 import {
@@ -73,6 +74,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _interactionFilter: InteractionFilter;
   private _partColorHelper: PartColorHelper | null = null;
   private _partBlinkHelper: PartBlinkHelper | null = null;
+  private _partFrameHelper: PartFrameHelper | null = null;
 
   // --- Mesh helper properties ---
   oids: number[] = [];
@@ -120,6 +122,13 @@ export class GLTFParserPlugin implements MeshHelperHost {
     });
 
     this._partBlinkHelper = new PartBlinkHelper({
+      hideByOids: (oids) => this.hideByOids(oids),
+      unhideByOids: (oids) => this.unhideByOids(oids),
+      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getScene: () => this.tiles?.group ?? null,
+    });
+
+    this._partFrameHelper = new PartFrameHelper({
       hideByOids: (oids) => this.hideByOids(oids),
       unhideByOids: (oids) => this.unhideByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
@@ -757,6 +766,21 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
+   * 设置需要线框显示的构件
+   * @param oids 构件 OID 数组
+   */
+  setFramePartsByOids(oids: number[]): void {
+    this._partFrameHelper?.setFramePartsByOids(oids);
+  }
+
+  /**
+   * 清除所有线框显示构件
+   */
+  clearAllFrameParts(): void {
+    this._partFrameHelper?.clearAllFrameParts();
+  }
+
+  /**
    * Restore the original materials of the mesh
    */
   unhide(): void {
@@ -805,6 +829,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._partColorHelper = null;
     this._partBlinkHelper?.dispose();
     this._partBlinkHelper = null;
+    this._partFrameHelper?.dispose();
+    this._partFrameHelper = null;
 
     this._loader = null;
     this.tiles = null;
