@@ -134,7 +134,7 @@
           wireframeMeshes = [];
 
           // 显示原始构件
-          gltfPlugin.unhideByOids([currentOid]);
+          gltfPlugin.showPartsByOids([currentOid]);
 
           // 清理 collector
           if (currentCollector) {
@@ -177,7 +177,7 @@
           clearWireframe();
 
           // 隐藏原始构件
-          gltfPlugin.hideByOids([oid]);
+          gltfPlugin.hidePartsByOids([oid]);
 
           // 获取 mesh collector
           currentOid = oid;

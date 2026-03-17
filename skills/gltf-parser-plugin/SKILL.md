@@ -18,7 +18,7 @@ import { GLTFParserPlugin } from "gltf-parser-plugin";
 const tiles = new TilesRenderer("https://example.com/tileset.json");
 
 // 注册插件（替换默认的 GLTFLoader）
-// 传入 renderer 以启用要素操作功能（hideByOids、getMeshCollectorByOid 等）
+// 传入 renderer 以启用要素操作功能（hidePartsByOids、getMeshCollectorByOid 等）
 const plugin = new GLTFParserPlugin({ renderer });
 tiles.registerPlugin(plugin);
 
@@ -46,7 +46,7 @@ new GLTFParserPlugin({
 
 | 选项 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `renderer` | `WebGLRenderer` | — | 启用 hideByOids 等要素操作功能时必须传入 |
+| `renderer` | `WebGLRenderer` | — | 启用 hidePartsByOids 等要素操作功能时必须传入 |
 | `metadata` | `boolean` | `true` | 启用 EXT_mesh_features / EXT_structural_metadata 解析 |
 | `maxWorkers` | `number` | `hardwareConcurrency` | Worker 池大小 |
 | `materialBuilder` | `MaterialBuilder` | — | 自定义材质构建函数 |
@@ -101,13 +101,13 @@ const plugin = new GLTFParserPlugin({ renderer });
 tiles.registerPlugin(plugin);
 
 // 隐藏指定 OID 对应的要素
-plugin.hideByOids([1001, 1002, 1003]);
+plugin.hidePartsByOids([1001, 1002, 1003]);
 
 // 恢复部分 OID 的显示
-plugin.unhideByOids([1002]);
+plugin.showPartsByOids([1002]);
 
 // 恢复全部显示
-plugin.unhide();
+plugin.showAllParts();
 ```
 
 ### 实现原理
@@ -263,9 +263,9 @@ plugin.dispose();
 | 方法 | 说明 |
 |---|---|
 | `queryFeatureFromIntersection(hit)` | 从射线交点查询要素信息（OID、featureId、属性） |
-| `hideByOids(oids)` | 通过 shader discard 隐藏指定 OID 的要素 |
-| `unhideByOids(oids)` | 恢复指定 OID 的要素显示 |
-| `unhide()` | 恢复全部要素显示 |
+| `hidePartsByOids(oids)` | 通过 shader discard 隐藏指定 OID 的要素 |
+| `showPartsByOids(oids)` | 恢复指定 OID 的要素显示 |
+| `showAllParts()` | 恢复全部要素显示 |
 | `getMeshCollectorByOid(oid)` | 获取 MeshCollector，监听特定 OID 的 mesh 变化 |
 | `getFeatureIdCount()` | 获取当前 shader uniform 数组大小 |
 | `clearCache()` | 清除 IndexedDB 缓存 |

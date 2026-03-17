@@ -18,8 +18,8 @@ function ensureColor(color: ColorInput): Color {
 
 /** 内部使用：插件需提供的接口 */
 interface PartFrameHelperContext {
-  hideByOids(oids: number[]): void;
-  unhideByOids(oids: number[]): void;
+  hidePartsByOids(oids: number[]): void;
+  showPartsByOids(oids: number[]): void;
   getMeshCollectorByOid(oid: number): MeshCollector;
   getScene(): Object3D | null;
 }
@@ -31,7 +31,7 @@ interface FrameOidData {
 
 /**
  * 构件线框显示辅助器
- * 通过 hideByOids + split mesh + 填充材质 + EdgesGeometry 实现线框效果
+ * 通过 hidePartsByOids + split mesh + 填充材质 + EdgesGeometry 实现线框效果
  */
 const DEFAULT_FRAME_COLOR = 0x00d4aa;
 
@@ -162,7 +162,7 @@ export class PartFrameHelper {
       collector.addEventListener("mesh-change", handler);
     }
 
-    this.context.hideByOids(Array.from(this.frameOids));
+    this.context.hidePartsByOids(Array.from(this.frameOids));
   }
 
   /**
@@ -192,7 +192,7 @@ export class PartFrameHelper {
     this.frameOids.clear();
     this.fillColorByOid.clear();
     this.edgeColorByOid.clear();
-    this.context.unhideByOids(oidsToUnhide);
+    this.context.showPartsByOids(oidsToUnhide);
   }
 
   /**

@@ -5,8 +5,8 @@ import type { ColorInput } from "./PartColorHelper";
 
 /** 内部使用：插件需提供的接口 */
 interface PartBlinkHelperContext {
-  hideByOids(oids: number[]): void;
-  unhideByOids(oids: number[]): void;
+  hidePartsByOids(oids: number[]): void;
+  showPartsByOids(oids: number[]): void;
   getMeshCollectorByOid(oid: number): MeshCollector;
   getScene(): Object3D | null;
 }
@@ -18,7 +18,7 @@ function ensureColor(color: ColorInput): Color {
 
 /**
  * 构件闪烁强调辅助器
- * 通过 hideByOids + split mesh + emissive 动画实现闪烁效果
+ * 通过 hidePartsByOids + split mesh + emissive 动画实现闪烁效果
  */
 export class PartBlinkHelper {
   private blinkOids = new Set<number>();
@@ -108,7 +108,7 @@ export class PartBlinkHelper {
       collector.addEventListener("mesh-change", handler);
     }
 
-    this.context.hideByOids(Array.from(this.blinkOids));
+    this.context.hidePartsByOids(Array.from(this.blinkOids));
     if (this.blinkOids.size > 0) this.startAnimation();
   }
 
@@ -161,7 +161,7 @@ export class PartBlinkHelper {
     }
 
     this.blinkOids.clear();
-    this.context.unhideByOids(oidsToUnhide);
+    this.context.showPartsByOids(oidsToUnhide);
   }
 
   dispose(): void {

@@ -11,8 +11,8 @@ export type ColorInput = number | string | Color;
 
 /** 内部使用：插件需提供的接口 */
 interface PartColorHelperContext {
-  hideByOids(oids: number[]): void;
-  unhideByOids(oids: number[]): void;
+  hidePartsByOids(oids: number[]): void;
+  showPartsByOids(oids: number[]): void;
   getMeshCollectorByOid(oid: number): MeshCollector;
   getScene(): Object3D | null;
 }
@@ -44,7 +44,7 @@ function getMaterialForColor(color: Color): MeshStandardMaterial {
 const materialCache = new Map<number, MeshStandardMaterial>();
 
 /**
- * 构件着色/透明度辅助器，参考 example 逻辑：hideByOids -> 修改材质 -> scene.add -> mesh-change 监听
+ * 构件着色/透明度辅助器，参考 example 逻辑：hidePartsByOids -> 修改材质 -> scene.add -> mesh-change 监听
  * 由 GLTFParserPlugin 内部使用，scene 通过 tiles.group 获取
  */
 export class PartColorHelper {
@@ -121,7 +121,7 @@ export class PartColorHelper {
       }
     }
 
-    this.context.hideByOids(this.getAllModifiedOids());
+    this.context.hidePartsByOids(this.getAllModifiedOids());
   }
 
   /**
@@ -172,7 +172,7 @@ export class PartColorHelper {
       }
     }
 
-    this.context.unhideByOids(oids);
+    this.context.showPartsByOids(oids);
   }
 
   /**
@@ -221,7 +221,7 @@ export class PartColorHelper {
       }
     }
 
-    this.context.hideByOids(this.getAllModifiedOids());
+    this.context.hidePartsByOids(this.getAllModifiedOids());
   }
 
   /**
@@ -264,6 +264,6 @@ export class PartColorHelper {
       }
     }
 
-    this.context.unhideByOids(oids);
+    this.context.showPartsByOids(oids);
   }
 }

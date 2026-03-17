@@ -115,22 +115,22 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this.tiles = tiles;
 
     this._partColorHelper = new PartColorHelper({
-      hideByOids: (oids) => this.hideByOids(oids),
-      unhideByOids: (oids) => this.unhideByOids(oids),
+      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
+      showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
       getScene: () => this.tiles?.group ?? null,
     });
 
     this._partBlinkHelper = new PartBlinkHelper({
-      hideByOids: (oids) => this.hideByOids(oids),
-      unhideByOids: (oids) => this.unhideByOids(oids),
+      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
+      showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
       getScene: () => this.tiles?.group ?? null,
     });
 
     this._partFrameHelper = new PartFrameHelper({
-      hideByOids: (oids) => this.hideByOids(oids),
-      unhideByOids: (oids) => this.unhideByOids(oids),
+      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
+      showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
       getScene: () => this.tiles?.group ?? null,
     });
@@ -683,7 +683,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   /**
    * Hide the corresponding part of the original mesh according to the OID array
    */
-  hideByOids(oids: number[]): void {
+  hidePartsByOids(oids: number[]): void {
     this.oids = oids;
     this.featureIdCount = this._calculateFeatureIdCount();
   }
@@ -691,7 +691,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   /**
    * Restore the display of the corresponding mesh according to the OID array
    */
-  unhideByOids(oids: number[]): void {
+  showPartsByOids(oids: number[]): void {
     const oidSet = new Set(oids);
     const newOids = this.oids.filter((existingOid) => !oidSet.has(existingOid));
     this.oids = newOids;
@@ -710,7 +710,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   /**
    * 恢复指定构件的颜色
-   * 从场景移除 split mesh，unhide 原 mesh
+   * 从场景移除 split mesh，恢复原 mesh 显示
    * @param oids 构件 OID 数组
    */
   restorePartColorByOids(oids: number[]): void {
@@ -801,7 +801,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   /**
    * Restore the original materials of the mesh
    */
-  unhide(): void {
+  showAllParts(): void {
     this.oids = [];
     this.featureIdCount = this._calculateFeatureIdCount();
   }
