@@ -1,5 +1,7 @@
 import type { MeshCollector } from "../MeshCollector";
+import type { ColorInput } from "./PartColorHelper";
 import {
+  Color,
   DoubleSide,
   EdgesGeometry,
   LineSegments,
@@ -8,6 +10,11 @@ import {
   MeshBasicMaterial,
   Object3D,
 } from "three";
+
+function ensureColor(color: ColorInput): Color {
+  if (color instanceof Color) return color;
+  return new Color(color);
+}
 
 /** 内部使用：插件需提供的接口 */
 interface PartFrameHelperContext {
@@ -26,36 +33,64 @@ interface FrameOidData {
  * 构件线框显示辅助器
  * 通过 hideByOids + split mesh + 填充材质 + EdgesGeometry 实现线框效果
  */
+const DEFAULT_FRAME_COLOR = 0x00d4aa;
+
 export class PartFrameHelper {
   private frameOids = new Set<number>();
   private originalMaterialByMesh = new Map<string, Material>();
   private frameDataByOid = new Map<number, FrameOidData>();
   private meshChangeHandlers = new Map<number, () => void>();
 
-  private fillMaterial: MeshBasicMaterial;
-  private edgeMaterial: MeshBasicMaterial;
+  private fillColorByOid = new Map<number, number>();
+  private edgeColorByOid = new Map<number, number>();
+  private fillMaterialCache = new Map<number, MeshBasicMaterial>();
+  private edgeMaterialCache = new Map<number, MeshBasicMaterial>();
   private edgeThreshold: number;
 
   constructor(private context: PartFrameHelperContext) {
-    this.fillMaterial = new MeshBasicMaterial({
-      color: 0x00d4aa,
-      transparent: true,
-      opacity: 0.3,
-      side: DoubleSide,
-      depthWrite: false,
-    });
-    this.edgeMaterial = new MeshBasicMaterial({
-      color: 0x00d4aa,
-      transparent: true,
-      opacity: 0.8,
-    });
     this.edgeThreshold = 15;
+  }
+
+  private getFillMaterial(hex: number): MeshBasicMaterial {
+    if (!this.fillMaterialCache.has(hex)) {
+      this.fillMaterialCache.set(
+        hex,
+        new MeshBasicMaterial({
+          color: hex,
+          transparent: true,
+          opacity: 0.3,
+          side: DoubleSide,
+          depthWrite: false,
+        })
+      );
+    }
+    return this.fillMaterialCache.get(hex)!;
+  }
+
+  private getEdgeMaterial(hex: number): MeshBasicMaterial {
+    if (!this.edgeMaterialCache.has(hex)) {
+      this.edgeMaterialCache.set(
+        hex,
+        new MeshBasicMaterial({
+          color: hex,
+          transparent: true,
+          opacity: 0.8,
+        })
+      );
+    }
+    return this.edgeMaterialCache.get(hex)!;
   }
 
   private createWireframeForMeshes(
     meshes: Mesh[],
-    scene: Object3D
+    scene: Object3D,
+    oid: number
   ): FrameOidData {
+    const fillHex = this.fillColorByOid.get(oid) ?? DEFAULT_FRAME_COLOR;
+    const edgeHex = this.edgeColorByOid.get(oid) ?? DEFAULT_FRAME_COLOR;
+    const fillMaterial = this.getFillMaterial(fillHex);
+    const edgeMaterial = this.getEdgeMaterial(edgeHex);
+
     const frameMeshes: Mesh[] = [];
     const lines: LineSegments[] = [];
 
@@ -63,12 +98,12 @@ export class PartFrameHelper {
       if (!this.originalMaterialByMesh.has(mesh.uuid)) {
         this.originalMaterialByMesh.set(mesh.uuid, mesh.material as Material);
       }
-      mesh.material = this.fillMaterial;
+      mesh.material = fillMaterial;
       scene.add(mesh);
       frameMeshes.push(mesh);
 
       const edges = new EdgesGeometry(mesh.geometry, this.edgeThreshold);
-      const line = new LineSegments(edges, this.edgeMaterial);
+      const line = new LineSegments(edges, edgeMaterial);
       line.matrix.copy(mesh.matrixWorld);
       line.matrixAutoUpdate = false;
       scene.add(line);
@@ -101,7 +136,7 @@ export class PartFrameHelper {
     const oldData = this.frameDataByOid.get(oid);
     if (oldData) this.removeFrameData(oldData, scene);
 
-    const newData = this.createWireframeForMeshes(collector.meshes, scene);
+    const newData = this.createWireframeForMeshes(collector.meshes, scene, oid);
     this.frameDataByOid.set(oid, newData);
   }
 
@@ -119,7 +154,7 @@ export class PartFrameHelper {
       this.frameOids.add(oid);
 
       const collector = this.context.getMeshCollectorByOid(oid);
-      const data = this.createWireframeForMeshes(collector.meshes, scene);
+      const data = this.createWireframeForMeshes(collector.meshes, scene, oid);
       this.frameDataByOid.set(oid, data);
 
       const handler = () => this.applyFrameToOid(oid);
@@ -155,10 +190,44 @@ export class PartFrameHelper {
     }
 
     this.frameOids.clear();
+    this.fillColorByOid.clear();
+    this.edgeColorByOid.clear();
     this.context.unhideByOids(oidsToUnhide);
+  }
+
+  /**
+   * 设置指定构件的线框填充颜色
+   * @param oids 构件 OID 数组
+   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
+   */
+  setFrameFillColor(oids: number[], color: ColorInput): void {
+    const hex = ensureColor(color).getHex();
+    for (const oid of oids) {
+      if (!this.frameOids.has(oid)) continue;
+      this.fillColorByOid.set(oid, hex);
+      this.applyFrameToOid(oid);
+    }
+  }
+
+  /**
+   * 设置指定构件的线框边框颜色
+   * @param oids 构件 OID 数组
+   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
+   */
+  setFrameEdgeColor(oids: number[], color: ColorInput): void {
+    const hex = ensureColor(color).getHex();
+    for (const oid of oids) {
+      if (!this.frameOids.has(oid)) continue;
+      this.edgeColorByOid.set(oid, hex);
+      this.applyFrameToOid(oid);
+    }
   }
 
   dispose(): void {
     this.clearAllFrameParts();
+    this.fillMaterialCache.forEach((m) => m.dispose());
+    this.fillMaterialCache.clear();
+    this.edgeMaterialCache.forEach((m) => m.dispose());
+    this.edgeMaterialCache.clear();
   }
 }

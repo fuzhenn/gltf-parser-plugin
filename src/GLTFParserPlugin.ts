@@ -781,6 +781,24 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
+   * 设置指定构件的线框填充颜色
+   * @param oids 构件 OID 数组
+   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
+   */
+  setFrameFillColor(oids: number[], color: ColorInput): void {
+    this._partFrameHelper?.setFrameFillColor(oids, color);
+  }
+
+  /**
+   * 设置指定构件的线框边框颜色
+   * @param oids 构件 OID 数组
+   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
+   */
+  setFrameEdgeColor(oids: number[], color: ColorInput): void {
+    this._partFrameHelper?.setFrameEdgeColor(oids, color);
+  }
+
+  /**
    * Restore the original materials of the mesh
    */
   unhide(): void {
