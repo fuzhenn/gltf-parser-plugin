@@ -146,6 +146,74 @@ function splitMeshByOid(originalMesh: Mesh, oid: number): Mesh[] {
 }
 
 /**
+ * 从瓦片中获取所有 OID
+ */
+export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
+  const oidSet = new Set<number>();
+
+  tiles.group.traverse((child: Object3D) => {
+    const mesh = child as Mesh;
+    const idMap = mesh.userData?.idMap as Record<number, number> | undefined;
+
+    if (
+      mesh.userData?.meshFeatures &&
+      mesh.userData?.structuralMetadata &&
+      !mesh.userData?.isSplit &&
+      idMap
+    ) {
+      for (const oid of Object.keys(idMap).map(Number)) {
+        oidSet.add(oid);
+      }
+    }
+  });
+
+  return Array.from(oidSet);
+}
+
+/**
+ * 根据 OID 获取属性数据（从瓦片 structuralMetadata）
+ */
+export function getPropertyDataByOid(
+  tiles: TilesRenderer,
+  oid: number
+): Record<string, unknown> | null {
+  let result: Record<string, unknown> | null = null;
+
+  tiles.group.traverse((child: Object3D) => {
+    if (result) return;
+
+    const mesh = child as Mesh;
+    const idMap = mesh.userData?.idMap as Record<number, number> | undefined;
+
+    if (
+      !mesh.userData?.meshFeatures ||
+      !mesh.userData?.structuralMetadata ||
+      mesh.userData?.isSplit ||
+      !idMap ||
+      idMap[oid] === undefined
+    ) {
+      return;
+    }
+
+    const { meshFeatures, structuralMetadata } = mesh.userData;
+    const featureId = meshFeatures.featureIds[0];
+    const fid = idMap[oid];
+
+    try {
+      const data = structuralMetadata.getPropertyTableData(
+        featureId.propertyTable,
+        fid
+      );
+      result = data as Record<string, unknown>;
+    } catch {
+      // ignore
+    }
+  });
+
+  return result;
+}
+
+/**
  * 根据OID获取包含该OID的瓦片mesh
  */
 export function getTileMeshesByOid(tiles: TilesRenderer, oid: number): Mesh[] {

@@ -12,6 +12,8 @@ import {
   FeatureIdUniforms,
   FeatureInfo,
   buildOidToFeatureIdMap,
+  getAllOidsFromTiles,
+  getPropertyDataByOid,
   getSplitMeshesFromTile,
   getTileMeshesByOid,
   queryFeatureFromIntersection,
@@ -25,6 +27,14 @@ import {
 } from "./plugin/PartColorHelper";
 import { PartBlinkHelper } from "./plugin/PartBlinkHelper";
 import { PartFrameHelper } from "./plugin/PartFrameHelper";
+import {
+  StyleHelper,
+  type StyleConfig,
+} from "./plugin/StyleHelper";
+import {
+  PartHighlightHelper,
+  type HighlightOptions,
+} from "./plugin/PartHighlightHelper";
 import { InteractionFilter } from "./plugin/InteractionFilter";
 import { setMaxWorkers } from "./utils";
 import {
@@ -75,6 +85,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _partColorHelper: PartColorHelper | null = null;
   private _partBlinkHelper: PartBlinkHelper | null = null;
   private _partFrameHelper: PartFrameHelper | null = null;
+  private _styleHelper: StyleHelper | null = null;
+  private _partHighlightHelper: PartHighlightHelper | null = null;
 
   // --- Mesh helper properties ---
   oids: number[] = [];
@@ -129,6 +141,25 @@ export class GLTFParserPlugin implements MeshHelperHost {
     });
 
     this._partFrameHelper = new PartFrameHelper({
+      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
+      showPartsByOids: (oids) => this.showPartsByOids(oids),
+      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getScene: () => this.tiles?.group ?? null,
+    });
+
+    this._styleHelper = new StyleHelper({
+      getTiles: () => this.tiles,
+      getAllOidsFromTiles: () =>
+        this.tiles ? getAllOidsFromTiles(this.tiles) : [],
+      getPropertyDataByOid: (oid) =>
+        this.tiles ? getPropertyDataByOid(this.tiles, oid) : null,
+      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
+      showPartsByOids: (oids) => this.showPartsByOids(oids),
+      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getScene: () => this.tiles?.group ?? null,
+    });
+
+    this._partHighlightHelper = new PartHighlightHelper({
       hidePartsByOids: (oids) => this.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
@@ -439,6 +470,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     for (const collector of this.collectors) {
       collector._updateMeshes();
     }
+    this._styleHelper?.onTilesLoadEnd();
   }
 
   _registerCollector(collector: MeshCollector): void {
@@ -799,6 +831,51 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
+   * 设置构件样式（条件可见性 + 条件材质）
+   * @param style 样式配置，传 null 清除样式
+   */
+  setStyle(style: StyleConfig | null): void {
+    this._styleHelper?.setStyle(style);
+  }
+
+  /**
+   * 获取当前样式配置
+   */
+  getStyle(): StyleConfig | null {
+    return this._styleHelper?.getStyle() ?? null;
+  }
+
+  /**
+   * 清除构件样式
+   */
+  clearStyle(): void {
+    this._styleHelper?.clearStyle();
+  }
+
+  /**
+   * 高亮指定构件
+   * @param options 高亮配置，包含 name、ids、material
+   */
+  highlight(options: HighlightOptions): void {
+    this._partHighlightHelper?.highlight(options);
+  }
+
+  /**
+   * 取消指定名称的高亮
+   * @param name 高亮组名称
+   */
+  cancelHighlight(name: string): void {
+    this._partHighlightHelper?.cancelHighlight(name);
+  }
+
+  /**
+   * 取消所有高亮
+   */
+  cancelAllHighlight(): void {
+    this._partHighlightHelper?.cancelAllHighlight();
+  }
+
+  /**
    * Restore the original materials of the mesh
    */
   showAllParts(): void {
@@ -849,6 +926,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._partBlinkHelper = null;
     this._partFrameHelper?.dispose();
     this._partFrameHelper = null;
+    this._styleHelper?.dispose();
+    this._styleHelper = null;
+    this._partHighlightHelper?.dispose();
+    this._partHighlightHelper = null;
 
     this._loader = null;
     this.tiles = null;
