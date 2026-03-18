@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       3d-tiles-renderer:
-        specifier: ^0.4.22
-        version: 0.4.22(three@0.183.2)
+        specifier: ^0.4.23
+        version: 0.4.23(three@0.183.2)
       '@maptalks/gltf-loader':
         specifier: ^0.124.4
         version: 0.124.4
@@ -51,8 +51,8 @@ importers:
 
 packages:
 
-  3d-tiles-renderer@0.4.22:
-    resolution: {integrity: sha512-v9WD2s8CYmOhKYinLBr1/2tM++3gyqXDo844Wf8eKvX1qbu8j4LOkgBA9Lcf0dIGGpBNSlooS6cGpS88NcPY8A==}
+  3d-tiles-renderer@0.4.23:
+    resolution: {integrity: sha512-IlcDWcKQ1Phk2bnz2ONywEuyL+Vm2GffYtJFTPpvhXBeWL4TZHQPGy17X+dfMH/nSTeBjGhmEmbhTN+Aj6ag6Q==}
     peerDependencies:
       '@babylonjs/core': '>=8.0.0'
       '@babylonjs/loaders': '>=8.0.0'
@@ -1531,7 +1531,7 @@ packages:
 
 snapshots:
 
-  3d-tiles-renderer@0.4.22(three@0.183.2):
+  3d-tiles-renderer@0.4.23(three@0.183.2):
     optionalDependencies:
       three: 0.183.2
 
