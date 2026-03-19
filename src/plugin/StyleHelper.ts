@@ -202,8 +202,8 @@ export class StyleHelper {
     }
 
     this.hiddenOids = new Set(hiddenOidsList);
-    // 隐藏不满足 show 的 + 需要应用样式的（用 split mesh 替换）
-    this.context.hidePartsByOids([...hiddenOidsList, ...visibleOids]);
+
+    const oidsToHide: number[] = [...hiddenOidsList];
 
     for (const oid of visibleOids) {
       const propertyData = this.context.getPropertyDataByOid(oid);
@@ -212,6 +212,7 @@ export class StyleHelper {
 
       if (!styleValue) continue;
 
+      oidsToHide.push(oid);
       this.styledOids.add(oid);
       const material = toMaterial(styleValue);
       this.materialByOid.set(oid, material);
@@ -229,6 +230,9 @@ export class StyleHelper {
         collector.addEventListener("mesh-change", handler);
       }
     }
+
+    // 只隐藏不满足 show 的 + 需要应用样式的（用 split mesh 替换）
+    this.context.hidePartsByOids(oidsToHide);
   }
 
   private applyMaterialToCollector(
@@ -242,7 +246,7 @@ export class StyleHelper {
         this.originalMaterialByMesh.set(mesh.uuid, mesh.material as Material);
       }
       mesh.material = material;
-      if (!mesh.parent) scene.add(mesh);
+     scene.add(mesh);
     });
   }
 
