@@ -111,7 +111,8 @@ function toMaterial(value: StyleValue): Material {
  * 通过 show 表达式控制可见性，通过 conditions 应用条件样式
  */
 export class StyleHelper {
-  private style: StyleConfig | null = null;
+  /** 当前样式配置，可通过 plugin.style 获取 */
+  style: StyleConfig | null = null;
   private styledOids = new Set<number>();
   private hiddenOids = new Set<number>();
   private materialByOid = new Map<number, Material>();
@@ -133,13 +134,6 @@ export class StyleHelper {
     }
 
     this.applyStyle();
-  }
-
-  /**
-   * 获取当前样式配置
-   */
-  getStyle(): StyleConfig | null {
-    return this.style;
   }
 
   /**

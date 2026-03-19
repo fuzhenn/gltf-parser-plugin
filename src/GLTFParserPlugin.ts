@@ -839,10 +839,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
-   * 获取当前样式配置
+   * 当前样式配置，只读
    */
-  getStyle(): StyleConfig | null {
-    return this._styleHelper?.getStyle() ?? null;
+  get style(): StyleConfig | null {
+    return this._styleHelper?.style ?? null;
   }
 
   /**
