@@ -9,8 +9,8 @@ import {
 } from "three";
 import type { Vector3 } from "three";
 import {
-  FeatureIdUniforms,
   FeatureInfo,
+  applyVisibilityToScene,
   buildOidToFeatureIdMap,
   getAllOidsFromTiles,
   getPropertyDataByOid,
@@ -90,10 +90,12 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   // --- Mesh helper properties ---
   oids: number[] = [];
-  private renderer: WebGLRenderer | null = null;
+  /** WebGLRenderer 实例，用于 mesh helper 等扩展 */
+  get renderer(): WebGLRenderer | null {
+    return this._renderer;
+  }
+  private _renderer: WebGLRenderer | null = null;
   private splitMeshCache: Map<string, Mesh[]> = new Map();
-  private maxUniformVectors: number = 1024;
-  private featureIdCount: number = 32;
   private collectors: Set<MeshCollector> = new Set();
   private collectorCache: Map<number, MeshCollector> = new Map();
 
@@ -110,7 +112,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     };
 
     if (options?.renderer) {
-      this.renderer = options.renderer;
+      this._renderer = options.renderer;
     }
 
     this._interactionFilter = new InteractionFilter({
@@ -172,11 +174,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
       materialBuilder: this._options.materialBuilder,
     });
     tiles.manager.addHandler(this._gltfRegex, this._loader);
-
-    // --- Mesh helper setup ---
-    if (this.renderer) {
-      this._updateWebGLLimits();
-    }
 
     tiles.addEventListener("load-model", this._onLoadModelCB);
     tiles.addEventListener("tiles-load-end", this._onTilesLoadEndCB);
@@ -464,6 +461,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
         this._setupMaterial(c as Mesh);
       }
     });
+    applyVisibilityToScene(scene, new Set(this.oids));
   }
 
   private _notifyCollectors(): void {
@@ -484,37 +482,23 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._interactionFilter.onUnregisterCollector(oid);
   }
 
-  private _updateWebGLLimits() {
-    const gl = this.renderer!.getContext();
-    const maxVectors = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS);
-    this.maxUniformVectors = maxVectors;
-  }
-
   /**
-   * Dynamically calculate FEATURE_ID_COUNT based on WebGL limits and current oid count
+   * 遍历所有已加载瓦片，应用可见性过滤
    */
-  private _calculateFeatureIdCount(): number {
-    const maxUniformVectors = this.maxUniformVectors;
-    const currentOidCount = this.oids.length;
-
-    if (currentOidCount > maxUniformVectors) {
-      throw new Error(
-        `The number of OIDs to hide (${currentOidCount}) exceeds the WebGL MAX_FRAGMENT_UNIFORM_VECTORS limit (${maxUniformVectors}).`,
-      );
-    }
-
-    const minFeatureIdCount = 32;
-
-    if (currentOidCount <= minFeatureIdCount) {
-      return minFeatureIdCount;
-    }
-
-    const powerOf2 = Math.ceil(Math.log2(currentOidCount));
-    return Math.pow(2, powerOf2);
+  private _applyVisibilityToAllTiles(): void {
+    if (!this.tiles) return;
+    const hiddenSet = new Set(this.oids);
+    this.tiles.traverse((tile: any) => {
+      const tileWithCache = tile as TileWithCache;
+      if (tileWithCache.cached?.scene) {
+        applyVisibilityToScene(tileWithCache.cached.scene, hiddenSet);
+      }
+      return true;
+    }, null);
   }
 
   /**
-   * Set up shader modification for hiding specific features
+   * 设置材质（DoubleSide 等基础配置）
    */
   private _setupMaterial(mesh: Mesh) {
     const material = mesh.material as Material;
@@ -525,73 +509,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
     material.userData._meshHelperSetup = true;
 
     material.side = DoubleSide;
-
-    const previousOnBeforeCompile = material.onBeforeCompile;
-
-    if (!material.defines) {
-      material.defines = {};
-    }
-
-    material.userData._materialFeatureIdCount = this.featureIdCount;
-
-    Object.defineProperty(material.defines, "FEATURE_ID_COUNT", {
-      get: () => {
-        if (material.userData._materialFeatureIdCount !== this.featureIdCount) {
-          material.userData._materialFeatureIdCount = this.featureIdCount;
-          material.needsUpdate = true;
-        }
-        return material.userData._materialFeatureIdCount;
-      },
-      enumerable: true,
-      configurable: true,
-    });
-
-    material.onBeforeCompile = (shader, renderer) => {
-      previousOnBeforeCompile?.call(material, shader, renderer);
-
-      if (shader.vertexShader.includes("varying float vFeatureId;")) {
-        return;
-      }
-
-      shader.uniforms.hiddenFeatureIds = new FeatureIdUniforms(mesh, this);
-
-      shader.vertexShader = shader.vertexShader.replace(
-        "#include <common>",
-        `#include <common>
-             attribute float _feature_id_0;
-             varying float vFeatureId;`,
-      );
-
-      shader.vertexShader = shader.vertexShader.replace(
-        "#include <begin_vertex>",
-        `#include <begin_vertex>
-             vFeatureId = _feature_id_0;`,
-      );
-
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "#include <common>",
-        `#include <common>
-             uniform float hiddenFeatureIds[FEATURE_ID_COUNT];
-             varying float vFeatureId;
-      
-             bool shouldHideFeature(float featureId) {
-               for(int i = 0; i < FEATURE_ID_COUNT; i++) {
-                 if(abs(hiddenFeatureIds[i] - featureId) < 0.001) {
-                   return true;
-                 }
-               }
-               return false;
-             }`,
-      );
-
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "void main() {",
-        `void main() {
-           if(shouldHideFeature(vFeatureId)) {
-             discard;
-           }`,
-      );
-    };
   }
 
   /**
@@ -717,7 +634,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
    */
   hidePartsByOids(oids: number[]): void {
     this.oids = oids;
-    this.featureIdCount = this._calculateFeatureIdCount();
+    this._applyVisibilityToAllTiles();
   }
 
   /**
@@ -725,9 +642,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
    */
   showPartsByOids(oids: number[]): void {
     const oidSet = new Set(oids);
-    const newOids = this.oids.filter((existingOid) => !oidSet.has(existingOid));
-    this.oids = newOids;
-    this.featureIdCount = this._calculateFeatureIdCount();
+    this.oids = this.oids.filter((existingOid) => !oidSet.has(existingOid));
+    this._applyVisibilityToAllTiles();
   }
 
   /**
@@ -880,14 +796,14 @@ export class GLTFParserPlugin implements MeshHelperHost {
    */
   showAllParts(): void {
     this.oids = [];
-    this.featureIdCount = this._calculateFeatureIdCount();
+    this._applyVisibilityToAllTiles();
   }
 
   /**
-   * Get the current feature ID count
+   * 获取当前隐藏的 OID 数量（兼容旧 API）
    */
   getFeatureIdCount(): number {
-    return this.featureIdCount;
+    return this.oids.length;
   }
 
   /**
