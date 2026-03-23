@@ -1,4 +1,4 @@
-import type { MeshCollector } from "../MeshCollector";
+import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
 import type { ColorInput } from "./PartColorHelper";
 import {
   Color,
@@ -25,6 +25,7 @@ interface PartHighlightHelperContext {
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
   getMeshCollectorByOid(oid: number): MeshCollector;
+  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   getScene(): Object3D | null;
 }
 

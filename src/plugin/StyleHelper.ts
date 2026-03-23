@@ -1,6 +1,12 @@
-import type { MeshCollector } from "../MeshCollector";
+import {
+  normalizeMeshCollectorOids,
+  type MeshCollector,
+  type MeshCollectorQuery,
+} from "../MeshCollector";
 import type { TilesRenderer } from "3d-tiles-renderer";
+import { getPropertyDataMapFromTiles } from "../mesh-helper/mesh";
 import type { ColorInput } from "./PartColorHelper";
+import { evaluateStyleCondition } from "./style-condition-eval";
 import {
   Color,
   Material,
@@ -25,11 +31,9 @@ export interface StyleConfig {
 /** 内部使用：插件需提供的接口 */
 interface StyleHelperContext {
   getTiles(): TilesRenderer | null;
-  getAllOidsFromTiles(): number[];
-  getPropertyDataByOid(oid: number): Record<string, unknown> | null;
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
-  getMeshCollectorByOid(oid: number): MeshCollector;
+  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   getScene(): Object3D | null;
 }
 
@@ -60,30 +64,6 @@ function getMaterialForStyle(style: { color?: ColorInput; opacity?: number }): M
 }
 
 /**
- * 在 propertyData 上下文中安全求值表达式
- * 支持如 'foo === bar'、'foo == "bar1"'、'count > 10' 等
- */
-function evaluateCondition(
-  expr: string | boolean,
-  propertyData: Record<string, unknown> | null
-): boolean {
-  if (expr === true) return true;
-  if (expr === false) return false;
-  if (typeof expr !== "string" || !expr.trim()) return true;
-
-  const data = propertyData ?? {};
-  const keys = Object.keys(data);
-  const values = keys.map((k) => data[k]);
-
-  try {
-    const fn = new Function(...keys, `return Boolean(${expr})`);
-    return fn(...values);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * 根据 conditions 和 propertyData 解析出应使用的样式值
  */
 function resolveStyleValue(
@@ -91,7 +71,7 @@ function resolveStyleValue(
   propertyData: Record<string, unknown> | null
 ): StyleValue | null {
   for (const [cond, value] of conditions) {
-    if (evaluateCondition(cond, propertyData)) {
+    if (evaluateStyleCondition(cond, propertyData)) {
       return value;
     }
   }
@@ -117,7 +97,10 @@ export class StyleHelper {
   private hiddenOids = new Set<number>();
   private materialByOid = new Map<number, Material>();
   private originalMaterialByMesh = new Map<string, Material>();
-  private meshChangeHandlers = new Map<number, () => void>();
+  /** 按材质分组后的收集器，key 与 collector.getCacheKey() 一致 */
+  private meshChangeHandlers = new Map<string, () => void>();
+  /** 当前样式占用的收集器（用于 clearStyle / 下次 applyStyle 前卸载监听） */
+  private styleCollectors: MeshCollector[] = [];
 
   constructor(private context: StyleHelperContext) {}
 
@@ -144,8 +127,7 @@ export class StyleHelper {
     const styledOidsList = Array.from(this.styledOids);
     const hiddenOidsList = Array.from(this.hiddenOids);
 
-    for (const oid of styledOidsList) {
-      const collector = this.context.getMeshCollectorByOid(oid);
+    for (const collector of this.styleCollectors) {
       collector.meshes.forEach((mesh) => {
         const original = this.originalMaterialByMesh.get(mesh.uuid);
         if (original) {
@@ -155,12 +137,13 @@ export class StyleHelper {
         if (scene && mesh.parent === scene) scene.remove(mesh);
       });
 
-      const handler = this.meshChangeHandlers.get(oid);
+      const handler = this.meshChangeHandlers.get(collector.getCacheKey());
       if (handler) {
-        this.meshChangeHandlers.delete(oid);
         collector.removeEventListener("mesh-change", handler);
       }
     }
+    this.meshChangeHandlers.clear();
+    this.styleCollectors = [];
 
     this.style = null;
     this.styledOids.clear();
@@ -176,53 +159,74 @@ export class StyleHelper {
     const scene = this.context.getScene();
     if (!scene) return;
 
-    const allOids = this.context.getAllOidsFromTiles();
+    const tiles = this.context.getTiles();
+    if (!tiles) return;
+
+    // 一次场景 traverse 构建 oid→属性；后续对 Map 单次遍历同时做 show 筛选 + conditions 分组
+    const propertyByOid = getPropertyDataMapFromTiles(tiles);
+
+    // 瓦片更新后重复 apply 时先卸掉旧监听，避免堆积
+    for (const collector of this.styleCollectors) {
+      const h = this.meshChangeHandlers.get(collector.getCacheKey());
+      if (h) collector.removeEventListener("mesh-change", h);
+    }
+    this.styleCollectors = [];
+    this.meshChangeHandlers.clear();
+
     const hiddenOidsList: number[] = [];
-    const visibleOids: number[] = [];
+    /** 相同解析材质（uuid）的 OID 合并，共用一条 MeshCollector */
+    const groups = new Map<
+      string,
+      { material: Material; oids: number[] }
+    >();
 
-    for (const oid of allOids) {
-      const propertyData = this.context.getPropertyDataByOid(oid);
-      const showExpr = style.show;
+    const conditions = style.conditions ?? [];
 
-      if (showExpr) {
-        const visible = evaluateCondition(showExpr, propertyData);
-        if (!visible) {
+    for (const [oid, propertyData] of propertyByOid) {
+      if (style.show) {
+        if (!evaluateStyleCondition(style.show, propertyData)) {
           hiddenOidsList.push(oid);
           continue;
         }
       }
 
-      visibleOids.push(oid);
-    }
-
-    this.hiddenOids = new Set(hiddenOidsList);
-
-    const oidsToHide: number[] = [...hiddenOidsList];
-
-    for (const oid of visibleOids) {
-      const propertyData = this.context.getPropertyDataByOid(oid);
-      const conditions = style.conditions ?? [];
       const styleValue = resolveStyleValue(conditions, propertyData);
-
       if (!styleValue) continue;
 
-      oidsToHide.push(oid);
       this.styledOids.add(oid);
       const material = toMaterial(styleValue);
       this.materialByOid.set(oid, material);
 
-      const collector = this.context.getMeshCollectorByOid(oid);
-      this.applyMaterialToCollector(collector, oid, material, scene);
-
-      if (!this.meshChangeHandlers.has(oid)) {
-        const handler = () => {
-          const mat = this.materialByOid.get(oid);
-          const s = this.context.getScene();
-          if (mat && s) this.applyMaterialToCollector(collector, oid, mat, s);
-        };
-        this.meshChangeHandlers.set(oid, handler);
-        collector.addEventListener("mesh-change", handler);
+      const gkey = material.uuid;
+      let g = groups.get(gkey);
+      if (!g) {
+        g = { material, oids: [] };
+        groups.set(gkey, g);
       }
+      g.oids.push(oid);
+    }
+
+    this.hiddenOids = new Set(hiddenOidsList);
+    const oidsToHide = [...hiddenOidsList];
+    for (const { oids } of groups.values()) {
+      oidsToHide.push(...oids);
+    }
+
+    for (const { material, oids } of groups.values()) {
+      const sortedOids = normalizeMeshCollectorOids(oids);
+      const collector = this.context.getMeshCollectorByCondition({
+        oids: sortedOids,
+      });
+      this.applyMaterialToCollector(collector, material, scene);
+      this.styleCollectors.push(collector);
+
+      const cacheKey = collector.getCacheKey();
+      const handler = () => {
+        const s = this.context.getScene();
+        if (s) this.applyMaterialToCollector(collector, material, s);
+      };
+      this.meshChangeHandlers.set(cacheKey, handler);
+      collector.addEventListener("mesh-change", handler);
     }
 
     // 只隐藏不满足 show 的 + 需要应用样式的（用 split mesh 替换）
@@ -231,7 +235,6 @@ export class StyleHelper {
 
   private applyMaterialToCollector(
     collector: MeshCollector,
-    _oid: number,
     material: Material,
     scene: Object3D
   ): void {

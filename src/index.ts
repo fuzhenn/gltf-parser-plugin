@@ -5,8 +5,19 @@ export type {
   StructureData,
   ModelInfo,
 } from "./plugin-types";
-export { MeshCollector } from "./MeshCollector";
-export type { MeshChangeEvent, MeshCollectorEventMap } from "./MeshCollector";
+export {
+  MeshCollector,
+  meshCollectorGroupKey,
+  meshCollectorQueryCacheKey,
+  normalizeMeshCollectorOids,
+} from "./MeshCollector";
+export type {
+  MeshChangeEvent,
+  MeshCollectorEventMap,
+  MeshCollectorQuery,
+  MeshHelperHost,
+} from "./MeshCollector";
+export { evaluateStyleCondition } from "./plugin/style-condition-eval";
 export type { FeatureInfo } from "./mesh-helper/intersection";
 export type { ColorInput } from "./plugin/PartColorHelper";
 export type {

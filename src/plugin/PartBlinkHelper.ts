@@ -1,4 +1,4 @@
-import type { MeshCollector } from "../MeshCollector";
+import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
 import { Color, Material, MeshStandardMaterial, Object3D } from "three";
 
 import type { ColorInput } from "./PartColorHelper";
@@ -8,6 +8,7 @@ interface PartBlinkHelperContext {
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
   getMeshCollectorByOid(oid: number): MeshCollector;
+  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   getScene(): Object3D | null;
 }
 

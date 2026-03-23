@@ -14,12 +14,19 @@ import {
   buildOidToFeatureIdMap,
   getAllOidsFromTiles,
   getPropertyDataByOid,
-  getSplitMeshesFromTile,
   getTileMeshesByOid,
   queryFeatureFromIntersection,
+  splitMeshByOidsMerged,
 } from "./mesh-helper";
 
-import { MeshCollector, type MeshHelperHost } from "./MeshCollector";
+import {
+  MeshCollector,
+  meshCollectorQueryCacheKey,
+  normalizeMeshCollectorOids,
+  type MeshCollectorQuery,
+  type MeshHelperHost,
+} from "./MeshCollector";
+import { evaluateStyleCondition } from "./plugin/style-condition-eval";
 import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
 import {
   PartColorHelper,
@@ -97,7 +104,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _renderer: WebGLRenderer | null = null;
   private splitMeshCache: Map<string, Mesh[]> = new Map();
   private collectors: Set<MeshCollector> = new Set();
-  private collectorCache: Map<number, MeshCollector> = new Map();
+  private collectorCache: Map<string, MeshCollector> = new Map();
 
   /**
    * Create a GLTFParserPlugin instance
@@ -132,6 +139,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       hidePartsByOids: (oids) => this.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       getScene: () => this.tiles?.group ?? null,
     });
 
@@ -139,6 +147,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       hidePartsByOids: (oids) => this.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       getScene: () => this.tiles?.group ?? null,
     });
 
@@ -146,18 +155,15 @@ export class GLTFParserPlugin implements MeshHelperHost {
       hidePartsByOids: (oids) => this.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       getScene: () => this.tiles?.group ?? null,
     });
 
     this._styleHelper = new StyleHelper({
       getTiles: () => this.tiles,
-      getAllOidsFromTiles: () =>
-        this.tiles ? getAllOidsFromTiles(this.tiles) : [],
-      getPropertyDataByOid: (oid) =>
-        this.tiles ? getPropertyDataByOid(this.tiles, oid) : null,
       hidePartsByOids: (oids) => this.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.showPartsByOids(oids),
-      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       getScene: () => this.tiles?.group ?? null,
     });
 
@@ -165,6 +171,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       hidePartsByOids: (oids) => this.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       getScene: () => this.tiles?.group ?? null,
     });
 
@@ -476,10 +483,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   _unregisterCollector(collector: MeshCollector): void {
-    const oid = collector.getOid();
+    const key = collector.getCacheKey();
     this.collectors.delete(collector);
-    this.collectorCache.delete(oid);
-    this._interactionFilter.onUnregisterCollector(oid);
+    this.collectorCache.delete(key);
+    this._interactionFilter.onUnregisterCollector(key);
   }
 
   /**
@@ -585,48 +592,117 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
-   * 内部方法：根据 oid 获取 mesh 数组
+   * 按 OID 集合：每个瓦片 mesh 只生成 **一个** 合并后的 split mesh（同一组 oid / condition 一条几何）
    */
-  _getMeshesByOidInternal(oid: number): Mesh[] {
-    const tileMeshes = getTileMeshesByOid(this.tiles!, oid);
+  private _getMergedSplitMeshesForOidSet(oidSet: Set<number>): Mesh[] {
+    if (!this.tiles || oidSet.size === 0) return [];
 
-    const allSplitMeshes: Mesh[] = [];
+    const sortedKey = [...oidSet].sort((a, b) => a - b).join(",");
+    const result: Mesh[] = [];
+    const candidateTiles = new Set<Mesh>();
 
-    for (const tileMesh of tileMeshes) {
-      const cacheKey = `${oid}_${tileMesh.uuid}`;
-
-      let splitMeshes = this.splitMeshCache.get(cacheKey);
-
-      if (!splitMeshes) {
-        splitMeshes = getSplitMeshesFromTile(tileMesh, oid);
-        this.splitMeshCache.set(cacheKey, splitMeshes);
+    for (const oid of oidSet) {
+      for (const tm of getTileMeshesByOid(this.tiles, oid)) {
+        candidateTiles.add(tm);
       }
-      allSplitMeshes.push(...splitMeshes);
     }
 
-    return allSplitMeshes;
+    for (const tileMesh of candidateTiles) {
+      const cacheKey = `merged|${tileMesh.uuid}|${sortedKey}`;
+      let cached = this.splitMeshCache.get(cacheKey);
+      if (!cached) {
+        const m = splitMeshByOidsMerged(tileMesh, oidSet);
+        cached = m ? [m] : [];
+        this.splitMeshCache.set(cacheKey, cached);
+      }
+      result.push(...cached);
+    }
+    return result;
   }
 
   /**
-   * 根据 oid 获取 MeshCollector
-   * MeshCollector 会监听瓦片变化，自动更新 meshes 并触发 mesh-change 事件
-   * 内部缓存：相同 oid 多次调用会返回同一个 collector 实例
+   * 内部方法：根据单个 oid 获取 split mesh（每瓦片合并为一条）
    */
-  getMeshCollectorByOid(oid: number): MeshCollector {
-    const existing = this.collectorCache.get(oid);
+  _getMeshesByOidInternal(oid: number): Mesh[] {
+    return this._getMergedSplitMeshesForOidSet(new Set([oid]));
+  }
+
+  /**
+   * 内部方法：根据多个 oid 获取合并 split mesh（每瓦片一条，而非每 oid 一条）
+   */
+  _getMeshesByOidsInternal(oids: readonly number[]): Mesh[] {
+    return this._getMergedSplitMeshesForOidSet(new Set(oids));
+  }
+
+  /**
+   * 按查询收集 mesh：可只传 oids、只传 condition（全场景 OID 上筛选）、或两者组合
+   * condition 与 setStyle 的 show / conditions 中字符串表达式语义一致
+   */
+  _getMeshesForCollectorQueryInternal(params: {
+    oids: readonly number[];
+    condition?: string;
+  }): Mesh[] {
+    if (!this.tiles) return [];
+
+    const cond = params.condition?.trim();
+    let targetOids: number[];
+
+    if (!cond) {
+      if (params.oids.length === 0) return [];
+      targetOids = [...new Set(params.oids)].sort((a, b) => a - b);
+    } else {
+      const candidate =
+        params.oids.length === 0
+          ? getAllOidsFromTiles(this.tiles)
+          : [...new Set(params.oids)];
+      targetOids = [];
+      for (const oid of candidate) {
+        const data = getPropertyDataByOid(this.tiles, oid);
+        if (evaluateStyleCondition(cond, data)) {
+          targetOids.push(oid);
+        }
+      }
+      targetOids.sort((a, b) => a - b);
+    }
+
+    return this._getMeshesByOidsInternal(targetOids);
+  }
+
+  /**
+   * 根据查询获取 MeshCollector（oids + 可选 condition，缓存键相同则复用实例）
+   */
+  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector {
+    const oids = query.oids ?? [];
+    const hasOids = normalizeMeshCollectorOids(oids).length > 0;
+    const hasCond = Boolean(query.condition?.trim());
+    if (!hasOids && !hasCond) {
+      throw new Error(
+        "getMeshCollectorByCondition requires non-empty oids and/or a condition string",
+      );
+    }
+
+    const key = meshCollectorQueryCacheKey(query);
+    const existing = this.collectorCache.get(key);
     if (existing) {
       return existing;
     }
-    const collector = new MeshCollector(oid, this);
-    this.collectorCache.set(oid, collector);
+    const collector = new MeshCollector(query, this);
+    this.collectorCache.set(key, collector);
 
-    this._interactionFilter.onCollectorMeshChange(oid, collector.meshes);
+    this._interactionFilter.onCollectorMeshChange(key, collector.meshes);
 
     collector.addEventListener("mesh-change", (event) => {
-      this._interactionFilter.onCollectorMeshChange(oid, event.meshes);
+      this._interactionFilter.onCollectorMeshChange(key, event.meshes);
     });
 
     return collector;
+  }
+
+  /**
+   * 根据单个 oid 获取 MeshCollector（等价于 getMeshCollectorByCondition({ oids: [oid] })）
+   */
+  getMeshCollectorByOid(oid: number): MeshCollector {
+    return this.getMeshCollectorByCondition({ oids: [oid] });
   }
 
   /**

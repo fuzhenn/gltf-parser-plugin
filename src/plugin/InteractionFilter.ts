@@ -2,16 +2,18 @@ import { Mesh } from "three";
 import type { MeshCollector } from "../MeshCollector";
 
 export interface InteractionFilterContext {
-  getCollectorCache(): Map<number, MeshCollector>;
+  getCollectorCache(): Map<string, MeshCollector>;
 }
 
 /**
- * 冻结与隔离逻辑：管理构件的交互过滤及 getMeshCollectorByOid 获取的 mesh 在场景中的显隐
+ * 冻结与隔离逻辑：管理构件的交互过滤及 MeshCollector 获取的 mesh 在场景中的显隐
+ * split mesh 使用 userData.oid（单 feature）或 userData.collectorOids（合并 mesh）：任一相关 OID 被冻结/隔离规则命中则整 mesh 脱离场景
  */
 export class InteractionFilter {
   private frozenOids = new Set<number>();
   private isolatedOids = new Set<number>();
-  private trackedMeshes = new Map<number, Set<Mesh>>();
+  /** 按 collector 分组键追踪 mesh */
+  private trackedMeshes = new Map<string, Set<Mesh>>();
   private meshListeners = new Map<
     Mesh,
     { onAdded: () => void; onRemoved: () => void }
@@ -26,13 +28,23 @@ export class InteractionFilter {
     return false;
   }
 
-  private trackMesh(mesh: Mesh, oid: number): void {
+  /** 合并 split：任一 collector OID 被 block 则整 mesh 视为应隐藏 */
+  private isMeshInteractionBlocked(mesh: Mesh): boolean {
+    const coids = mesh.userData?.collectorOids as number[] | undefined;
+    if (coids && coids.length > 0) {
+      return coids.some((oid) => this.isOidBlocked(oid));
+    }
+    const oid = mesh.userData?.oid as number | undefined;
+    return oid !== undefined && this.isOidBlocked(oid);
+  }
+
+  private trackMesh(mesh: Mesh): void {
     if (this.meshListeners.has(mesh)) return;
 
     const onAdded = () => {
       if (this.isPluginRemoving) return;
       mesh.userData._detachedParent = null;
-      if (this.isOidBlocked(oid) && mesh.parent) {
+      if (this.isMeshInteractionBlocked(mesh) && mesh.parent) {
         const parent = mesh.parent;
         this.isPluginRemoving = true;
         mesh.userData._detachedParent = parent;
@@ -61,8 +73,8 @@ export class InteractionFilter {
     mesh.userData._detachedParent = null;
   }
 
-  onCollectorMeshChange(oid: number, newMeshes: Mesh[]): void {
-    const tracked = this.trackedMeshes.get(oid);
+  onCollectorMeshChange(groupKey: string, newMeshes: Mesh[]): void {
+    const tracked = this.trackedMeshes.get(groupKey);
     const newSet = new Set(newMeshes);
 
     if (tracked) {
@@ -77,21 +89,21 @@ export class InteractionFilter {
     const trackSet = tracked || new Set<Mesh>();
     for (const mesh of newMeshes) {
       if (!trackSet.has(mesh)) {
-        this.trackMesh(mesh, oid);
+        this.trackMesh(mesh);
         trackSet.add(mesh);
       }
     }
-    this.trackedMeshes.set(oid, trackSet);
+    this.trackedMeshes.set(groupKey, trackSet);
   }
 
   private syncCollectorMeshes(): void {
     this.isPluginRemoving = true;
 
-    for (const [oid, collector] of this.context.getCollectorCache()) {
-      const blocked = this.isOidBlocked(oid);
-
+    for (const [, collector] of this.context.getCollectorCache()) {
       for (const mesh of collector.meshes) {
         if (!this.meshListeners.has(mesh)) continue;
+
+        const blocked = this.isMeshInteractionBlocked(mesh);
 
         if (blocked) {
           if (mesh.parent && !mesh.userData._detachedParent) {
@@ -112,13 +124,13 @@ export class InteractionFilter {
     this.isPluginRemoving = false;
   }
 
-  onUnregisterCollector(oid: number): void {
-    const tracked = this.trackedMeshes.get(oid);
+  onUnregisterCollector(groupKey: string): void {
+    const tracked = this.trackedMeshes.get(groupKey);
     if (tracked) {
       for (const mesh of tracked) {
         this.untrackMesh(mesh);
       }
-      this.trackedMeshes.delete(oid);
+      this.trackedMeshes.delete(groupKey);
     }
   }
 

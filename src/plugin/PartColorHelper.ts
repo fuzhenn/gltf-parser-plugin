@@ -1,4 +1,4 @@
-import type { MeshCollector } from "../MeshCollector";
+import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
 import {
   Color,
   Material,
@@ -14,6 +14,7 @@ interface PartColorHelperContext {
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
   getMeshCollectorByOid(oid: number): MeshCollector;
+  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   getScene(): Object3D | null;
 }
 
