@@ -28,10 +28,9 @@ import {
 } from "./MeshCollector";
 import { evaluateStyleCondition } from "./plugin/style-condition-eval";
 import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
-import {
-  PartColorHelper,
-  type ColorInput,
-} from "./plugin/PartColorHelper";
+import type { PartEffectHost } from "./plugin/part-effect-host";
+import { PartColorHelper } from "./plugin/PartColorHelper";
+import type { ColorInput } from "./utils/color-input";
 import { PartBlinkHelper } from "./plugin/PartBlinkHelper";
 import { PartFrameHelper } from "./plugin/PartFrameHelper";
 import {
@@ -135,45 +134,18 @@ export class GLTFParserPlugin implements MeshHelperHost {
   init(tiles: TilesRenderer) {
     this.tiles = tiles;
 
-    this._partColorHelper = new PartColorHelper({
-      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
-      showPartsByOids: (oids) => this.showPartsByOids(oids),
-      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
-      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
-      getScene: () => this.tiles?.group ?? null,
-    });
-
-    this._partBlinkHelper = new PartBlinkHelper({
-      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
-      showPartsByOids: (oids) => this.showPartsByOids(oids),
-      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
-      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
-      getScene: () => this.tiles?.group ?? null,
-    });
-
-    this._partFrameHelper = new PartFrameHelper({
-      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
-      showPartsByOids: (oids) => this.showPartsByOids(oids),
-      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
-      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
-      getScene: () => this.tiles?.group ?? null,
-    });
-
+    const partFx = this._createPartEffectHost();
+    this._partColorHelper = new PartColorHelper(partFx);
+    this._partBlinkHelper = new PartBlinkHelper(partFx);
+    this._partFrameHelper = new PartFrameHelper(partFx);
     this._styleHelper = new StyleHelper({
       getTiles: () => this.tiles,
-      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
-      showPartsByOids: (oids) => this.showPartsByOids(oids),
-      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
-      getScene: () => this.tiles?.group ?? null,
+      hidePartsByOids: partFx.hidePartsByOids,
+      showPartsByOids: partFx.showPartsByOids,
+      getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
+      getScene: partFx.getScene,
     });
-
-    this._partHighlightHelper = new PartHighlightHelper({
-      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
-      showPartsByOids: (oids) => this.showPartsByOids(oids),
-      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
-      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
-      getScene: () => this.tiles?.group ?? null,
-    });
+    this._partHighlightHelper = new PartHighlightHelper(partFx);
 
     // --- GLTF loader setup ---
     this._loader = new GLTFWorkerLoader(tiles.manager, {
@@ -192,6 +164,16 @@ export class GLTFParserPlugin implements MeshHelperHost {
       }
       return true;
     }, null);
+  }
+
+  private _createPartEffectHost(): PartEffectHost {
+    return {
+      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
+      showPartsByOids: (oids) => this.showPartsByOids(oids),
+      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
+      getScene: () => this.tiles?.group ?? null,
+    };
   }
 
   // =============================================
@@ -266,10 +248,11 @@ export class GLTFParserPlugin implements MeshHelperHost {
   // Structure Data Methods
   // =============================================
 
-  private _getStructureUrl(): string | null {
+  /** 与 tileset 同目录的侧车 JSON，如 structure.json / modelInfo.json */
+  private _sidecarJsonUrl(fileName: string): string | null {
     const rootURL = this.tiles?.rootURL as string | undefined;
     if (!rootURL) return null;
-    return rootURL.replace(/[^/]+$/, "structure.json");
+    return rootURL.replace(/[^/]+$/, fileName);
   }
 
   private _buildOidNodeMap(
@@ -287,7 +270,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   private async _fetchStructureData(): Promise<StructureData | null> {
-    const url = this._getStructureUrl();
+    const url = this._sidecarJsonUrl("structure.json");
     if (!url) {
       console.warn(
         "[GLTFParserPlugin] Cannot derive structure.json URL: tiles not initialized",
@@ -392,14 +375,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
   // Model Info Methods
   // =============================================
 
-  private _getModelInfoUrl(): string | null {
-    const rootURL = this.tiles?.rootURL as string | undefined;
-    if (!rootURL) return null;
-    return rootURL.replace(/[^/]+$/, "modelInfo.json");
-  }
-
   private async _fetchModelInfo(): Promise<ModelInfo | null> {
-    const url = this._getModelInfoUrl();
+    const url = this._sidecarJsonUrl("modelInfo.json");
     if (!url) {
       console.warn(
         "[GLTFParserPlugin] Cannot derive modelInfo.json URL: tiles not initialized",

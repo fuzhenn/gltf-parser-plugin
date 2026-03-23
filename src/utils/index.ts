@@ -17,3 +17,4 @@ export {
   selectByBoxFromOidMap,
   selectByPolygonFromOidMap,
 } from "./spatial-query";
+export { toColor, type ColorInput } from "./color-input";

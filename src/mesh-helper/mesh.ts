@@ -1,4 +1,10 @@
-import { BufferAttribute, BufferGeometry, Mesh, Object3D } from "three";
+import {
+  BufferAttribute,
+  BufferGeometry,
+  Material,
+  Mesh,
+  Object3D,
+} from "three";
 
 import { TilesRenderer } from "3d-tiles-renderer";
 
@@ -187,7 +193,7 @@ export function splitMeshByOidsMerged(
     return null;
   }
 
-  const newMaterial = (originalMesh.material as any).clone();
+  const newMaterial = (originalMesh.material as Material).clone();
   const newMesh = new Mesh(newGeometry, newMaterial);
   newMesh.parent = originalMesh.parent;
   newMesh.position.copy(originalMesh.position);
@@ -222,6 +228,45 @@ export function splitMeshByOidsMerged(
   };
 
   newMesh.name = `merged_features_${oidsOnMesh.length}_${primaryOid}`;
+  return newMesh;
+}
+
+/** 瓦片内原始 feature mesh（非 split 子网格） */
+function isFeatureSourceMesh(mesh: Mesh): boolean {
+  const u = mesh.userData;
+  return Boolean(u?.meshFeatures && u?.structuralMetadata && !u?.isSplit);
+}
+
+function buildFeatureSplitMesh(
+  originalMesh: Mesh,
+  newGeometry: BufferGeometry | null,
+  featureIdNum: number,
+  oid: number,
+  propertyData: unknown,
+): Mesh | null {
+  if (
+    !newGeometry ||
+    !newGeometry.attributes.position ||
+    newGeometry.attributes.position.count === 0
+  ) {
+    return null;
+  }
+  const newMaterial = (originalMesh.material as Material).clone();
+  const newMesh = new Mesh(newGeometry, newMaterial);
+  newMesh.parent = originalMesh.parent;
+  newMesh.position.copy(originalMesh.position);
+  newMesh.rotation.copy(originalMesh.rotation);
+  newMesh.scale.copy(originalMesh.scale);
+  newMesh.matrixWorld.copy(originalMesh.matrixWorld);
+  newMesh.userData = {
+    ...originalMesh.userData,
+    featureId: featureIdNum,
+    oid,
+    originalMesh,
+    propertyData,
+    isSplit: true,
+  };
+  newMesh.name = `feature_${featureIdNum}_${oid || ""}`;
   return newMesh;
 }
 
@@ -273,27 +318,14 @@ function splitMeshByOid(originalMesh: Mesh, oid: number): Mesh[] {
           featureIdMap,
           fidFromMap,
         );
-
-        if (newGeometry && newGeometry.attributes.position.count > 0) {
-          const newMaterial = (originalMesh.material as any).clone();
-
-          const newMesh = new Mesh(newGeometry, newMaterial);
-          newMesh.parent = originalMesh.parent;
-          newMesh.position.copy(originalMesh.position);
-          newMesh.rotation.copy(originalMesh.rotation);
-          newMesh.scale.copy(originalMesh.scale);
-          newMesh.matrixWorld.copy(originalMesh.matrixWorld);
-
-          newMesh.userData = {
-            ...originalMesh.userData,
-            featureId: fidFromMap,
-            oid: oid,
-            originalMesh: originalMesh,
-            propertyData: propertyData,
-            isSplit: true,
-          };
-
-          newMesh.name = `feature_${fidFromMap}_${oid || ""}`;
+        const newMesh = buildFeatureSplitMesh(
+          originalMesh,
+          newGeometry,
+          fidFromMap,
+          oid,
+          propertyData,
+        );
+        if (newMesh) {
           currentBatchMeshes.push(newMesh);
           return currentBatchMeshes;
         }
@@ -326,27 +358,14 @@ function splitMeshByOid(originalMesh: Mesh, oid: number): Mesh[] {
               featureIdMap,
               fid,
             );
-
-            if (newGeometry && newGeometry.attributes.position.count > 0) {
-              const newMaterial = (originalMesh.material as any).clone();
-
-              const newMesh = new Mesh(newGeometry, newMaterial);
-              newMesh.parent = originalMesh.parent;
-              newMesh.position.copy(originalMesh.position);
-              newMesh.rotation.copy(originalMesh.rotation);
-              newMesh.scale.copy(originalMesh.scale);
-              newMesh.matrixWorld.copy(originalMesh.matrixWorld);
-
-              newMesh.userData = {
-                ...originalMesh.userData,
-                featureId: fid,
-                oid: oid,
-                originalMesh: originalMesh,
-                propertyData: propertyData,
-                isSplit: true,
-              };
-
-              newMesh.name = `feature_${fid}_${oid || ""}`;
+            const newMesh = buildFeatureSplitMesh(
+              originalMesh,
+              newGeometry,
+              fid,
+              oid,
+              propertyData,
+            );
+            if (newMesh) {
               currentBatchMeshes.push(newMesh);
             }
           }
@@ -370,17 +389,11 @@ export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
 
   tiles.group.traverse((child: Object3D) => {
     const mesh = child as Mesh;
-    const idMap = mesh.userData?.idMap as Record<number, number> | undefined;
-
-    if (
-      mesh.userData?.meshFeatures &&
-      mesh.userData?.structuralMetadata &&
-      !mesh.userData?.isSplit &&
-      idMap
-    ) {
-      for (const oid of Object.keys(idMap).map(Number)) {
-        oidSet.add(oid);
-      }
+    if (!isFeatureSourceMesh(mesh)) return;
+    const idMap = mesh.userData.idMap as Record<number, number> | undefined;
+    if (!idMap) return;
+    for (const oid of Object.keys(idMap).map(Number)) {
+      oidSet.add(oid);
     }
   });
 
@@ -400,17 +413,9 @@ export function getPropertyDataByOid(
     if (result) return;
 
     const mesh = child as Mesh;
-    const idMap = mesh.userData?.idMap as Record<number, number> | undefined;
-
-    if (
-      !mesh.userData?.meshFeatures ||
-      !mesh.userData?.structuralMetadata ||
-      mesh.userData?.isSplit ||
-      !idMap ||
-      idMap[oid] === undefined
-    ) {
-      return;
-    }
+    if (!isFeatureSourceMesh(mesh)) return;
+    const idMap = mesh.userData.idMap as Record<number, number> | undefined;
+    if (!idMap || idMap[oid] === undefined) return;
 
     const { meshFeatures, structuralMetadata } = mesh.userData;
     const featureId = meshFeatures.featureIds[0];
@@ -441,16 +446,9 @@ export function getPropertyDataMapFromTiles(
 
   tiles.group.traverse((child: Object3D) => {
     const mesh = child as Mesh;
-    const idMap = mesh.userData?.idMap as Record<number, number> | undefined;
-
-    if (
-      !mesh.userData?.meshFeatures ||
-      !mesh.userData?.structuralMetadata ||
-      mesh.userData?.isSplit ||
-      !idMap
-    ) {
-      return;
-    }
+    if (!isFeatureSourceMesh(mesh)) return;
+    const idMap = mesh.userData.idMap as Record<number, number> | undefined;
+    if (!idMap) return;
 
     const { meshFeatures, structuralMetadata } = mesh.userData;
     const featureId = meshFeatures.featureIds[0];
@@ -485,15 +483,8 @@ export function getTileMeshesByOid(tiles: TilesRenderer, oid: number): Mesh[] {
 
   tiles.group.traverse((child: Object3D) => {
     const mesh = child as Mesh;
-
-    if (
-      mesh.userData.meshFeatures &&
-      mesh.userData.structuralMetadata &&
-      !mesh.userData.isSplit
-    ) {
-      if (checkMeshContainsOid(mesh, oid)) {
-        tileMeshes.push(mesh);
-      }
+    if (isFeatureSourceMesh(mesh) && checkMeshContainsOid(mesh, oid)) {
+      tileMeshes.push(mesh);
     }
   });
 
@@ -514,14 +505,10 @@ function checkMeshContainsOid(mesh: Mesh, oid: number): boolean {
  * 获取分割后的mesh
  */
 export function getSplitMeshesFromTile(tileMesh: Mesh, oid: number): Mesh[] {
-  let meshes: Mesh[] = [];
-
   try {
-    const splitMeshes = splitMeshByOid(tileMesh, oid);
-    meshes = [...meshes, ...splitMeshes];
+    return splitMeshByOid(tileMesh, oid);
   } catch (error) {
     console.warn(`拆分mesh失败:`, error);
+    return [];
   }
-
-  return meshes;
 }

@@ -142,8 +142,7 @@ export class InteractionFilter {
   }
 
   freezeByOid(oid: number): void {
-    this.frozenOids.add(oid);
-    this.syncCollectorMeshes();
+    this.freezeByOids([oid]);
   }
 
   unfreezeByOids(oids: number[]): void {
@@ -154,8 +153,7 @@ export class InteractionFilter {
   }
 
   unfreezeByOid(oid: number): void {
-    this.frozenOids.delete(oid);
-    this.syncCollectorMeshes();
+    this.unfreezeByOids([oid]);
   }
 
   unfreeze(): void {
@@ -187,8 +185,7 @@ export class InteractionFilter {
   }
 
   unisolateByOid(oid: number): void {
-    this.isolatedOids.delete(oid);
-    this.syncCollectorMeshes();
+    this.unisolateByOids([oid]);
   }
 
   unisolate(): void {

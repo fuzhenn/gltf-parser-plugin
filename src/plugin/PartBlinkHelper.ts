@@ -1,21 +1,7 @@
-import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
-import { Color, Material, MeshStandardMaterial, Object3D } from "three";
-
-import type { ColorInput } from "./PartColorHelper";
-
-/** 内部使用：插件需提供的接口 */
-interface PartBlinkHelperContext {
-  hidePartsByOids(oids: number[]): void;
-  showPartsByOids(oids: number[]): void;
-  getMeshCollectorByOid(oid: number): MeshCollector;
-  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
-  getScene(): Object3D | null;
-}
-
-function ensureColor(color: ColorInput): Color {
-  if (color instanceof Color) return color;
-  return new Color(color);
-}
+import type { PartEffectHost } from "./part-effect-host";
+import type { ColorInput } from "../utils/color-input";
+import { toColor } from "../utils/color-input";
+import { Color, Material, MeshStandardMaterial } from "three";
 
 /**
  * 构件闪烁强调辅助器
@@ -33,7 +19,7 @@ export class PartBlinkHelper {
   private rafId: number | null = null;
   private lastTime = 0;
 
-  constructor(private context: PartBlinkHelperContext) {
+  constructor(private context: PartEffectHost) {
     this.blinkColor = new Color(0xffaa00);
     this.blinkMaterial = new MeshStandardMaterial({
       color: this.blinkColor.clone(),
@@ -118,7 +104,7 @@ export class PartBlinkHelper {
    * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
    */
   setBlinkColor(color: ColorInput): void {
-    const c = ensureColor(color);
+    const c = toColor(color);
     this.blinkColor.copy(c);
     this.blinkMaterial.color.copy(c);
     this.blinkMaterial.emissive.copy(c);

@@ -1,7 +1,7 @@
-import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
-import type { ColorInput } from "./PartColorHelper";
+import type { PartEffectHost } from "./part-effect-host";
+import type { ColorInput } from "../utils/color-input";
+import { toColor } from "../utils/color-input";
 import {
-  Color,
   DoubleSide,
   EdgesGeometry,
   LineSegments,
@@ -10,20 +10,6 @@ import {
   MeshBasicMaterial,
   Object3D,
 } from "three";
-
-function ensureColor(color: ColorInput): Color {
-  if (color instanceof Color) return color;
-  return new Color(color);
-}
-
-/** 内部使用：插件需提供的接口 */
-interface PartFrameHelperContext {
-  hidePartsByOids(oids: number[]): void;
-  showPartsByOids(oids: number[]): void;
-  getMeshCollectorByOid(oid: number): MeshCollector;
-  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
-  getScene(): Object3D | null;
-}
 
 interface FrameOidData {
   meshes: Mesh[];
@@ -48,7 +34,7 @@ export class PartFrameHelper {
   private edgeMaterialCache = new Map<number, MeshBasicMaterial>();
   private edgeThreshold: number;
 
-  constructor(private context: PartFrameHelperContext) {
+  constructor(private context: PartEffectHost) {
     this.edgeThreshold = 15;
   }
 
@@ -202,7 +188,7 @@ export class PartFrameHelper {
    * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
    */
   setFrameFillColor(oids: number[], color: ColorInput): void {
-    const hex = ensureColor(color).getHex();
+    const hex = toColor(color).getHex();
     for (const oid of oids) {
       if (!this.frameOids.has(oid)) continue;
       this.fillColorByOid.set(oid, hex);
@@ -216,7 +202,7 @@ export class PartFrameHelper {
    * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
    */
   setFrameEdgeColor(oids: number[], color: ColorInput): void {
-    const hex = ensureColor(color).getHex();
+    const hex = toColor(color).getHex();
     for (const oid of oids) {
       if (!this.frameOids.has(oid)) continue;
       this.edgeColorByOid.set(oid, hex);

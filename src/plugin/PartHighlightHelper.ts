@@ -1,11 +1,7 @@
-import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
-import type { ColorInput } from "./PartColorHelper";
-import {
-  Color,
-  Material,
-  MeshStandardMaterial,
-  Object3D,
-} from "three";
+import type { PartEffectHost } from "./part-effect-host";
+import type { ColorInput } from "../utils/color-input";
+import { toColor } from "../utils/color-input";
+import { Color, Material, MeshStandardMaterial } from "three";
 
 /** 高亮材质：Three.js Material 或 { color, opacity } */
 export type HighlightMaterial = Material | { color?: ColorInput; opacity?: number };
@@ -20,26 +16,12 @@ export interface HighlightOptions {
   material: HighlightMaterial;
 }
 
-/** 内部使用：插件需提供的接口 */
-interface PartHighlightHelperContext {
-  hidePartsByOids(oids: number[]): void;
-  showPartsByOids(oids: number[]): void;
-  getMeshCollectorByOid(oid: number): MeshCollector;
-  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
-  getScene(): Object3D | null;
-}
-
-function ensureColor(color: ColorInput): Color {
-  if (color instanceof Color) return color;
-  return new Color(color);
-}
-
 const highlightMaterialCache = new Map<string, MeshStandardMaterial>();
 
 function getMaterialForHighlight(
   style: { color?: ColorInput; opacity?: number }
 ): MeshStandardMaterial {
-  const color = style.color != null ? ensureColor(style.color) : new Color(0xffff00);
+  const color = style.color != null ? toColor(style.color) : new Color(0xffff00);
   const opacity = style.opacity != null ? Math.max(0, Math.min(1, style.opacity)) : 1;
   const key = `${color.getHex()}_${opacity}`;
 
@@ -76,7 +58,7 @@ export class PartHighlightHelper {
   private originalMaterialByMesh = new Map<string, Material>();
   private meshChangeHandlers = new Map<number, () => void>();
 
-  constructor(private context: PartHighlightHelperContext) {}
+  constructor(private context: PartEffectHost) {}
 
   private mergeGroups(): { oids: number[]; materialByOid: Map<number, Material> } {
     const oids: number[] = [];

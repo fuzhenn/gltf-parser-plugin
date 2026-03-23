@@ -5,14 +5,10 @@ import {
 } from "../MeshCollector";
 import type { TilesRenderer } from "3d-tiles-renderer";
 import { getPropertyDataMapFromTiles } from "../mesh-helper/mesh";
-import type { ColorInput } from "./PartColorHelper";
+import type { ColorInput } from "../utils/color-input";
+import { toColor } from "../utils/color-input";
 import { evaluateStyleCondition } from "./style-condition-eval";
-import {
-  Color,
-  Material,
-  MeshStandardMaterial,
-  Object3D,
-} from "three";
+import { Material, MeshStandardMaterial, Object3D } from "three";
 
 /** 条件样式值：Three.js Material 或 简单颜色/透明度对象 */
 export type StyleValue = Material | { color?: ColorInput; opacity?: number };
@@ -37,16 +33,11 @@ interface StyleHelperContext {
   getScene(): Object3D | null;
 }
 
-function ensureColor(color: ColorInput): Color {
-  if (color instanceof Color) return color;
-  return new Color(color);
-}
-
 /** 根据 { color, opacity } 创建材质并缓存 */
 const styleMaterialCache = new Map<string, MeshStandardMaterial>();
 
 function getMaterialForStyle(style: { color?: ColorInput; opacity?: number }): MeshStandardMaterial {
-  const colorHex = style.color != null ? ensureColor(style.color).getHex() : 0x888888;
+  const colorHex = style.color != null ? toColor(style.color).getHex() : 0x888888;
   const opacity = style.opacity != null ? Math.max(0, Math.min(1, style.opacity)) : 1;
   const key = `${colorHex}_${opacity}`;
 

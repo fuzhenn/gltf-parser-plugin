@@ -1,27 +1,9 @@
-import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
-import {
-  Color,
-  Material,
-  Mesh,
-  MeshStandardMaterial,
-  Object3D,
-} from "three";
+import type { PartEffectHost } from "./part-effect-host";
+import type { ColorInput } from "../utils/color-input";
+import { toColor } from "../utils/color-input";
+import { Color, Material, Mesh, MeshStandardMaterial } from "three";
 
-export type ColorInput = number | string | Color;
-
-/** 内部使用：插件需提供的接口 */
-interface PartColorHelperContext {
-  hidePartsByOids(oids: number[]): void;
-  showPartsByOids(oids: number[]): void;
-  getMeshCollectorByOid(oid: number): MeshCollector;
-  getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
-  getScene(): Object3D | null;
-}
-
-function ensureColor(color: ColorInput): Color {
-  if (color instanceof Color) return color;
-  return new Color(color);
-}
+export type { ColorInput } from "../utils/color-input";
 
 function getMaterials(mesh: Mesh): Material[] {
   const mat = mesh.material;
@@ -57,7 +39,7 @@ export class PartColorHelper {
   private originalOpacityByMaterial = new Map<Material, number>();
   private meshChangeHandlers = new Map<number, () => void>();
 
-  constructor(private context: PartColorHelperContext) {}
+  constructor(private context: PartEffectHost) {}
 
   private getAllModifiedOids(): number[] {
     return Array.from(new Set([...this.coloredOids, ...this.opacityModifiedOids]));
@@ -99,7 +81,7 @@ export class PartColorHelper {
     const scene = this.context.getScene();
     if (!scene) return;
 
-    const threeColor = ensureColor(color);
+    const threeColor = toColor(color);
     const material = getMaterialForColor(threeColor);
 
     for (const oid of oids) {
