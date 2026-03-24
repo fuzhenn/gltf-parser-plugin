@@ -21,9 +21,11 @@ export { evaluateStyleCondition } from "./plugin/style-condition-eval";
 export type { FeatureInfo } from "./mesh-helper/intersection";
 export type { ColorInput } from "./utils/color-input";
 export type {
+  StyleAppearance,
   StyleConfig,
   StyleCondition,
-  StyleValue,
+  StyleEulerInput,
+  StyleVec3Input,
 } from "./plugin/StyleHelper";
 export type {
   HighlightMaterial,

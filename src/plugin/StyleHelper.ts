@@ -5,22 +5,37 @@ import {
 } from "../MeshCollector";
 import type { TilesRenderer } from "3d-tiles-renderer";
 import { getPropertyDataMapFromTiles } from "../mesh-helper/mesh";
-import type { ColorInput } from "../utils/color-input";
-import { toColor } from "../utils/color-input";
 import { evaluateStyleCondition } from "./style-condition-eval";
-import { Material, MeshStandardMaterial, Object3D } from "three";
+import {
+  Euler,
+  type EulerOrder,
+  Material,
+  Object3D,
+  Vector3,
+} from "three";
 
-/** 条件样式值：Three.js Material 或 简单颜色/透明度对象 */
-export type StyleValue = Material | { color?: ColorInput; opacity?: number };
+/** 与 Vector3 等价：Three 的 Vector3 或长度≥3 的 [x,y,z] 数组 */
+export type StyleVec3Input = Vector3 | readonly number[];
 
-/** 条件项：[条件表达式或 true, 样式值] */
-export type StyleCondition = [string | boolean, StyleValue];
+/** 与 Euler 等价：Three 的 Euler，或 [x,y,z] / [x,y,z,order] */
+export type StyleEulerInput = Euler | readonly number[];
+
+/** 条件命中后的外观：材质必填，位姿可选（未传则不改对应分量） */
+export interface StyleAppearance {
+  material: Material;
+  translation?: StyleVec3Input;
+  scale?: StyleVec3Input;
+  rotation?: StyleEulerInput;
+}
+
+/** 条件项：[条件表达式或 true, 外观对象] */
+export type StyleCondition = [string | boolean, StyleAppearance];
 
 /** 样式配置 */
 export interface StyleConfig {
   /** 可见性表达式，仅满足条件的构件显示，如 'foo === bar' */
   show?: string;
-  /** 条件样式数组，第一个满足条件的应用对应样式；[true, material] 为默认样式 */
+  /** 条件样式数组，第一个满足条件的应用对应外观；[true, appearance] 为默认 */
   conditions?: StyleCondition[];
 }
 
@@ -33,34 +48,66 @@ interface StyleHelperContext {
   getScene(): Object3D | null;
 }
 
-/** 根据 { color, opacity } 创建材质并缓存 */
-const styleMaterialCache = new Map<string, MeshStandardMaterial>();
-
-function getMaterialForStyle(style: { color?: ColorInput; opacity?: number }): MeshStandardMaterial {
-  const colorHex = style.color != null ? toColor(style.color).getHex() : 0x888888;
-  const opacity = style.opacity != null ? Math.max(0, Math.min(1, style.opacity)) : 1;
-  const key = `${colorHex}_${opacity}`;
-
-  if (!styleMaterialCache.has(key)) {
-    const mat = new MeshStandardMaterial({
-      color: colorHex,
-      roughness: 0.5,
-      metalness: 0.1,
-      opacity,
-      transparent: opacity < 1,
-    });
-    styleMaterialCache.set(key, mat);
+function vec3Key(v: StyleVec3Input | undefined): string {
+  if (v === undefined) return "";
+  if (Array.isArray(v)) {
+    return `${v[0] ?? 0},${v[1] ?? 0},${v[2] ?? 0}`;
   }
-  return styleMaterialCache.get(key)!;
+  const p = v as Vector3;
+  return `${p.x},${p.y},${p.z}`;
+}
+
+function eulerKey(r: StyleEulerInput | undefined): string {
+  if (r === undefined) return "";
+  if (Array.isArray(r)) {
+    const order: EulerOrder =
+      r.length >= 4 && typeof r[3] === "string" ? (r[3] as EulerOrder) : "XYZ";
+    return `${r[0] ?? 0},${r[1] ?? 0},${r[2] ?? 0},${order}`;
+  }
+  const e = r as Euler;
+  return `${e.x},${e.y},${e.z},${e.order}`;
+}
+
+function applyVec3(target: Vector3, input: StyleVec3Input): void {
+  if (Array.isArray(input)) {
+    target.set(input[0] ?? 0, input[1] ?? 0, input[2] ?? 0);
+  } else {
+    target.copy(input as Vector3);
+  }
+}
+
+function applyEuler(target: Euler, input: StyleEulerInput): void {
+  if (Array.isArray(input)) {
+    if (input.length >= 4 && typeof input[3] === "string") {
+      target.set(
+        input[0] ?? 0,
+        input[1] ?? 0,
+        input[2] ?? 0,
+        input[3] as EulerOrder,
+      );
+    } else {
+      target.set(input[0] ?? 0, input[1] ?? 0, input[2] ?? 0, "XYZ");
+    }
+  } else {
+    target.copy(input as Euler);
+  }
+}
+
+function appearanceGroupKey(a: StyleAppearance): string {
+  const m = a.material.uuid;
+  const t = vec3Key(a.translation);
+  const s = vec3Key(a.scale);
+  const r = eulerKey(a.rotation);
+  return `${m}|${t}|${s}|${r}`;
 }
 
 /**
- * 根据 conditions 和 propertyData 解析出应使用的样式值
+ * 根据 conditions 和 propertyData 解析出应使用的外观
  */
-function resolveStyleValue(
+function resolveStyleAppearance(
   conditions: StyleCondition[],
-  propertyData: Record<string, unknown> | null
-): StyleValue | null {
+  propertyData: Record<string, unknown> | null,
+): StyleAppearance | null {
   for (const [cond, value] of conditions) {
     if (evaluateStyleCondition(cond, propertyData)) {
       return value;
@@ -69,17 +116,15 @@ function resolveStyleValue(
   return null;
 }
 
-/**
- * 将 StyleValue 转为 Material
- */
-function toMaterial(value: StyleValue): Material {
-  if (value instanceof Material) return value;
-  return getMaterialForStyle(value);
-}
+type StoredTransform = {
+  position: Vector3;
+  scale: Vector3;
+  rotation: Euler;
+};
 
 /**
  * 构件样式辅助器
- * 通过 show 表达式控制可见性，通过 conditions 应用条件样式
+ * 通过 show 表达式控制可见性，通过 conditions 应用条件材质与可选位姿
  */
 export class StyleHelper {
   /** 当前样式配置，可通过 plugin.style 获取 */
@@ -88,12 +133,13 @@ export class StyleHelper {
   private hiddenOids = new Set<number>();
   private materialByOid = new Map<number, Material>();
   private originalMaterialByMesh = new Map<string, Material>();
+  private originalTransformByMesh = new Map<string, StoredTransform>();
   /** 按材质分组后的收集器，key 与 collector.getCacheKey() 一致 */
   private meshChangeHandlers = new Map<string, () => void>();
   /** 当前样式占用的收集器（用于 clearStyle / 下次 applyStyle 前卸载监听） */
   private styleCollectors: MeshCollector[] = [];
 
-  constructor(private context: StyleHelperContext) {}
+  constructor(private context: StyleHelperContext) { }
 
   /**
    * 设置样式
@@ -125,6 +171,13 @@ export class StyleHelper {
           mesh.material = original;
           this.originalMaterialByMesh.delete(mesh.uuid);
         }
+        const origT = this.originalTransformByMesh.get(mesh.uuid);
+        if (origT) {
+          mesh.position.copy(origT.position);
+          mesh.scale.copy(origT.scale);
+          mesh.rotation.copy(origT.rotation);
+          this.originalTransformByMesh.delete(mesh.uuid);
+        }
         if (scene && mesh.parent === scene) scene.remove(mesh);
       });
 
@@ -153,10 +206,8 @@ export class StyleHelper {
     const tiles = this.context.getTiles();
     if (!tiles) return;
 
-    // 一次场景 traverse 构建 oid→属性；后续对 Map 单次遍历同时做 show 筛选 + conditions 分组
     const propertyByOid = getPropertyDataMapFromTiles(tiles);
 
-    // 瓦片更新后重复 apply 时先卸掉旧监听，避免堆积
     for (const collector of this.styleCollectors) {
       const h = this.meshChangeHandlers.get(collector.getCacheKey());
       if (h) collector.removeEventListener("mesh-change", h);
@@ -165,10 +216,9 @@ export class StyleHelper {
     this.meshChangeHandlers.clear();
 
     const hiddenOidsList: number[] = [];
-    /** 相同解析材质（uuid）的 OID 合并，共用一条 MeshCollector */
     const groups = new Map<
       string,
-      { material: Material; oids: number[] }
+      { appearance: StyleAppearance; oids: number[] }
     >();
 
     const conditions = style.conditions ?? [];
@@ -181,17 +231,16 @@ export class StyleHelper {
         }
       }
 
-      const styleValue = resolveStyleValue(conditions, propertyData);
-      if (!styleValue) continue;
+      const appearance = resolveStyleAppearance(conditions, propertyData);
+      if (!appearance) continue;
 
       this.styledOids.add(oid);
-      const material = toMaterial(styleValue);
-      this.materialByOid.set(oid, material);
+      this.materialByOid.set(oid, appearance.material);
 
-      const gkey = material.uuid;
+      const gkey = appearanceGroupKey(appearance);
       let g = groups.get(gkey);
       if (!g) {
-        g = { material, oids: [] };
+        g = { appearance, oids: [] };
         groups.set(gkey, g);
       }
       g.oids.push(oid);
@@ -203,38 +252,66 @@ export class StyleHelper {
       oidsToHide.push(...oids);
     }
 
-    for (const { material, oids } of groups.values()) {
+    for (const { appearance, oids } of groups.values()) {
       const sortedOids = normalizeMeshCollectorOids(oids);
       const collector = this.context.getMeshCollectorByCondition({
         oids: sortedOids,
       });
-      this.applyMaterialToCollector(collector, material, scene);
+      this.applyAppearanceToCollector(collector, appearance, scene);
       this.styleCollectors.push(collector);
 
       const cacheKey = collector.getCacheKey();
       const handler = () => {
         const s = this.context.getScene();
-        if (s) this.applyMaterialToCollector(collector, material, s);
+        if (s) this.applyAppearanceToCollector(collector, appearance, s);
       };
       this.meshChangeHandlers.set(cacheKey, handler);
       collector.addEventListener("mesh-change", handler);
     }
 
-    // 只隐藏不满足 show 的 + 需要应用样式的（用 split mesh 替换）
     this.context.hidePartsByOids(oidsToHide);
   }
 
-  private applyMaterialToCollector(
+  private applyAppearanceToCollector(
     collector: MeshCollector,
-    material: Material,
-    scene: Object3D
+    appearance: StyleAppearance,
+    scene: Object3D,
   ): void {
     collector.meshes.forEach((mesh) => {
       if (!this.originalMaterialByMesh.has(mesh.uuid)) {
         this.originalMaterialByMesh.set(mesh.uuid, mesh.material as Material);
       }
-      mesh.material = material;
-     scene.add(mesh);
+      mesh.material = appearance.material;
+
+      const needTransform =
+        appearance.translation !== undefined ||
+        appearance.scale !== undefined ||
+        appearance.rotation !== undefined;
+
+      if (needTransform) {
+        if (!this.originalTransformByMesh.has(mesh.uuid)) {
+          this.originalTransformByMesh.set(mesh.uuid, {
+            position: mesh.position.clone(),
+            scale: mesh.scale.clone(),
+            rotation: mesh.rotation.clone(),
+          });
+        }
+        if (appearance.translation !== undefined) {
+          applyVec3(mesh.position, appearance.translation);
+        }
+        if (appearance.scale !== undefined) {
+          // applyVec3(mesh.scale, appearance.scale);
+          mesh.scale.set(100, 100, 100)
+          mesh.updateMatrix();
+          mesh.updateMatrixWorld();
+          // mesh.matrixWorldNeedsUpdate  = true;
+        }
+        if (appearance.rotation !== undefined) {
+          applyEuler(mesh.rotation, appearance.rotation);
+        }
+      }
+
+      scene.add(mesh);
     });
   }
 
