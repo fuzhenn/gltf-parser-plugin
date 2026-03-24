@@ -44,10 +44,12 @@ import {
 import { InteractionFilter } from "./plugin/InteractionFilter";
 import { setMaxWorkers } from "./utils";
 import {
+  bboxArrayToBox3,
   selectByBoxFromOidMap,
   selectByPolygonFromOidMap,
 } from "./utils/spatial-query";
 import { tileCache } from "./db";
+import { parseEmbeddedStructureDataFromTilesSync } from "./utils/tileset-structure-uri";
 import { TilesRenderer } from "3d-tiles-renderer";
 
 import type {
@@ -78,10 +80,11 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private readonly _gltfRegex = /\.(gltf|glb)$/g;
   private readonly _options: GLTFParserPluginOptions;
 
-  // --- Structure data properties ---
+  // --- Structure data（tileset.asset.extras.maptalks.structureUri 等，同步解压，不请求 structure.json）---
   private _structureData: StructureData | null = null;
   private _oidNodeMap: Map<number, StructureNode> = new Map();
-  private _structurePromise: Promise<StructureData | null> | null = null;
+  /** rootTileset 已存在且已尝试过内嵌解析后仍为 null，则不再重复 gunzip */
+  private _structureEmbedResolved = false;
 
   // --- Model info properties ---
   private _modelInfo: ModelInfo | null = null;
@@ -156,6 +159,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
     tiles.addEventListener("load-model", this._onLoadModelCB);
     tiles.addEventListener("tiles-load-end", this._onTilesLoadEndCB);
+    tiles.addEventListener("load-root-tileset", this._onLoadRootTilesetCB);
+    this._syncStructureFromTileset();
 
     tiles.traverse((tile: any) => {
       const tileWithCache = tile as TileWithCache;
@@ -269,63 +274,59 @@ export class GLTFParserPlugin implements MeshHelperHost {
     }
   }
 
-  private async _fetchStructureData(): Promise<StructureData | null> {
-    const url = this._sidecarJsonUrl("structure.json");
-    if (!url) {
-      console.warn(
-        "[GLTFParserPlugin] Cannot derive structure.json URL: tiles not initialized",
-      );
+  /** 仅根 tileset 变化时重解析 structureUri（子 tileset 的 load-tileset 不会触发） */
+  private _onLoadRootTilesetCB = (): void => {
+    this._structureData = null;
+    this._oidNodeMap.clear();
+    this._structureEmbedResolved = false;
+    this._syncStructureFromTileset();
+  };
+
+  /**
+   * 从已加载根 tileset 的内嵌 structure（优先 asset.extras.maptalks.structureUri）同步解压并建索引。
+   * rootTileset 尚未就绪时返回 null，可稍后再次调用；已成功或已判定无内嵌数据后见 _structureEmbedResolved。
+   */
+  private _syncStructureFromTileset(): StructureData | null {
+    if (this._structureData) {
+      return this._structureData;
+    }
+    if (this._structureEmbedResolved) {
+      return null;
+    }
+    if (!this.tiles?.rootTileset) {
       return null;
     }
 
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        console.warn(
-          `[GLTFParserPlugin] Failed to fetch structure.json: ${response.status}`,
-        );
-        return null;
-      }
-      const data: StructureData = await response.json();
-      this._structureData = data;
+    const embedded = parseEmbeddedStructureDataFromTilesSync(this.tiles);
+    this._structureEmbedResolved = true;
 
-      this._oidNodeMap.clear();
-      if (data.trees) {
-        for (const tree of data.trees) {
-          this._buildOidNodeMap(tree, this._oidNodeMap);
-        }
-      }
-
-      return data;
-    } catch (error) {
-      console.error("[GLTFParserPlugin] Error loading structure.json:", error);
+    if (!embedded) {
       return null;
     }
-  }
 
-  private async _ensureStructureLoaded(): Promise<StructureData | null> {
-    if (this._structureData) return this._structureData;
-    if (!this._structurePromise) {
-      this._structurePromise = this._fetchStructureData();
+    this._structureData = embedded;
+    this._oidNodeMap.clear();
+    if (embedded.trees) {
+      for (const tree of embedded.trees) {
+        this._buildOidNodeMap(tree, this._oidNodeMap);
+      }
     }
-    return this._structurePromise;
+    return embedded;
   }
 
   /**
-   * 根据 oid 获取 structure.json 中对应的节点树数据
-   * 包含 bbox、children、name 等完整结构信息
-   * 首次调用时会自动从 tileset URL 推导并请求 structure.json
+   * 根据 oid 获取结构树节点（数据来自 tileset 内嵌 structureUri 同步解压）
    */
-  async getNodeTreeByOid(oid: number): Promise<StructureNode | null> {
-    await this._ensureStructureLoaded();
+  getNodeTreeByOid(oid: number): StructureNode | null {
+    this._syncStructureFromTileset();
     return this._oidNodeMap.get(oid) ?? null;
   }
 
   /**
-   * 根据 oid 数组批量获取 structure.json 中对应的节点树数据
+   * 根据 oid 数组批量获取结构树节点
    */
-  async getNodeTreeByOids(oids: number[]): Promise<Map<number, StructureNode>> {
-    await this._ensureStructureLoaded();
+  getNodeTreeByOids(oids: number[]): Map<number, StructureNode> {
+    this._syncStructureFromTileset();
     const result = new Map<number, StructureNode>();
     for (const oid of oids) {
       const node = this._oidNodeMap.get(oid);
@@ -337,37 +338,38 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
-   * 获取完整的 structure.json 数据
-   * 首次调用时会自动请求
+   * 根据 oid 从结构数据取轴对齐包围盒（`bbox` 为 `[minX,minY,minZ,maxX,maxY,maxZ]`，与 `selectByBox` 一致）
+   * @returns 无对应节点或缺少有效 bbox 时返回 `null`
    */
-  async getStructureData(): Promise<StructureData | null> {
-    return this._ensureStructureLoaded();
+  getBoundingBoxByOid(oid: number): Box3 | null {
+    this._syncStructureFromTileset();
+    const node = this._oidNodeMap.get(oid);
+    return bboxArrayToBox3(node?.bbox);
   }
 
   /**
-   * 选择包围盒范围内的构件（包含相交和包含两种情况）
-   * @param box 查询用的 Box3 范围，坐标系与 structure.json 中 bbox 一致
-   * @returns 范围内所有构件的 oid 数组
+   * 完整结构数据（与内嵌 structure JSON 一致）
    */
-  async selectByBox(box: Box3): Promise<number[]> {
-    await this._ensureStructureLoaded();
+  getStructureData(): StructureData | null {
+    return this._syncStructureFromTileset();
+  }
+
+  /**
+   * 选择包围盒范围内的构件（坐标系与结构 bbox 一致）
+   */
+  selectByBox(box: Box3): number[] {
+    this._syncStructureFromTileset();
     return selectByBoxFromOidMap(this._oidNodeMap, box);
   }
 
   /**
-   * 选择多边形（平面投影）范围内的构件（包含相交和包含两种情况）
-   * @param polygon 多边形顶点数组（Vector3），按顺序连接构成闭合多边形
-   * @param axis 投影平面，决定使用 bbox 的哪两个轴做 2D 判定
-   *   - 'xz'（默认）：俯视图，取 bbox 的 x/z 坐标
-   *   - 'xy'：正视图，取 bbox 的 x/y 坐标
-   *   - 'yz'：侧视图，取 bbox 的 y/z 坐标
-   * @returns 范围内所有构件的 oid 数组
+   * 选择多边形（平面投影）范围内的构件
    */
-  async selectByPolygon(
+  selectByPolygon(
     polygon: Vector3[],
     axis: "xy" | "xz" | "yz" = "xz",
-  ): Promise<number[]> {
-    await this._ensureStructureLoaded();
+  ): number[] {
+    this._syncStructureFromTileset();
     return selectByPolygonFromOidMap(this._oidNodeMap, polygon, axis);
   }
 
@@ -867,6 +869,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       this.tiles.manager.removeHandler(this._gltfRegex);
       this.tiles.removeEventListener("load-model", this._onLoadModelCB);
       this.tiles.removeEventListener("tiles-load-end", this._onTilesLoadEndCB);
+      this.tiles.removeEventListener("load-root-tileset", this._onLoadRootTilesetCB);
     }
 
     if (this._loader) {
@@ -883,7 +886,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
     this._structureData = null;
     this._oidNodeMap.clear();
-    this._structurePromise = null;
+    this._structureEmbedResolved = false;
 
     // Clear model info data
     this._modelInfo = null;

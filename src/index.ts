@@ -29,3 +29,9 @@ export type {
   HighlightMaterial,
   HighlightOptions,
 } from "./plugin/PartHighlightHelper";
+export {
+  decodeGzipBase64DataUriSync,
+  getStructureDataUriFromTileset,
+  parseEmbeddedStructureDataFromTilesSync,
+} from "./utils/tileset-structure-uri";
+export type { TilesetWithStructureUri } from "./utils/tileset-structure-uri";

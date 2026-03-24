@@ -125,6 +125,18 @@ export function polygonIntersectsRect(
 }
 
 /**
+ * 将 structure 中的 bbox 数组转为 Box3。
+ * 约定与 `selectByBox` 一致：`[minX, minY, minZ, maxX, maxY, maxZ]`，至少 6 个数。
+ */
+export function bboxArrayToBox3(bbox: number[] | undefined): Box3 | null {
+  if (!bbox || bbox.length < 6) return null;
+  const box = new Box3();
+  box.min.set(bbox[0], bbox[1], bbox[2]);
+  box.max.set(bbox[3], bbox[4], bbox[5]);
+  return box;
+}
+
+/**
  * 从 OID 节点映射中按 Box3 范围筛选构件
  */
 export function selectByBoxFromOidMap(
@@ -132,12 +144,10 @@ export function selectByBoxFromOidMap(
   box: Box3,
 ): number[] {
   const result: number[] = [];
-  const nodeBox = new Box3();
 
   for (const [oid, node] of oidNodeMap) {
-    if (!node.bbox || node.bbox.length < 6) continue;
-    nodeBox.min.set(node.bbox[0], node.bbox[1], node.bbox[2]);
-    nodeBox.max.set(node.bbox[3], node.bbox[4], node.bbox[5]);
+    const nodeBox = bboxArrayToBox3(node.bbox);
+    if (!nodeBox) continue;
     if (box.intersectsBox(nodeBox)) {
       result.push(oid);
     }
