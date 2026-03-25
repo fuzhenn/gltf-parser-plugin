@@ -5,9 +5,9 @@ import {
   Material,
   Mesh,
   Object3D,
+  Vector3,
   WebGLRenderer,
 } from "three";
-import type { Vector3 } from "three";
 import {
   FeatureInfo,
   applyVisibilityToScene,
@@ -348,6 +348,37 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
+   * 计算给定 OID 集合的几何中心（世界坐标系与结构 bbox / 瓦片 mesh 一致）。
+   * 优先合并结构树中的轴对齐 bbox；若无有效 bbox 则合并对应 split mesh 的世界包围盒。
+   */
+  getCenterByOids(oids: readonly number[]): Vector3 | null {
+    if (!this.tiles || oids.length === 0) return null;
+    const unique = [...new Set(oids)];
+    if (unique.length === 0) return null;
+    return this._getCenterFromOidList(unique);
+  }
+
+  /**
+   * 按属性条件筛选构件（语义同 `setStyle` 的 `show` / conditions 中的表达式字符串），
+   * 返回筛选结果的整体中心点；合并方式同 {@link getCenterByOids}。
+   */
+  getCenterByCondition(condition: string): Vector3 | null {
+    if (!this.tiles) return null;
+    const cond = condition.trim();
+    if (!cond) return null;
+
+    const targetOids: number[] = [];
+    for (const oid of getAllOidsFromTiles(this.tiles)) {
+      const data = getPropertyDataByOid(this.tiles, oid);
+      if (evaluateStyleCondition(cond, data)) {
+        targetOids.push(oid);
+      }
+    }
+    if (targetOids.length === 0) return null;
+    return this._getCenterFromOidList(targetOids);
+  }
+
+  /**
    * 完整结构数据（与内嵌 structure JSON 一致）
    */
   getStructureData(): StructureData | null {
@@ -568,6 +599,41 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   getIsolatedOids(): number[] {
     return this._interactionFilter.getIsolatedOids();
+  }
+
+  /**
+   * 合并 OID 列表对应的结构 bbox；若无可用 bbox 则使用 split mesh 世界包围盒并求中心。
+   */
+  private _getCenterFromOidList(oids: readonly number[]): Vector3 | null {
+    this._syncStructureFromTileset();
+
+    const union = new Box3();
+    let hasStructureBox = false;
+    for (const oid of oids) {
+      const b = this.getBoundingBoxByOid(oid);
+      if (b && !b.isEmpty()) {
+        if (!hasStructureBox) {
+          union.copy(b);
+          hasStructureBox = true;
+        } else {
+          union.union(b);
+        }
+      }
+    }
+    if (hasStructureBox && !union.isEmpty()) {
+      return union.getCenter(new Vector3());
+    }
+
+    const meshes = this._getMeshesByOidsInternal(oids);
+    if (meshes.length === 0) return null;
+
+    const meshBox = new Box3();
+    for (const mesh of meshes) {
+      mesh.updateMatrixWorld(true);
+      meshBox.expandByObject(mesh);
+    }
+    if (meshBox.isEmpty()) return null;
+    return meshBox.getCenter(new Vector3());
   }
 
   /**

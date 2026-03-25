@@ -10,6 +10,7 @@ import {
   Euler,
   type EulerOrder,
   Material,
+  Matrix4,
   Object3D,
   Vector3,
 } from "three";
@@ -26,6 +27,11 @@ export interface StyleAppearance {
   translation?: StyleVec3Input;
   scale?: StyleVec3Input;
   rotation?: StyleEulerInput;
+  /**
+   * mesh 局部空间中的枢轴；`scale` / `rotation` 绕该点作用。
+   * 未传时等价于 (0,0,0)（几何局部原点）。
+   */
+  origin?: StyleVec3Input;
 }
 
 /** 条件项：[条件表达式或 true, 外观对象] */
@@ -98,7 +104,23 @@ function appearanceGroupKey(a: StyleAppearance): string {
   const t = vec3Key(a.translation);
   const s = vec3Key(a.scale);
   const r = eulerKey(a.rotation);
-  return `${m}|${t}|${s}|${r}`;
+  const o = vec3Key(a.origin);
+  return `${m}|${t}|${s}|${r}|${o}`;
+}
+
+/** 局部空间：v' = T(pivot) * R * S * T(-pivot) * v */
+function buildPivotStyleMatrix(
+  pivot: Vector3,
+  sx: number,
+  sy: number,
+  sz: number,
+  euler: Euler,
+): Matrix4 {
+  const m = new Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z);
+  m.premultiply(new Matrix4().makeScale(sx, sy, sz));
+  m.premultiply(new Matrix4().makeRotationFromEuler(euler));
+  m.premultiply(new Matrix4().makeTranslation(pivot.x, pivot.y, pivot.z));
+  return m;
 }
 
 /**
@@ -160,7 +182,6 @@ export class StyleHelper {
    * 清除样式，恢复默认显示
    */
   clearStyle(): void {
-    const scene = this.context.getScene();
     const styledOidsList = Array.from(this.styledOids);
     const hiddenOidsList = Array.from(this.hiddenOids);
 
@@ -178,7 +199,7 @@ export class StyleHelper {
           mesh.rotation.copy(origT.rotation);
           this.originalTransformByMesh.delete(mesh.uuid);
         }
-        if (scene && mesh.parent === scene) scene.remove(mesh);
+        mesh.removeFromParent();
       });
 
       const handler = this.meshChangeHandlers.get(collector.getCacheKey());
@@ -272,6 +293,14 @@ export class StyleHelper {
     this.context.hidePartsByOids(oidsToHide);
   }
 
+  /** Split mesh 与瓦片 originalMesh 同父级，避免挂到 tiles.group 导致大地矩阵数值问题 */
+  private attachMeshForStyle(fallbackScene: Object3D, mesh: Object3D): void {
+    const orig = (mesh.userData as { originalMesh?: Object3D }).originalMesh;
+    const parent = orig?.parent ?? fallbackScene;
+    if (mesh.parent === parent) return;
+    parent.attach(mesh);
+  }
+
   private applyAppearanceToCollector(
     collector: MeshCollector,
     appearance: StyleAppearance,
@@ -296,14 +325,53 @@ export class StyleHelper {
             rotation: mesh.rotation.clone(),
           });
         }
+        const bt = this.originalTransformByMesh.get(mesh.uuid)!;
+        mesh.position.copy(bt.position);
+        mesh.scale.copy(bt.scale);
+        mesh.rotation.copy(bt.rotation);
+
+        const hasScaleOrRotation =
+          appearance.scale !== undefined || appearance.rotation !== undefined;
+
+        if (hasScaleOrRotation) {
+          const pivot = new Vector3();
+          if (appearance.origin !== undefined) {
+            applyVec3(pivot, appearance.origin);
+          } else {
+            pivot.set(0, 0, 0);
+          }
+
+          let sx = 1;
+          let sy = 1;
+          let sz = 1;
+          if (appearance.scale !== undefined) {
+            if (Array.isArray(appearance.scale)) {
+              sx = appearance.scale[0] ?? 1;
+              sy = appearance.scale[1] ?? 1;
+              sz = appearance.scale[2] ?? 1;
+            } else {
+              const sc = appearance.scale as Vector3;
+              sx = sc.x;
+              sy = sc.y;
+              sz = sc.z;
+            }
+          }
+
+          const euler = new Euler();
+          if (appearance.rotation !== undefined) {
+            applyEuler(euler, appearance.rotation);
+          } else {
+            euler.set(0, 0, 0);
+          }
+
+          const styleM = buildPivotStyleMatrix(pivot, sx, sy, sz, euler);
+          mesh.updateMatrix();
+          mesh.matrix.multiply(styleM);
+          mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+        }
+
         if (appearance.translation !== undefined) {
           applyVec3(mesh.position, appearance.translation);
-        }
-        if (appearance.scale !== undefined) {
-          applyVec3(mesh.scale, appearance.scale);
-        }
-        if (appearance.rotation !== undefined) {
-          applyEuler(mesh.rotation, appearance.rotation);
         }
       }
       mesh.updateMatrixWorld();
