@@ -293,14 +293,6 @@ export class StyleHelper {
     this.context.hidePartsByOids(oidsToHide);
   }
 
-  /** Split mesh 与瓦片 originalMesh 同父级，避免挂到 tiles.group 导致大地矩阵数值问题 */
-  private attachMeshForStyle(fallbackScene: Object3D, mesh: Object3D): void {
-    const orig = (mesh.userData as { originalMesh?: Object3D }).originalMesh;
-    const parent = orig?.parent ?? fallbackScene;
-    if (mesh.parent === parent) return;
-    parent.attach(mesh);
-  }
-
   private applyAppearanceToCollector(
     collector: MeshCollector,
     appearance: StyleAppearance,
