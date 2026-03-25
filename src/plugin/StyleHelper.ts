@@ -300,17 +300,13 @@ export class StyleHelper {
           applyVec3(mesh.position, appearance.translation);
         }
         if (appearance.scale !== undefined) {
-          // applyVec3(mesh.scale, appearance.scale);
-          mesh.scale.set(100, 100, 100)
-          mesh.updateMatrix();
-          mesh.updateMatrixWorld();
-          // mesh.matrixWorldNeedsUpdate  = true;
+          applyVec3(mesh.scale, appearance.scale);
         }
         if (appearance.rotation !== undefined) {
           applyEuler(mesh.rotation, appearance.rotation);
         }
       }
-
+      mesh.updateMatrixWorld();
       scene.add(mesh);
     });
   }
