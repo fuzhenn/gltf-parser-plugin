@@ -67,7 +67,7 @@ export type {
 };
 
 interface TileWithCache {
-  cached?: {
+  engineData?: {
     scene: Object3D;
   };
 }
@@ -164,8 +164,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
     tiles.traverse((tile: any) => {
       const tileWithCache = tile as TileWithCache;
-      if (tileWithCache.cached?.scene) {
-        this._onLoadModel(tileWithCache.cached.scene);
+      if (tileWithCache.engineData?.scene) {
+        this._onLoadModel(tileWithCache.engineData.scene);
       }
       return true;
     }, null);
@@ -507,8 +507,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
     const hiddenSet = new Set(this.oids);
     this.tiles.traverse((tile: any) => {
       const tileWithCache = tile as TileWithCache;
-      if (tileWithCache.cached?.scene) {
-        applyVisibilityToScene(tileWithCache.cached.scene, hiddenSet);
+      if (tileWithCache.engineData?.scene) {
+        applyVisibilityToScene(tileWithCache.engineData.scene, hiddenSet);
       }
       return true;
     }, null);
