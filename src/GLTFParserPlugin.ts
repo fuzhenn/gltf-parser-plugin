@@ -169,6 +169,12 @@ export class GLTFParserPlugin implements MeshHelperHost {
       }
       return true;
     }, null);
+
+    // 同步收集器；再应用构造选项里的初始样式（需在场景已有 mesh 后，属性表与 setStyle 才可靠）
+    this._notifyCollectors();
+    if (this._options.style !== undefined) {
+      this._styleHelper?.setStyle(this._options.style ?? null);
+    }
   }
 
   private _createPartEffectHost(): PartEffectHost {
@@ -461,6 +467,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
    */
   private _onLoadModelCB = ({ scene }: { scene: Object3D }) => {
     this._onLoadModel(scene);
+    // 新瓦片进场景后更新各 MeshCollector 并重应用样式/高亮，避免仅依赖 tiles-load-end 时出现未生效
+    this._notifyCollectors();
   };
 
   /**
@@ -487,6 +495,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       collector._updateMeshes();
     }
     this._styleHelper?.onTilesLoadEnd();
+    this._partHighlightHelper?.onTilesLoadEnd();
   }
 
   _registerCollector(collector: MeshCollector): void {

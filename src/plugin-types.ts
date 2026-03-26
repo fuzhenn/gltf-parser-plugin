@@ -1,4 +1,5 @@
 import type { WebGLRenderer } from "three";
+import type { StyleConfig } from "./plugin/style-appearance-types";
 import type { MaterialBuilder } from "./types";
 
 /**
@@ -78,4 +79,10 @@ export interface GLTFParserPluginOptions {
    * @default false
    */
   useIndexedDB?: boolean;
+
+  /**
+   * 初始构件样式，语义与 `setStyle` / `plugin.style` 相同。
+   * 在 `init` 内会在已遍历到的瓦片场景就绪后应用；后续瓦片通过 `load-model` / `tiles-load-end` 触发收集器更新并重应用样式。
+   */
+  style?: StyleConfig | null;
 }
