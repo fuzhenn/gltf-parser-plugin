@@ -877,10 +877,14 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
-   * 当前样式配置，只读
+   * 当前样式配置。赋值与 `setStyle(...)` 等价，例如 `plugin.style = { show, conditions }`。
    */
   get style(): StyleConfig | null {
     return this._styleHelper?.style ?? null;
+  }
+
+  set style(style: StyleConfig | null) {
+    this.setStyle(style);
   }
 
   /**

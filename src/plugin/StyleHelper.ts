@@ -37,7 +37,7 @@ interface StyleHelperContext {
  * 通过 show 表达式控制可见性，通过 conditions 应用条件材质与可选位姿
  */
 export class StyleHelper {
-  /** 当前样式配置，可通过 plugin.style 获取 */
+  /** 当前样式配置；在插件上可通过 `plugin.style` 读写（与 `setStyle` 等价） */
   style: StyleConfig | null = null;
   private styledOids = new Set<number>();
   private hiddenOids = new Set<number>();
