@@ -1,28 +1,61 @@
+import {
+  normalizeMeshCollectorOids,
+  type MeshCollector,
+} from "../MeshCollector";
+import { getPropertyDataMapFromTiles } from "../mesh-helper/mesh";
+import { evaluateStyleCondition } from "./style-condition-eval";
 import type { PartEffectHost } from "./part-effect-host";
 import type { ColorInput } from "../utils/color-input";
 import { toColor } from "../utils/color-input";
 import { Color, Material, MeshStandardMaterial } from "three";
+import type {
+  StyleAppearance,
+  StyleEulerInput,
+  StyleVec3Input,
+} from "./style-appearance-types";
+import {
+  appearanceGroupKey,
+  applyStyleAppearanceToMesh,
+  resolveConditionsAppearance,
+  restoreMeshAppearanceMaps,
+  type MeshAppearanceMaps,
+  type StoredTransform,
+} from "./style-appearance-shared";
 
 /** 高亮材质：Three.js Material 或 { color, opacity } */
 export type HighlightMaterial = Material | { color?: ColorInput; opacity?: number };
 
-/** 高亮配置 */
+/** 条件命中后的外观：材质可为简写，位姿与 setStyle 一致 */
+export interface HighlightAppearance {
+  material: HighlightMaterial;
+  translation?: StyleVec3Input;
+  scale?: StyleVec3Input;
+  rotation?: StyleEulerInput;
+  origin?: StyleVec3Input;
+}
+
+export type HighlightCondition = [string | boolean, HighlightAppearance];
+
+/** 高亮配置：语义与 setStyle 一致，并多一个 name 用于命名分组 */
 export interface HighlightOptions {
   /** 高亮组名称，用于 cancelHighlight(name) 取消 */
   name: string;
-  /** 构件 OID 数组 */
-  ids: number[];
-  /** 高亮材质，支持 Three.js Material 或 { color, opacity } */
-  material: HighlightMaterial;
+  /** 可见性表达式，仅满足条件的构件参与高亮，如 'foo === bar' */
+  show?: string;
+  /** 条件外观数组，第一个满足条件的应用对应外观；[true, appearance] 为默认 */
+  conditions?: HighlightCondition[];
+  /** 若指定，仅在这些 OID 与属性数据的交集中应用（与 conditions 组合） */
+  oids?: number[];
 }
 
 const highlightMaterialCache = new Map<string, MeshStandardMaterial>();
 
 function getMaterialForHighlight(
-  style: { color?: ColorInput; opacity?: number }
+  style: { color?: ColorInput; opacity?: number },
 ): MeshStandardMaterial {
   const color = style.color != null ? toColor(style.color) : new Color(0xffff00);
-  const opacity = style.opacity != null ? Math.max(0, Math.min(1, style.opacity)) : 1;
+  const opacity =
+    style.opacity != null ? Math.max(0, Math.min(1, style.opacity)) : 1;
   const key = `${color.getHex()}_${opacity}`;
 
   if (!highlightMaterialCache.has(key)) {
@@ -43,186 +76,197 @@ function toMaterial(value: HighlightMaterial): Material {
   return getMaterialForHighlight(value);
 }
 
-interface HighlightGroup {
-  ids: Set<number>;
-  material: Material;
+function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
+  return {
+    material: toMaterial(ha.material),
+    translation: ha.translation,
+    scale: ha.scale,
+    rotation: ha.rotation,
+    origin: ha.origin,
+  };
+}
+
+interface HighlightGroupConfig {
+  show?: string;
+  conditions?: HighlightCondition[];
+  oids?: number[];
 }
 
 /**
  * 构件高亮辅助器
- * 支持多组命名高亮，通过 hidePartsByOids + split mesh + 高亮材质实现
+ * 与 setStyle 相同的 show / conditions / 位姿语义，多组命名高亮；底层通过 hidePartsByOids + split mesh 实现
  */
 export class PartHighlightHelper {
-  private highlightGroups = new Map<string, HighlightGroup>();
-  private materialByOid = new Map<number, Material>();
+  private highlightGroups = new Map<string, HighlightGroupConfig>();
+
   private originalMaterialByMesh = new Map<string, Material>();
-  private meshChangeHandlers = new Map<number, () => void>();
+  private originalTransformByMesh = new Map<string, StoredTransform>();
+  private meshChangeHandlers = new Map<string, () => void>();
+  private highlightCollectors: MeshCollector[] = [];
+  /** 上次 hidePartsByOids 传入的 OID 列表，用于重新应用前 showParts */
+  private lastHiddenOids: number[] = [];
 
   constructor(private context: PartEffectHost) {}
 
-  private mergeGroups(): { oids: number[]; materialByOid: Map<number, Material> } {
-    const oids: number[] = [];
-    const materialByOid = new Map<number, Material>();
-    for (const group of this.highlightGroups.values()) {
-      for (const oid of group.ids) {
-        materialByOid.set(oid, group.material);
-        oids.push(oid);
-      }
-    }
-    return { oids: [...new Set(oids)], materialByOid };
-  }
-
-  private applyToMeshes(oid: number): void {
-    const scene = this.context.getScene();
-    if (!scene) return;
-
-    const material = this.materialByOid.get(oid);
-    if (!material) return;
-
-    const collector = this.context.getMeshCollectorByOid(oid);
-    collector.meshes.forEach((mesh) => {
-      if (!this.originalMaterialByMesh.has(mesh.uuid)) {
-        this.originalMaterialByMesh.set(mesh.uuid, mesh.material as Material);
-      }
-      mesh.material = material;
-      if (!mesh.parent) scene.add(mesh);
-    });
-  }
-
-  private removeOidsFromScene(oids: number[]): void {
-    for (const oid of oids) {
-      const collector = this.context.getMeshCollectorByOid(oid);
-      collector.meshes.forEach((mesh) => {
-        const original = this.originalMaterialByMesh.get(mesh.uuid);
-        if (original) {
-          mesh.material = original;
-          this.originalMaterialByMesh.delete(mesh.uuid);
-        }
-        if (mesh.parent) mesh.parent.remove(mesh);
-      });
-    }
-  }
-
-  private unregisterOids(oids: number[]): void {
-    for (const oid of oids) {
-      const handler = this.meshChangeHandlers.get(oid);
-      if (handler) {
-        this.meshChangeHandlers.delete(oid);
-        const collector = this.context.getMeshCollectorByOid(oid);
-        collector.removeEventListener("mesh-change", handler);
-      }
-    }
-  }
-
-  private registerOids(oids: number[]): void {
-    const scene = this.context.getScene();
-    if (!scene) return;
-
-    for (const oid of oids) {
-      const collector = this.context.getMeshCollectorByOid(oid);
-      if (!this.meshChangeHandlers.has(oid)) {
-        const handler = () => this.applyToMeshes(oid);
-        this.meshChangeHandlers.set(oid, handler);
-        collector.addEventListener("mesh-change", handler);
-      }
-    }
+  private getMaps(): MeshAppearanceMaps {
+    return {
+      originalMaterialByMesh: this.originalMaterialByMesh,
+      originalTransformByMesh: this.originalTransformByMesh,
+    };
   }
 
   /**
-   * 高亮指定构件
-   * @param options 高亮配置，包含 name、ids、material
+   * 合并多组命名高亮：按 Map 插入顺序，后写入的组覆盖同一 OID 的外观
+   */
+  private mergeAppearanceByOid(
+    propertyByOid: Map<number, Record<string, unknown> | null>,
+  ): Map<number, StyleAppearance> {
+    const appearanceByOid = new Map<number, StyleAppearance>();
+    for (const [, hl] of this.highlightGroups) {
+      const conditions = (hl.conditions ?? []).map(
+        ([c, h]): [string | boolean, StyleAppearance] => [
+          c,
+          toStyleAppearance(h),
+        ],
+      );
+      for (const [oid, propertyData] of propertyByOid) {
+        if (propertyData == null) continue;
+        if (hl.oids && !hl.oids.includes(oid)) continue;
+        if (hl.show && !evaluateStyleCondition(hl.show, propertyData)) continue;
+        const app = resolveConditionsAppearance(conditions, propertyData);
+        if (!app) continue;
+        appearanceByOid.set(oid, app);
+      }
+    }
+    return appearanceByOid;
+  }
+
+  /** 各组 show 失败需隐藏的 OID（与 setStyle 一致：show 不满足则隐藏原片） */
+  private collectUnionShowHide(
+    propertyByOid: Map<number, Record<string, unknown> | null>,
+  ): Set<number> {
+    const unionHide = new Set<number>();
+    for (const [, hl] of this.highlightGroups) {
+      for (const [oid, propertyData] of propertyByOid) {
+        if (propertyData == null) continue;
+        if (hl.oids && !hl.oids.includes(oid)) continue;
+        if (hl.show && !evaluateStyleCondition(hl.show, propertyData)) {
+          unionHide.add(oid);
+        }
+      }
+    }
+    return unionHide;
+  }
+
+  private clearCollectorsAndRestoreMeshes(): void {
+    const maps = this.getMaps();
+    for (const collector of this.highlightCollectors) {
+      collector.meshes.forEach((mesh) => {
+        restoreMeshAppearanceMaps(mesh, maps);
+        mesh.removeFromParent();
+      });
+      const handler = this.meshChangeHandlers.get(collector.getCacheKey());
+      if (handler) {
+        collector.removeEventListener("mesh-change", handler);
+      }
+    }
+    this.meshChangeHandlers.clear();
+    this.highlightCollectors = [];
+  }
+
+  private reapplyAll(): void {
+    this.clearCollectorsAndRestoreMeshes();
+
+    if (this.lastHiddenOids.length > 0) {
+      this.context.showPartsByOids(this.lastHiddenOids);
+    }
+
+    if (this.highlightGroups.size === 0) {
+      this.lastHiddenOids = [];
+      return;
+    }
+
+    const tiles = this.context.getTiles();
+    const scene = this.context.getScene();
+    if (!tiles || !scene) return;
+
+    const propertyByOid = getPropertyDataMapFromTiles(tiles);
+    const appearanceByOid = this.mergeAppearanceByOid(propertyByOid);
+    const unionHide = this.collectUnionShowHide(propertyByOid);
+
+    const oidsToHide = [
+      ...new Set([...appearanceByOid.keys(), ...unionHide]),
+    ];
+    this.lastHiddenOids = oidsToHide;
+
+    const groups = new Map<
+      string,
+      { appearance: StyleAppearance; oids: number[] }
+    >();
+    for (const [oid, app] of appearanceByOid) {
+      const gkey = appearanceGroupKey(app);
+      let g = groups.get(gkey);
+      if (!g) {
+        g = { appearance: app, oids: [] };
+        groups.set(gkey, g);
+      }
+      g.oids.push(oid);
+    }
+
+    const maps = this.getMaps();
+
+    for (const { appearance, oids } of groups.values()) {
+      const sortedOids = normalizeMeshCollectorOids(oids);
+      const collector = this.context.getMeshCollectorByCondition({
+        oids: sortedOids,
+      });
+      this.highlightCollectors.push(collector);
+
+      const cacheKey = collector.getCacheKey();
+      const handler = () => {
+        const s = this.context.getScene();
+        if (!s) return;
+        collector.meshes.forEach((mesh) => {
+          applyStyleAppearanceToMesh(mesh, appearance, s, maps);
+        });
+      };
+      this.meshChangeHandlers.set(cacheKey, handler);
+      collector.addEventListener("mesh-change", handler);
+      handler();
+    }
+
+    this.context.hidePartsByOids(oidsToHide);
+  }
+
+  /**
+   * 高亮指定构件（语义与 setStyle 一致，多 name 参数）
    */
   highlight(options: HighlightOptions): void {
-    const { name, ids, material } = options;
-    const scene = this.context.getScene();
-    if (!scene) return;
-
-    const mat = toMaterial(material);
-
-    // 若同名组已存在，先移除
-    const existing = this.highlightGroups.get(name);
-    if (existing) {
-      this.removeOidsFromScene(Array.from(existing.ids));
-      this.unregisterOids(Array.from(existing.ids));
-      this.context.showPartsByOids(Array.from(existing.ids));
+    const { name, show, conditions, oids } = options;
+    if (!show && (!conditions || conditions.length === 0)) {
+      this.cancelHighlight(name);
+      return;
     }
 
-    const newIds = new Set(ids);
-    this.highlightGroups.set(name, { ids: newIds, material: mat });
-
-    const { oids: allOids, materialByOid: newMaterialByOid } = this.mergeGroups();
-    this.materialByOid = newMaterialByOid;
-
-    for (const oid of newIds) {
-      const collector = this.context.getMeshCollectorByOid(oid);
-      collector.meshes.forEach((mesh) => {
-        if (!this.originalMaterialByMesh.has(mesh.uuid)) {
-          this.originalMaterialByMesh.set(mesh.uuid, mesh.material as Material);
-        }
-        mesh.material = mat;
-        scene.add(mesh);
-      });
-    }
-
-    this.registerOids(Array.from(newIds));
-    this.context.hidePartsByOids(allOids);
+    this.highlightGroups.set(name, { show, conditions, oids });
+    this.reapplyAll();
   }
 
   /**
    * 取消指定名称的高亮
-   * @param name 高亮组名称
    */
   cancelHighlight(name: string): void {
-    const group = this.highlightGroups.get(name);
-    if (!group) return;
-
-    const cancelledOids = Array.from(group.ids);
+    if (!this.highlightGroups.has(name)) return;
     this.highlightGroups.delete(name);
-
-    const { oids: remainingOids, materialByOid: newMaterialByOid } =
-      this.mergeGroups();
-
-    const oidsToRestore: number[] = [];
-    const oidsToReapply: number[] = [];
-
-    for (const oid of cancelledOids) {
-      if (newMaterialByOid.has(oid)) {
-        oidsToReapply.push(oid);
-      } else {
-        oidsToRestore.push(oid);
-      }
-    }
-
-    this.removeOidsFromScene(cancelledOids);
-    this.unregisterOids(oidsToRestore);
-
-    this.materialByOid = newMaterialByOid;
-
-    if (oidsToRestore.length > 0) {
-      this.context.showPartsByOids(oidsToRestore);
-    }
-
-    if (remainingOids.length > 0) {
-      this.context.hidePartsByOids(remainingOids);
-      for (const oid of oidsToReapply) {
-        this.applyToMeshes(oid);
-      }
-    }
+    this.reapplyAll();
   }
 
   /**
    * 取消所有高亮
    */
   cancelAllHighlight(): void {
-    const allOids: number[] = [];
-    for (const group of this.highlightGroups.values()) {
-      allOids.push(...group.ids);
-    }
     this.highlightGroups.clear();
-    this.materialByOid.clear();
-    this.removeOidsFromScene(allOids);
-    this.unregisterOids(allOids);
-    this.context.showPartsByOids(allOids);
+    this.reapplyAll();
   }
 
   /**
@@ -230,11 +274,7 @@ export class PartHighlightHelper {
    */
   onTilesLoadEnd(): void {
     if (this.highlightGroups.size === 0) return;
-    const { materialByOid } = this.mergeGroups();
-    this.materialByOid = materialByOid;
-    for (const oid of materialByOid.keys()) {
-      this.applyToMeshes(oid);
-    }
+    this.reapplyAll();
   }
 
   dispose(): void {

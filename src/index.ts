@@ -29,8 +29,10 @@ export type {
   StyleCondition,
   StyleEulerInput,
   StyleVec3Input,
-} from "./plugin/StyleHelper";
+} from "./plugin/style-appearance-types";
 export type {
+  HighlightAppearance,
+  HighlightCondition,
   HighlightMaterial,
   HighlightOptions,
 } from "./plugin/PartHighlightHelper";

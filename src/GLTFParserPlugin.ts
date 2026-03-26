@@ -173,6 +173,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
   private _createPartEffectHost(): PartEffectHost {
     return {
+      getTiles: () => this.tiles ?? null,
       hidePartsByOids: (oids) => this.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
@@ -890,8 +891,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
-   * 高亮指定构件
-   * @param options 高亮配置，包含 name、ids、material
+   * 高亮指定构件（语义与 setStyle 一致：show、conditions、可选 oids，另需 name 标识分组）
+   * @param options 高亮配置
    */
   highlight(options: HighlightOptions): void {
     this._partHighlightHelper?.highlight(options);
