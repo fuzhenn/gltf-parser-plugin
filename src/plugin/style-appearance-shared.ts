@@ -97,27 +97,29 @@ export function buildPivotStyleMatrix(
 export function resolveConditionsAppearance<T>(
   conditions: [string | boolean, T][] | undefined,
   propertyData: Record<string, unknown> | null,
+  evaluators?: ReadonlyMap<
+    string,
+    import("./style-condition-eval").StyleConditionEvaluator
+  >,
 ): T | null {
   if (!conditions?.length) return null;
   for (const [cond, value] of conditions) {
-    if (evaluateStyleCondition(cond, propertyData)) {
+    if (evaluateStyleCondition(cond, propertyData, evaluators)) {
       return value;
     }
   }
   return null;
 }
 
-export function resolveStyleAppearance(
-  conditions: StyleCondition[] | undefined,
-  propertyData: Record<string, unknown> | null,
-): StyleAppearance | null {
-  return resolveConditionsAppearance(conditions, propertyData);
-}
 
 /** 与 setStyle 相同的 OID 分组逻辑（show + conditions → 外观分组 + 被 show 隐藏的 OID） */
 export function buildAppearanceGroupsFromPropertyMap(
   propertyByOid: Map<number, Record<string, unknown> | null>,
   config: { show?: string; conditions: StyleCondition[] },
+  evaluators?: ReadonlyMap<
+    string,
+    import("./style-condition-eval").StyleConditionEvaluator
+  >,
 ): {
   hiddenOidsList: number[];
   groups: Map<string, { appearance: StyleAppearance; oids: number[] }>;
@@ -132,13 +134,17 @@ export function buildAppearanceGroupsFromPropertyMap(
   for (const [oid, propertyData] of propertyByOid) {
     if (propertyData == null) continue;
     if (config.show) {
-      if (!evaluateStyleCondition(config.show, propertyData)) {
+      if (!evaluateStyleCondition(config.show, propertyData, evaluators)) {
         hiddenOidsList.push(oid);
         continue;
       }
     }
 
-    const appearance = resolveStyleAppearance(conditions, propertyData);
+    const appearance = resolveConditionsAppearance(
+      conditions,
+      propertyData,
+      evaluators,
+    );
     if (!appearance) continue;
 
     const gkey = appearanceGroupKey(appearance);

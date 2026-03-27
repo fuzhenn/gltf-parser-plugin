@@ -18,9 +18,11 @@ export type {
   MeshHelperHost,
 } from "./MeshCollector";
 export {
-  clearStyleConditionCache,
+  buildStyleConditionEvaluatorMap,
+  compileStyleCondition,
   evaluateStyleCondition,
 } from "./plugin/style-condition-eval";
+export type { StyleConditionEvaluator } from "./plugin/style-condition-eval";
 export type { FeatureInfo } from "./mesh-helper/intersection";
 export type { ColorInput } from "./utils/color-input";
 export type {

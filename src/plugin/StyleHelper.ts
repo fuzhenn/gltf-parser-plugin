@@ -8,6 +8,7 @@ import { getPropertyDataMapFromTiles } from "../mesh-helper/mesh";
 import { Object3D } from "three";
 import type { Material } from "three";
 import type { StyleConfig } from "./style-appearance-types";
+import { buildStyleConditionEvaluatorMap } from "./style-condition-eval";
 import {
   applyStyleAppearanceToMesh,
   buildAppearanceGroupsFromPropertyMap,
@@ -110,6 +111,7 @@ export class StyleHelper {
     const style = this.style;
     if (!style) return;
 
+    // TODO 命名getRootGroup
     const scene = this.context.getScene();
     if (!scene) return;
 
@@ -125,9 +127,14 @@ export class StyleHelper {
     this.styleCollectors = [];
     this.meshChangeHandlers.clear();
 
+    const evaluators = buildStyleConditionEvaluatorMap({
+      show: style.show,
+      conditions: style.conditions ?? [],
+    });
     const { hiddenOidsList, groups } = buildAppearanceGroupsFromPropertyMap(
       propertyByOid,
       { show: style.show, conditions: style.conditions ?? [] },
+      evaluators,
     );
 
     for (const { oids } of groups.values()) {
@@ -147,6 +154,8 @@ export class StyleHelper {
       originalTransformByMesh: this.originalTransformByMesh,
     };
 
+    // TODO 缓存condition对应的oid 缓存需要用LRU cache队列，限制一下缓存个数为200
+    // https://github.com/maptalks/maptalks.js/blob/master/packages/maptalks/src/core/util/LRUCache.ts
     for (const { appearance, oids } of groups.values()) {
       const sortedOids = normalizeMeshCollectorOids(oids);
       const collector = this.context.getMeshCollectorByCondition({

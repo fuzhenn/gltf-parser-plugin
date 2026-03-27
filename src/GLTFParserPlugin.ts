@@ -26,7 +26,10 @@ import {
   type MeshCollectorQuery,
   type MeshHelperHost,
 } from "./MeshCollector";
-import { evaluateStyleCondition } from "./plugin/style-condition-eval";
+import {
+  buildStyleConditionEvaluatorMap,
+  evaluateStyleCondition,
+} from "./plugin/style-condition-eval";
 import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
 import type { PartEffectHost } from "./plugin/part-effect-host";
 import { PartColorHelper } from "./plugin/PartColorHelper";
@@ -374,10 +377,11 @@ export class GLTFParserPlugin implements MeshHelperHost {
     const cond = condition.trim();
     if (!cond) return null;
 
+    const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
     const targetOids: number[] = [];
     for (const oid of getAllOidsFromTiles(this.tiles)) {
       const data = getPropertyDataByOid(this.tiles, oid);
-      if (evaluateStyleCondition(cond, data)) {
+      if (evaluateStyleCondition(cond, data, evaluators)) {
         targetOids.push(oid);
       }
     }
@@ -710,10 +714,11 @@ export class GLTFParserPlugin implements MeshHelperHost {
         params.oids.length === 0
           ? getAllOidsFromTiles(this.tiles)
           : [...new Set(params.oids)];
+      const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
       targetOids = [];
       for (const oid of candidate) {
         const data = getPropertyDataByOid(this.tiles, oid);
-        if (evaluateStyleCondition(cond, data)) {
+        if (evaluateStyleCondition(cond, data, evaluators)) {
           targetOids.push(oid);
         }
       }

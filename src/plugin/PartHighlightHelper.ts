@@ -3,7 +3,11 @@ import {
   type MeshCollector,
 } from "../MeshCollector";
 import { getPropertyDataMapFromTiles } from "../mesh-helper/mesh";
-import { evaluateStyleCondition } from "./style-condition-eval";
+import type { StyleCondition } from "./style-appearance-types";
+import {
+  buildStyleConditionEvaluatorMap,
+  evaluateStyleCondition,
+} from "./style-condition-eval";
 import type { PartEffectHost } from "./part-effect-host";
 import type { ColorInput } from "../utils/color-input";
 import { toColor } from "../utils/color-input";
@@ -123,6 +127,10 @@ export class PartHighlightHelper {
   ): Map<number, StyleAppearance> {
     const appearanceByOid = new Map<number, StyleAppearance>();
     for (const [, hl] of this.highlightGroups) {
+      const evaluators = buildStyleConditionEvaluatorMap({
+        show: hl.show,
+        conditions: (hl.conditions ?? []) as StyleCondition[],
+      });
       const conditions = (hl.conditions ?? []).map(
         ([c, h]): [string | boolean, StyleAppearance] => [
           c,
@@ -132,8 +140,16 @@ export class PartHighlightHelper {
       for (const [oid, propertyData] of propertyByOid) {
         if (propertyData == null) continue;
         if (hl.oids && !hl.oids.includes(oid)) continue;
-        if (hl.show && !evaluateStyleCondition(hl.show, propertyData)) continue;
-        const app = resolveConditionsAppearance(conditions, propertyData);
+        if (
+          hl.show &&
+          !evaluateStyleCondition(hl.show, propertyData, evaluators)
+        )
+          continue;
+        const app = resolveConditionsAppearance(
+          conditions,
+          propertyData,
+          evaluators,
+        );
         if (!app) continue;
         appearanceByOid.set(oid, app);
       }
@@ -147,10 +163,17 @@ export class PartHighlightHelper {
   ): Set<number> {
     const unionHide = new Set<number>();
     for (const [, hl] of this.highlightGroups) {
+      const evaluators = buildStyleConditionEvaluatorMap({
+        show: hl.show,
+        conditions: (hl.conditions ?? []) as StyleCondition[],
+      });
       for (const [oid, propertyData] of propertyByOid) {
         if (propertyData == null) continue;
         if (hl.oids && !hl.oids.includes(oid)) continue;
-        if (hl.show && !evaluateStyleCondition(hl.show, propertyData)) {
+        if (
+          hl.show &&
+          !evaluateStyleCondition(hl.show, propertyData, evaluators)
+        ) {
           unionHide.add(oid);
         }
       }

@@ -64,6 +64,7 @@ export function applyVisibilityToMesh(
     filtered[writeOffset++] = originalArray[i + 2];
   }
 
+  // TODO filterArrary缓存，因为长度一样
   const filteredArray = filtered.subarray(0, writeOffset);
   geometry.setIndex(new BufferAttribute(filteredArray, 1));
   geometry.index!.needsUpdate = true;

@@ -2,59 +2,82 @@
  * 与 StyleHelper 中 `show`、`conditions` 条件项的表达式求值一致
  * 在 propertyData 的键作为变量名的上下文中执行 `Boolean(expr)`
  *
- * 实现：对每个表达式字符串只编译一次 `new Function('data', 'with(d){...}')`，
- * 避免按「表达式 × 属性键集合」重复编译，也避免每次求值排序/拼接 cacheKey。
+ * 实现：对每个表达式字符串用 `new Function('data', 'with(d){...}')` 编译；
+ * 推荐在单次样式应用前调用 `buildStyleConditionEvaluatorMap` 预编译当前 style 内全部表达式，
+ * 将返回的 Map 传入 `evaluateStyleCondition`，避免在 OID 循环中重复编译。
  */
 
-const compiledCache = new Map<string, (data: Record<string, unknown>) => boolean>();
-const MAX_CACHE_ENTRIES = 512;
+import type { StyleCondition } from "./style-appearance-types";
 
-function getCompiled(
+export type StyleConditionEvaluator = (
+  data: Record<string, unknown>,
+) => boolean;
+
+/**
+ * 编译单个表达式；失败返回 null（无模块级缓存）
+ */
+export function compileStyleCondition(
   expr: string,
-): ((data: Record<string, unknown>) => boolean) | null {
-  let fn = compiledCache.get(expr);
-  if (fn) return fn;
-
+): StyleConditionEvaluator | null {
+  const trimmed = expr.trim();
+  if (!trimmed) return null;
   try {
-    // 非 strict 函数才允许 with；形参 data 为属性表，表达式内可直接写属性名
-    fn = new Function(
+    return new Function(
       "data",
       `var d = data != null && typeof data === "object" ? data : {};
-with (d) { return Boolean(${expr}); }`,
-    ) as (data: Record<string, unknown>) => boolean;
+with (d) { return Boolean(${trimmed}); }`,
+    ) as StyleConditionEvaluator;
   } catch {
     return null;
   }
-
-  if (compiledCache.size >= MAX_CACHE_ENTRIES) {
-    const first = compiledCache.keys().next().value;
-    if (first !== undefined) compiledCache.delete(first);
-  }
-  compiledCache.set(expr, fn);
-  return fn;
 }
 
 /**
- * 清空表达式编译缓存（热更新或单测可调用）
+ * 遍历 style 的 show 与 conditions，对每个出现过的字符串表达式只编译一次
  */
-export function clearStyleConditionCache(): void {
-  compiledCache.clear();
+export function buildStyleConditionEvaluatorMap(config: {
+  show?: string;
+  conditions?: StyleCondition[];
+}): Map<string, StyleConditionEvaluator> {
+  const strings = new Set<string>();
+  if (config.show?.trim()) strings.add(config.show.trim());
+  for (const [cond] of config.conditions ?? []) {
+    if (typeof cond === "string" && cond.trim()) strings.add(cond.trim());
+  }
+  const map = new Map<string, StyleConditionEvaluator>();
+  for (const s of strings) {
+    const fn = compileStyleCondition(s);
+    if (fn) map.set(s, fn);
+  }
+  return map;
 }
 
 export function evaluateStyleCondition(
   expr: string | boolean,
   propertyData: Record<string, unknown> | null,
+  evaluators?: ReadonlyMap<string, StyleConditionEvaluator>,
 ): boolean {
   if (expr === true) return true;
   if (expr === false) return false;
   if (typeof expr !== "string" || !expr.trim()) return true;
 
   const trimmed = expr.trim();
-  const fn = getCompiled(trimmed);
-  if (!fn) return false;
+  const data = propertyData ?? {};
 
+  const fromMap = evaluators?.get(trimmed);
+  if (fromMap) {
+    try {
+      return fromMap(data);
+    } catch {
+      return false;
+    }
+  }
+
+  // 未传入预编译 map 时按次编译（热路径请先用 buildStyleConditionEvaluatorMap）
+  const fn = compileStyleCondition(trimmed);
+  if (!fn) return false;
   try {
-    return fn(propertyData ?? {});
+    return fn(data);
   } catch {
     return false;
   }
