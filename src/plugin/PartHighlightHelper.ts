@@ -15,6 +15,8 @@ import { Color, Material, MeshStandardMaterial } from "three";
 import type {
   StyleAppearance,
   StyleEulerInput,
+  StyleMaterialResolver,
+  StyleMeshFactory,
   StyleVec3Input,
 } from "./style-appearance-types";
 import {
@@ -29,9 +31,10 @@ import {
 /** 高亮材质：Three.js Material 或 { color, opacity } */
 export type HighlightMaterial = Material | { color?: ColorInput; opacity?: number };
 
-/** 条件命中后的外观：材质可为简写，位姿与 setStyle 一致 */
+/** 条件命中后的外观：材质可为简写、函数或 Material；位姿与 setStyle 一致 */
 export interface HighlightAppearance {
-  material: HighlightMaterial;
+  material: HighlightMaterial | StyleMaterialResolver;
+  mesh?: StyleMeshFactory;
   translation?: StyleVec3Input;
   scale?: StyleVec3Input;
   rotation?: StyleEulerInput;
@@ -81,8 +84,16 @@ function toMaterial(value: HighlightMaterial): Material {
 }
 
 function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
+  const mat = ha.material;
+  const material: StyleAppearance["material"] =
+    typeof mat === "function"
+      ? mat
+      : mat instanceof Material
+        ? mat
+        : toMaterial(mat);
   return {
-    material: toMaterial(ha.material),
+    material,
+    mesh: ha.mesh,
     translation: ha.translation,
     scale: ha.scale,
     rotation: ha.rotation,

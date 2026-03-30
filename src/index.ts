@@ -30,8 +30,12 @@ export type {
   StyleConfig,
   StyleCondition,
   StyleEulerInput,
+  StyleMaterialMaps,
+  StyleMaterialResolver,
+  StyleMeshFactory,
   StyleVec3Input,
 } from "./plugin/style-appearance-types";
+export { extractStyleMaterialMaps } from "./plugin/style-appearance-shared";
 export type {
   HighlightAppearance,
   HighlightCondition,

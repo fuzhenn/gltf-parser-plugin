@@ -21,6 +21,9 @@ export type {
   StyleConfig,
   StyleCondition,
   StyleEulerInput,
+  StyleMaterialMaps,
+  StyleMaterialResolver,
+  StyleMeshFactory,
   StyleVec3Input,
 } from "./style-appearance-types";
 
@@ -154,8 +157,6 @@ export class StyleHelper {
       originalTransformByMesh: this.originalTransformByMesh,
     };
 
-    // TODO 缓存condition对应的oid 缓存需要用LRU cache队列，限制一下缓存个数为200
-    // https://github.com/maptalks/maptalks.js/blob/master/packages/maptalks/src/core/util/LRUCache.ts
     for (const { appearance, oids } of groups.values()) {
       const sortedOids = normalizeMeshCollectorOids(oids);
       const collector = this.context.getMeshCollectorByCondition({

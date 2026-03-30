@@ -12,6 +12,7 @@ import type {
   StyleAppearance,
   StyleCondition,
   StyleEulerInput,
+  StyleMaterialMaps,
   StyleVec3Input,
 } from "./style-appearance-types";
 
@@ -24,6 +25,50 @@ export type StoredTransform = {
 export interface MeshAppearanceMaps {
   originalMaterialByMesh: Map<string, Material>;
   originalTransformByMesh: Map<string, StoredTransform>;
+}
+
+const fnIdentitySeq = new WeakMap<Function, number>();
+let fnIdentityNext = 1;
+
+function styleFnIdentity(fn: Function): number {
+  let id = fnIdentitySeq.get(fn);
+  if (id === undefined) {
+    id = fnIdentityNext++;
+    fnIdentitySeq.set(fn, id);
+  }
+  return id;
+}
+
+/** 从构件材质提取贴图，供 material 回调使用 */
+export function extractStyleMaterialMaps(material: Material): StyleMaterialMaps {
+  const m = material as unknown as Record<string, unknown>;
+  const tex = (key: string) => {
+    const v = m[key];
+    return v &&
+      typeof v === "object" &&
+      "isTexture" in v &&
+      (v as { isTexture?: boolean }).isTexture
+      ? (v as import("three").Texture)
+      : null;
+  };
+  return {
+    map: tex("map"),
+    normalMap: tex("normalMap"),
+    metalnessMap: tex("metalnessMap"),
+    roughnessMap: tex("roughnessMap"),
+    aoMap: tex("aoMap"),
+    emissiveMap: tex("emissiveMap"),
+  };
+}
+
+function resolveStyleMaterial(
+  appearance: StyleAppearance,
+  originalMaterial: Material,
+): Material {
+  if (typeof appearance.material === "function") {
+    return appearance.material(extractStyleMaterialMaps(originalMaterial));
+  }
+  return appearance.material;
 }
 
 export function vec3Key(v: StyleVec3Input | undefined): string {
@@ -72,12 +117,16 @@ export function applyEuler(target: Euler, input: StyleEulerInput): void {
 }
 
 export function appearanceGroupKey(a: StyleAppearance): string {
-  const m = a.material.uuid;
+  const m =
+    typeof a.material === "function"
+      ? `matFn#${styleFnIdentity(a.material)}`
+      : a.material.uuid;
+  const meshPart = a.mesh ? `|meshFn#${styleFnIdentity(a.mesh)}` : "";
   const t = vec3Key(a.translation);
   const s = vec3Key(a.scale);
   const r = eulerKey(a.rotation);
   const o = vec3Key(a.origin);
-  return `${m}|${t}|${s}|${r}|${o}`;
+  return `${m}${meshPart}|${t}|${s}|${r}|${o}`;
 }
 
 export function buildPivotStyleMatrix(
@@ -189,7 +238,15 @@ export function applyStyleAppearanceToMesh(
   if (!maps.originalMaterialByMesh.has(mesh.uuid)) {
     maps.originalMaterialByMesh.set(mesh.uuid, mesh.material as Material);
   }
-  mesh.material = appearance.material;
+  const originalMaterial = maps.originalMaterialByMesh.get(mesh.uuid)!;
+  const resolvedMaterial = resolveStyleMaterial(appearance, originalMaterial);
+
+  if (appearance.mesh) {
+    const built = appearance.mesh(mesh.geometry, resolvedMaterial);
+    mesh = built
+  } else {
+    mesh.material = resolvedMaterial;
+  }
 
   const needTransform =
     appearance.translation !== undefined ||
