@@ -14,13 +14,12 @@ import {
   buildOidToFeatureIdMap,
   getAllOidsFromTiles,
   getPropertyDataByOid,
-  getTileMeshesByOid,
   queryFeatureFromIntersection,
-  splitMeshByOidsMerged,
 } from "./mesh-helper";
 
 import {
   MeshCollector,
+  MeshSplitResolver,
   meshCollectorQueryCacheKey,
   normalizeMeshCollectorOids,
   type MeshCollectorQuery,
@@ -107,7 +106,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     return this._renderer;
   }
   private _renderer: WebGLRenderer | null = null;
-  private splitMeshCache: Map<string, Mesh[]> = new Map();
+  readonly meshSplit = new MeshSplitResolver(() => this.tiles);
   private collectors: Set<MeshCollector> = new Set();
   private collectorCache: Map<string, MeshCollector> = new Map();
 
@@ -149,6 +148,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       hidePartsByOids: partFx.hidePartsByOids,
       showPartsByOids: partFx.showPartsByOids,
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
+      // TODO 方法名改一下 getRootGroup
       getScene: partFx.getScene,
     });
     this._partHighlightHelper = new PartHighlightHelper(partFx);
@@ -483,14 +483,10 @@ export class GLTFParserPlugin implements MeshHelperHost {
   };
 
   private _onLoadModel(scene: Object3D) {
-    this.splitMeshCache.clear();
+    this.meshSplit.clearCache();
 
     buildOidToFeatureIdMap(scene);
-    scene.traverse((c) => {
-      if ((c as Mesh).material) {
-        this._setupMaterial(c as Mesh);
-      }
-    });
+    
     applyVisibilityToScene(scene, new Set(this.oids));
   }
 
@@ -529,20 +525,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
-   * 设置材质（DoubleSide 等基础配置）
-   */
-  private _setupMaterial(mesh: Mesh) {
-    const material = mesh.material as Material;
-
-    if (material.userData._meshHelperSetup) {
-      return;
-    }
-    material.userData._meshHelperSetup = true;
-
-    material.side = DoubleSide;
-  }
-
-  /**
    * Query feature information from intersection
    * Respects freeze and isolate filters
    */
@@ -567,6 +549,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   // Interaction Filter Methods (delegated)
   // =============================================
 
+  // TODO 修改一下接口，对外只暴露 freeze和unfreeze unfreezeAll，isolate同理
   freezeByOids(oids: number[]): void {
     this._interactionFilter.freezeByOids(oids);
   }
@@ -638,7 +621,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       return union.getCenter(new Vector3());
     }
 
-    const meshes = this._getMeshesByOidsInternal(oids);
+    const meshes = this.meshSplit.getMeshesByOids(oids);
     if (meshes.length === 0) return null;
 
     const meshBox = new Box3();
@@ -648,84 +631,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
     }
     if (meshBox.isEmpty()) return null;
     return meshBox.getCenter(new Vector3());
-  }
-
-  /**
-   * 按 OID 集合：每个瓦片 mesh 只生成 **一个** 合并后的 split mesh（同一组 oid / condition 一条几何）
-   */
-  private _getMergedSplitMeshesForOidSet(oidSet: Set<number>): Mesh[] {
-    if (!this.tiles || oidSet.size === 0) return [];
-
-    const sortedKey = [...oidSet].sort((a, b) => a - b).join(",");
-    const result: Mesh[] = [];
-    const candidateTiles = new Set<Mesh>();
-
-    for (const oid of oidSet) {
-      for (const tm of getTileMeshesByOid(this.tiles, oid)) {
-        candidateTiles.add(tm);
-      }
-    }
-
-    for (const tileMesh of candidateTiles) {
-      const cacheKey = `merged|${tileMesh.uuid}|${sortedKey}`;
-      let cached = this.splitMeshCache.get(cacheKey);
-      if (!cached) {
-        const m = splitMeshByOidsMerged(tileMesh, oidSet);
-        cached = m ? [m] : [];
-        this.splitMeshCache.set(cacheKey, cached);
-      }
-      result.push(...cached);
-    }
-    return result;
-  }
-
-  /**
-   * 内部方法：根据单个 oid 获取 split mesh（每瓦片合并为一条）
-   */
-  _getMeshesByOidInternal(oid: number): Mesh[] {
-    return this._getMergedSplitMeshesForOidSet(new Set([oid]));
-  }
-
-  /**
-   * 内部方法：根据多个 oid 获取合并 split mesh（每瓦片一条，而非每 oid 一条）
-   */
-  _getMeshesByOidsInternal(oids: readonly number[]): Mesh[] {
-    return this._getMergedSplitMeshesForOidSet(new Set(oids));
-  }
-
-  /**
-   * 按查询收集 mesh：可只传 oids、只传 condition（全场景 OID 上筛选）、或两者组合
-   * condition 与 setStyle 的 show / conditions 中字符串表达式语义一致
-   */
-  _getMeshesForCollectorQueryInternal(params: {
-    oids: readonly number[];
-    condition?: string;
-  }): Mesh[] {
-    if (!this.tiles) return [];
-
-    const cond = params.condition?.trim();
-    let targetOids: number[];
-
-    if (!cond) {
-      if (params.oids.length === 0) return [];
-      targetOids = [...new Set(params.oids)].sort((a, b) => a - b);
-    } else {
-      const candidate =
-        params.oids.length === 0
-          ? getAllOidsFromTiles(this.tiles)
-          : [...new Set(params.oids)];
-      const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
-      targetOids = [];
-      for (const oid of candidate) {
-        const data = getPropertyDataByOid(this.tiles, oid);
-        if (evaluateStyleCondition(cond, data, evaluators)) {
-          targetOids.push(oid);
-        }
-      }
-      targetOids.sort((a, b) => a - b);
-    }
-
-    return this._getMeshesByOidsInternal(targetOids);
   }
 
   /**
@@ -741,6 +646,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       );
     }
 
+    // TODO collectorCache 不需要了，每一个condition对应一个MeshCollector
     const key = meshCollectorQueryCacheKey(query);
     const existing = this.collectorCache.get(key);
     if (existing) {
@@ -756,130 +662,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
     });
 
     return collector;
-  }
-
-  /**
-   * 根据单个 oid 获取 MeshCollector（等价于 getMeshCollectorByCondition({ oids: [oid] })）
-   */
-  getMeshCollectorByOid(oid: number): MeshCollector {
-    return this.getMeshCollectorByCondition({ oids: [oid] });
-  }
-
-  /**
-   * Hide the corresponding part of the original mesh according to the OID array
-   */
-  hidePartsByOids(oids: number[]): void {
-    this.oids = oids;
-    this._applyVisibilityToAllTiles();
-  }
-
-  /**
-   * Restore the display of the corresponding mesh according to the OID array
-   */
-  showPartsByOids(oids: number[]): void {
-    const oidSet = new Set(oids);
-    this.oids = this.oids.filter((existingOid) => !oidSet.has(existingOid));
-    this._applyVisibilityToAllTiles();
-  }
-
-  /**
-   * 根据 oid 数组设置构件颜色
-   * 隐藏原 mesh，将 split mesh 替换材质后加入场景（使用 tiles.group）
-   * @param oids 构件 OID 数组
-   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
-   */
-  setPartColorByOids(oids: number[], color: ColorInput): void {
-    this._partColorHelper?.setPartColorByOids(oids, color);
-  }
-
-  /**
-   * 恢复指定构件的颜色
-   * 从场景移除 split mesh，恢复原 mesh 显示
-   * @param oids 构件 OID 数组
-   */
-  restorePartColorByOids(oids: number[]): void {
-    this._partColorHelper?.restorePartColorByOids(oids);
-  }
-
-  /**
-   * 根据 oid 数组设置构件透明度
-   * @param oids 构件 OID 数组
-   * @param opacity 透明度，0-1，0 完全透明，1 完全不透明
-   */
-  setPartOpacityByOids(oids: number[], opacity: number): void {
-    this._partColorHelper?.setPartOpacityByOids(oids, opacity);
-  }
-
-  /**
-   * 恢复指定构件的透明度
-   * @param oids 构件 OID 数组
-   */
-  restorePartOpacityByOids(oids: number[]): void {
-    this._partColorHelper?.restorePartOpacityByOids(oids);
-  }
-
-  /**
-   * 设置需要闪烁的构件
-   * @param oids 构件 OID 数组
-   */
-  setBlinkPartsByOids(oids: number[]): void {
-    this._partBlinkHelper?.setBlinkPartsByOids(oids);
-  }
-
-  /**
-   * 设置闪烁颜色
-   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
-   */
-  setBlinkColor(color: ColorInput): void {
-    this._partBlinkHelper?.setBlinkColor(color);
-  }
-
-  /**
-   * 设置闪烁周期时间（毫秒）
-   * @param ms 一个完整闪烁周期（暗->亮->暗）的时长，默认 1000
-   */
-  setBlinkIntervalTime(ms: number): void {
-    this._partBlinkHelper?.setBlinkIntervalTime(ms);
-  }
-
-  /**
-   * 清除所有闪烁构件
-   */
-  clearAllBlinkParts(): void {
-    this._partBlinkHelper?.clearAllBlinkParts();
-  }
-
-  /**
-   * 设置需要线框显示的构件
-   * @param oids 构件 OID 数组
-   */
-  setFramePartsByOids(oids: number[]): void {
-    this._partFrameHelper?.setFramePartsByOids(oids);
-  }
-
-  /**
-   * 清除所有线框显示构件
-   */
-  clearAllFrameParts(): void {
-    this._partFrameHelper?.clearAllFrameParts();
-  }
-
-  /**
-   * 设置指定构件的线框填充颜色
-   * @param oids 构件 OID 数组
-   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
-   */
-  setFrameFillColor(oids: number[], color: ColorInput): void {
-    this._partFrameHelper?.setFrameFillColor(oids, color);
-  }
-
-  /**
-   * 设置指定构件的线框边框颜色
-   * @param oids 构件 OID 数组
-   * @param color 颜色值，支持 hex 数字、颜色字符串（如 "#ff0000"）、THREE.Color 对象
-   */
-  setFrameEdgeColor(oids: number[], color: ColorInput): void {
-    this._partFrameHelper?.setFrameEdgeColor(oids, color);
   }
 
   /**
@@ -932,14 +714,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
-   * Restore the original materials of the mesh
-   */
-  showAllParts(): void {
-    this.oids = [];
-    this._applyVisibilityToAllTiles();
-  }
-
-  /**
    * 获取当前隐藏的 OID 数量（兼容旧 API）
    */
   getFeatureIdCount(): number {
@@ -967,7 +741,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this.collectors.clear();
     this.collectorCache.clear();
 
-    this.splitMeshCache.clear();
+    this.meshSplit.clearCache();
 
     this._structureData = null;
     this._oidNodeMap.clear();
@@ -977,6 +751,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._modelInfo = null;
     this._modelInfoPromise = null;
 
+    //  TODO 没用的helper可以去掉
     this._interactionFilter.dispose();
     this._partColorHelper = null;
     this._partBlinkHelper?.dispose();

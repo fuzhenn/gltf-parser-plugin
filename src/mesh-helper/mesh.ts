@@ -137,6 +137,30 @@ export function splitMeshByOidsMerged(
   return newMesh;
 }
 
+/**
+ * 释放 {@link splitMeshByOidsMerged} 生成 mesh 的独占资源（clone 的材质、仅属于该几何的 index）。
+ * 顶点 BufferAttribute 与瓦片几何共享，不得对整块 `geometry` 调用 `dispose()`，否则会误释放瓦片仍在使用的缓冲。
+ */
+export function disposeMergedSplitMeshResources(mesh: Mesh): void {
+  // 如果material里面map被引用，不能dispose
+  const mats = mesh.material;
+  const list = Array.isArray(mats) ? mats : [mats];
+  for (const mat of list) {
+    mat?.dispose();
+  }
+
+  // TODO 需要比较splitMesh和tileMesh上的资源引用
+  const geom = mesh.geometry;
+  if (!geom) return;
+
+  const idx = geom.index;
+  if (idx) {
+    // Three.js 运行时有 dispose；@types/three 的 BufferAttribute 类型未包含该方法
+    (idx as unknown as { dispose(): void }).dispose();
+    geom.setIndex(null);
+  }
+}
+
 /** 瓦片内原始 feature mesh（非 split 子网格） */
 function isFeatureSourceMesh(mesh: Mesh): boolean {
   const u = mesh.userData;

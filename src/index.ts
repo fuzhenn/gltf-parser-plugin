@@ -7,6 +7,7 @@ export type {
 } from "./plugin-types";
 export {
   MeshCollector,
+  MeshSplitResolver,
   meshCollectorGroupKey,
   meshCollectorQueryCacheKey,
   normalizeMeshCollectorOids,

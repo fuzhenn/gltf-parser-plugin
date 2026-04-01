@@ -1,4 +1,16 @@
 import { EventDispatcher, Mesh } from "three";
+import { TilesRenderer } from "3d-tiles-renderer";
+import {
+  disposeMergedSplitMeshResources,
+  getAllOidsFromTiles,
+  getPropertyDataByOid,
+  getTileMeshesByOid,
+  splitMeshByOidsMerged,
+} from "./mesh-helper";
+import {
+  buildStyleConditionEvaluatorMap,
+  evaluateStyleCondition,
+} from "./plugin/style-condition-eval";
 
 /** 收集器查询：OID 范围 + 可选属性条件（语义同 setStyle 的 show / conditions 中的表达式字符串） */
 export interface MeshCollectorQuery {
@@ -12,13 +24,103 @@ export interface MeshCollectorQuery {
   condition?: string;
 }
 
+/**
+ * 瓦片级 split mesh 缓存与按 OID / 条件查询（原 GLTFParserPlugin 内 mesh 合并逻辑）
+ */
+export class MeshSplitResolver {
+  private splitMeshCache = new Map<string, Mesh[]>();
+
+  constructor(private readonly getTiles: () => TilesRenderer | null) {}
+
+  /**
+   * 清空 split 缓存并释放独占资源（clone 材质 + 独立 index），避免仅 `Map.clear()` 导致的 GPU/对象滞留。
+   * 顶点属性与瓦片共享，不在此处对共享 BufferAttribute 做 dispose。
+   */
+  clearCache(): void {
+    for (const meshes of this.splitMeshCache.values()) {
+      for (const mesh of meshes) {
+        disposeMergedSplitMeshResources(mesh);
+      }
+    }
+    this.splitMeshCache.clear();
+  }
+
+  /** 按 OID 列表取合并 split mesh（每瓦片一条），供中心点等计算 */
+  getMeshesByOids(oids: readonly number[]): Mesh[] {
+    return this.getMergedSplitMeshesForOidSet(new Set(oids));
+  }
+
+  /**
+   * 按查询收集 mesh：可只传 oids、只传 condition（全场景 OID 上筛选）、或两者组合
+   * condition 与 setStyle 的 show / conditions 中字符串表达式语义一致
+   */
+  getMeshesForCollectorQuery(params: {
+    oids: readonly number[];
+    condition?: string;
+  }): Mesh[] {
+    const tiles = this.getTiles();
+    if (!tiles) return [];
+
+    const cond = params.condition?.trim();
+    let targetOids: number[];
+
+    if (!cond) {
+      if (params.oids.length === 0) return [];
+      targetOids = [...new Set(params.oids)].sort((a, b) => a - b);
+    } else {
+      const candidate =
+        params.oids.length === 0
+          ? getAllOidsFromTiles(tiles)
+          : [...new Set(params.oids)];
+      const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
+      targetOids = [];
+      for (const oid of candidate) {
+        const data = getPropertyDataByOid(tiles, oid);
+        if (evaluateStyleCondition(cond, data, evaluators)) {
+          targetOids.push(oid);
+        }
+      }
+      targetOids.sort((a, b) => a - b);
+    }
+
+    return this.getMeshesByOids(targetOids);
+  }
+
+  /**
+   * 按 OID 集合：每个瓦片 mesh 只生成 **一个** 合并后的 split mesh（同一组 oid / condition 一条几何）
+   */
+  private getMergedSplitMeshesForOidSet(oidSet: Set<number>): Mesh[] {
+    const tiles = this.getTiles();
+    if (!tiles || oidSet.size === 0) return [];
+
+    const sortedKey = [...oidSet].sort((a, b) => a - b).join(",");
+    const result: Mesh[] = [];
+    const candidateTiles = new Set<Mesh>();
+
+    for (const oid of oidSet) {
+      for (const tm of getTileMeshesByOid(tiles, oid)) {
+        candidateTiles.add(tm);
+      }
+    }
+
+    for (const tileMesh of candidateTiles) {
+      const cacheKey = `merged|${tileMesh.uuid}|${sortedKey}`;
+      let cached = this.splitMeshCache.get(cacheKey);
+      if (!cached) {
+        const m = splitMeshByOidsMerged(tileMesh, oidSet);
+        cached = m ? [m] : [];
+        this.splitMeshCache.set(cacheKey, cached);
+      }
+      result.push(...cached);
+    }
+    return result;
+  }
+}
+
 export interface MeshHelperHost {
   _registerCollector(collector: MeshCollector): void;
   _unregisterCollector(collector: MeshCollector): void;
-  _getMeshesForCollectorQueryInternal(params: {
-    oids: readonly number[];
-    condition?: string;
-  }): Mesh[];
+  readonly meshSplit: MeshSplitResolver;
 }
 
 export interface MeshChangeEvent {
@@ -60,6 +162,9 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   private readonly cacheKey: string;
   private plugin: MeshHelperHost;
   private _meshes: Mesh[] = [];
+  // TODO meshCollerctor dispose 把mesh都dispose
+  // renderer销毁的时候也需要同样操作
+  // 瓦片dispose时候对应的splitMesh需要dispose
   private _disposed: boolean = false;
 
   constructor(query: MeshCollectorQuery, plugin: MeshHelperHost) {
@@ -76,6 +181,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     this.cacheKey = meshCollectorQueryCacheKey({ oids, condition });
     this.plugin = plugin;
 
+    // TODO 移除plugin,_registerCollector移动到plugin里面调用
     plugin._registerCollector(this);
 
     this._updateMeshes();
@@ -107,7 +213,8 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   _updateMeshes(): void {
     if (this._disposed) return;
 
-    const newMeshes = this.plugin._getMeshesForCollectorQueryInternal({
+    // TODO 移到meshCollector里面
+    const newMeshes = this.plugin.meshSplit.getMeshesForCollectorQuery({
       oids: this.queryOids,
       condition: this.condition,
     });
