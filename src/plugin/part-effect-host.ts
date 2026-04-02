@@ -7,7 +7,6 @@ export interface PartEffectHost {
   getTiles(): TilesRenderer | null;
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
-  getMeshCollectorByOid(oid: number): MeshCollector;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   getRootGroup(): Object3D | null;
 }

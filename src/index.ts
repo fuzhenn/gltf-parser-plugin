@@ -43,6 +43,7 @@ export type {
   HighlightMaterial,
   HighlightOptions,
 } from "./plugin/PartHighlightHelper";
+export { PartVisibilityHelper } from "./plugin/part-visibility-helper";
 export {
   decodeGzipBase64DataUriSync,
   getStructureDataUriFromTileset,

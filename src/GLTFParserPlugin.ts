@@ -1,16 +1,12 @@
 import {
   Box3,
-  DoubleSide,
   Intersection,
-  Material,
-  Mesh,
   Object3D,
   Vector3,
   WebGLRenderer,
 } from "three";
 import {
   FeatureInfo,
-  applyVisibilityToScene,
   buildOidToFeatureIdMap,
   getAllOidsFromTiles,
   getPropertyDataByOid,
@@ -40,6 +36,7 @@ import {
   type HighlightOptions,
 } from "./plugin/PartHighlightHelper";
 import { InteractionFilter } from "./plugin/InteractionFilter";
+import { PartVisibilityHelper } from "./plugin/part-visibility-helper";
 import { setMaxWorkers } from "./utils";
 import {
   bboxArrayToBox3,
@@ -93,7 +90,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _partHighlightHelper: PartHighlightHelper | null = null;
 
   // --- Mesh helper properties ---
-  oids: number[] = [];
+  /** 构件显隐（原 `hidePartsByOids` / `showPartsByOids` 逻辑） */
+  readonly partVisibility = new PartVisibilityHelper(() => this.tiles);
   /** WebGLRenderer 实例，用于 mesh helper 等扩展 */
   get renderer(): WebGLRenderer | null {
     return this._renderer;
@@ -172,9 +170,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _createPartEffectHost(): PartEffectHost {
     return {
       getTiles: () => this.tiles ?? null,
-      hidePartsByOids: (oids) => this.hidePartsByOids(oids),
-      showPartsByOids: (oids) => this.showPartsByOids(oids),
-      getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
+      hidePartsByOids: (oids) => this.partVisibility.hidePartsByOids(oids),
+      showPartsByOids: (oids) => this.partVisibility.showPartsByOids(oids),
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       getRootGroup: () => this.tiles?.group ?? null,
     };
@@ -476,7 +473,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
     buildOidToFeatureIdMap(scene);
     
-    applyVisibilityToScene(scene, new Set(this.oids));
+    this.partVisibility.applyVisibilityToScene(scene);
   }
 
   private _notifyCollectors(): void {
@@ -496,21 +493,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this.collectors.delete(collector);
     this.collectorCache.delete(key);
     this._interactionFilter.onUnregisterCollector(key);
-  }
-
-  /**
-   * 遍历所有已加载瓦片，应用可见性过滤
-   */
-  private _applyVisibilityToAllTiles(): void {
-    if (!this.tiles) return;
-    const hiddenSet = new Set(this.oids);
-    this.tiles.traverse((tile: any) => {
-      const tileWithCache = tile as TileWithCache;
-      if (tileWithCache.engineData?.scene) {
-        applyVisibilityToScene(tileWithCache.engineData.scene, hiddenSet);
-      }
-      return true;
-    }, null);
   }
 
   /**
@@ -722,13 +704,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
    */
   cancelAllHighlight(): void {
     this._partHighlightHelper?.cancelAllHighlight();
-  }
-
-  /**
-   * 获取当前隐藏的 OID 数量（兼容旧 API）
-   */
-  getFeatureIdCount(): number {
-    return this.oids.length;
   }
 
   /**
