@@ -31,10 +31,6 @@ import {
 } from "./plugin/style-condition-eval";
 import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
 import type { PartEffectHost } from "./plugin/part-effect-host";
-import { PartColorHelper } from "./plugin/PartColorHelper";
-import type { ColorInput } from "./utils/color-input";
-import { PartBlinkHelper } from "./plugin/PartBlinkHelper";
-import { PartFrameHelper } from "./plugin/PartFrameHelper";
 import {
   StyleHelper,
   type StyleConfig,
@@ -93,9 +89,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _modelInfoPromise: Promise<ModelInfo | null> | null = null;
 
   private _interactionFilter: InteractionFilter;
-  private _partColorHelper: PartColorHelper | null = null;
-  private _partBlinkHelper: PartBlinkHelper | null = null;
-  private _partFrameHelper: PartFrameHelper | null = null;
   private _styleHelper: StyleHelper | null = null;
   private _partHighlightHelper: PartHighlightHelper | null = null;
 
@@ -140,16 +133,12 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this.tiles = tiles;
 
     const partFx = this._createPartEffectHost();
-    this._partColorHelper = new PartColorHelper(partFx);
-    this._partBlinkHelper = new PartBlinkHelper(partFx);
-    this._partFrameHelper = new PartFrameHelper(partFx);
     this._styleHelper = new StyleHelper({
       getTiles: () => this.tiles,
       hidePartsByOids: partFx.hidePartsByOids,
       showPartsByOids: partFx.showPartsByOids,
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
-      // TODO 方法名改一下 getRootGroup
-      getScene: partFx.getScene,
+      getRootGroup: partFx.getRootGroup,
     });
     this._partHighlightHelper = new PartHighlightHelper(partFx);
 
@@ -187,7 +176,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
       showPartsByOids: (oids) => this.showPartsByOids(oids),
       getMeshCollectorByOid: (oid) => this.getMeshCollectorByOid(oid),
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
-      getScene: () => this.tiles?.group ?? null,
+      getRootGroup: () => this.tiles?.group ?? null,
     };
   }
 
@@ -549,53 +538,75 @@ export class GLTFParserPlugin implements MeshHelperHost {
   // Interaction Filter Methods (delegated)
   // =============================================
 
-  // TODO 修改一下接口，对外只暴露 freeze和unfreeze unfreezeAll，isolate同理
-  freezeByOids(oids: number[]): void {
+  /**
+   * 将 `freeze` / `unfreeze` / `isolate` / `unisolate` 的参数解析为 OID 列表。
+   * 数组参数视为 OID 列表；字符串参数视为与 `setStyle` 中 `show` 同语义的属性条件表达式。
+   */
+  private _getOidsForInteractionFilterSelection(
+    selection: number[] | string,
+  ): number[] {
+    if (Array.isArray(selection)) {
+      return [...new Set(selection)];
+    }
+    const cond = selection.trim();
+    if (!cond || !this.tiles) {
+      return [];
+    }
+    const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
+    const targetOids: number[] = [];
+    for (const oid of getAllOidsFromTiles(this.tiles)) {
+      const data = getPropertyDataByOid(this.tiles, oid);
+      if (evaluateStyleCondition(cond, data, evaluators)) {
+        targetOids.push(oid);
+      }
+    }
+    return targetOids;
+  }
+
+  /**
+   * 冻结构件（射线拾取等交互将忽略这些构件）。参数为 OID 数组，或与 `setStyle` 的 `show` 同语义的属性条件字符串。
+   */
+  freeze(selection: number[] | string): void {
+    const oids = this._getOidsForInteractionFilterSelection(selection);
+    if (oids.length === 0) return;
     this._interactionFilter.freezeByOids(oids);
   }
 
-  freezeByOid(oid: number): void {
-    this._interactionFilter.freezeByOid(oid);
-  }
-
-  unfreezeByOids(oids: number[]): void {
+  /**
+   * 取消冻结。参数为 OID 数组，或与 `setStyle` 的 `show` 同语义的属性条件字符串（匹配到的 OID 会从冻结集中移除）。
+   */
+  unfreeze(selection: number[] | string): void {
+    const oids = this._getOidsForInteractionFilterSelection(selection);
+    if (oids.length === 0) return;
     this._interactionFilter.unfreezeByOids(oids);
   }
 
-  unfreezeByOid(oid: number): void {
-    this._interactionFilter.unfreezeByOid(oid);
-  }
-
-  unfreeze(): void {
+  /** 取消全部冻结 */
+  unfreezeAll(): void {
     this._interactionFilter.unfreeze();
   }
 
-  getFrozenOids(): number[] {
-    return this._interactionFilter.getFrozenOids();
-  }
-
-  isolateByOids(oids: number[]): void {
+  /**
+   * 仅显示这些构件的交互（其余构件交互被屏蔽）。参数为 OID 数组，或与 `setStyle` 的 `show` 同语义的属性条件字符串。
+   */
+  isolate(selection: number[] | string): void {
+    const oids = this._getOidsForInteractionFilterSelection(selection);
+    if (oids.length === 0) return;
     this._interactionFilter.isolateByOids(oids);
   }
 
-  isolateByOid(oid: number): void {
-    this._interactionFilter.isolateByOid(oid);
-  }
-
-  unisolateByOids(oids: number[]): void {
+  /**
+   * 从隔离集合中移除指定 OID。参数为 OID 数组，或与 `setStyle` 的 `show` 同语义的属性条件字符串。
+   */
+  unisolate(selection: number[] | string): void {
+    const oids = this._getOidsForInteractionFilterSelection(selection);
+    if (oids.length === 0) return;
     this._interactionFilter.unisolateByOids(oids);
   }
 
-  unisolateByOid(oid: number): void {
-    this._interactionFilter.unisolateByOid(oid);
-  }
-
-  unisolate(): void {
+  /** 取消全部隔离（恢复为未隔离状态） */
+  unisolateAll(): void {
     this._interactionFilter.unisolate();
-  }
-
-  getIsolatedOids(): number[] {
-    return this._interactionFilter.getIsolatedOids();
   }
 
   /**
@@ -753,11 +764,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
 
     //  TODO 没用的helper可以去掉
     this._interactionFilter.dispose();
-    this._partColorHelper = null;
-    this._partBlinkHelper?.dispose();
-    this._partBlinkHelper = null;
-    this._partFrameHelper?.dispose();
-    this._partFrameHelper = null;
     this._styleHelper?.dispose();
     this._styleHelper = null;
     this._partHighlightHelper?.dispose();

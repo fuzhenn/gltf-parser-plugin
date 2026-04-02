@@ -221,7 +221,7 @@ export class PartHighlightHelper {
     }
 
     const tiles = this.context.getTiles();
-    const scene = this.context.getScene();
+    const scene = this.context.getRootGroup();
     if (!tiles || !scene) return;
 
     const propertyByOid = getPropertyDataMapFromTiles(tiles);
@@ -258,7 +258,7 @@ export class PartHighlightHelper {
 
       const cacheKey = collector.getCacheKey();
       const handler = () => {
-        const s = this.context.getScene();
+        const s = this.context.getRootGroup();
         if (!s) return;
         collector.meshes.forEach((mesh) => {
           applyStyleAppearanceToMesh(mesh, appearance, s, maps);

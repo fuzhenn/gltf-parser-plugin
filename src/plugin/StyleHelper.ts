@@ -33,7 +33,7 @@ interface StyleHelperContext {
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
-  getScene(): Object3D | null;
+  getRootGroup(): Object3D | null;
 }
 
 /**
@@ -114,9 +114,8 @@ export class StyleHelper {
     const style = this.style;
     if (!style) return;
 
-    // TODO 命名getRootGroup
-    const scene = this.context.getScene();
-    if (!scene) return;
+    const rootGroup = this.context.getRootGroup();
+    if (!rootGroup) return;
 
     const tiles = this.context.getTiles();
     if (!tiles) return;
@@ -166,10 +165,9 @@ export class StyleHelper {
 
       const cacheKey = collector.getCacheKey();
       const handler = () => {
-        const s = this.context.getScene();
-        if (!s) return;
+        if (!rootGroup) return;
         collector.meshes.forEach((mesh) => {
-          applyStyleAppearanceToMesh(mesh, appearance, s, maps);
+          applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps);
         });
       };
       this.meshChangeHandlers.set(cacheKey, handler);

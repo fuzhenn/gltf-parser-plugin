@@ -9,5 +9,5 @@ export interface PartEffectHost {
   showPartsByOids(oids: number[]): void;
   getMeshCollectorByOid(oid: number): MeshCollector;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
-  getScene(): Object3D | null;
+  getRootGroup(): Object3D | null;
 }
