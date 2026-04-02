@@ -2,7 +2,7 @@ import { Mesh } from "three";
 import type { MeshCollector } from "../MeshCollector";
 
 export interface InteractionFilterContext {
-  getCollectorCache(): Map<string, MeshCollector>;
+  getCollectors(): ReadonlySet<MeshCollector>;
 }
 
 /**
@@ -99,7 +99,7 @@ export class InteractionFilter {
   private syncCollectorMeshes(): void {
     this.isPluginRemoving = true;
 
-    for (const [, collector] of this.context.getCollectorCache()) {
+    for (const collector of this.context.getCollectors()) {
       for (const mesh of collector.meshes) {
         if (!this.meshListeners.has(mesh)) continue;
 

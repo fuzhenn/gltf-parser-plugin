@@ -115,12 +115,31 @@ export class MeshSplitResolver {
     }
     return result;
   }
-}
 
-export interface MeshHelperHost {
-  _registerCollector(collector: MeshCollector): void;
-  _unregisterCollector(collector: MeshCollector): void;
-  readonly meshSplit: MeshSplitResolver;
+  /**
+   * 清理指定 tileMesh 相关的所有 split mesh
+   * 在瓦片 dispose 时调用
+   */
+  disposeSplitMeshesByTile(tileMesh: Mesh): void {
+    const prefix = `merged|${tileMesh.uuid}|`;
+    const keysToDelete: string[] = [];
+
+    for (const key of this.splitMeshCache.keys()) {
+      if (key.startsWith(prefix)) {
+        keysToDelete.push(key);
+      }
+    }
+
+    for (const key of keysToDelete) {
+      const meshes = this.splitMeshCache.get(key);
+      if (meshes) {
+        for (const mesh of meshes) {
+          disposeMergedSplitMeshResources(mesh);
+        }
+      }
+      this.splitMeshCache.delete(key);
+    }
+  }
 }
 
 export interface MeshChangeEvent {
@@ -138,7 +157,7 @@ export function normalizeMeshCollectorOids(oids: readonly number[]): number[] {
 }
 
 /**
- * 与 MeshCollector.getCacheKey()、插件 collectorCache 键一致
+ * 由查询（oids + condition）生成的语义字符串，可用于日志或外部按查询维度分组。
  */
 export function meshCollectorQueryCacheKey(query: MeshCollectorQuery): string {
   const oidsNorm = normalizeMeshCollectorOids(query.oids ?? []);
@@ -157,17 +176,17 @@ export function meshCollectorGroupKey(oids: readonly number[]): string {
  * MeshCollector - 按查询条件监听并收集 split mesh
  */
 export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
+  private static _nextInteractionId = 0;
+
   private readonly queryOids: number[];
   private readonly condition: string | undefined;
-  private readonly cacheKey: string;
-  private plugin: MeshHelperHost;
+  /** 实例唯一键（样式/高亮/冻结等按收集器实例追踪） */
+  private readonly _interactionGroupKey: string;
+  private meshSplit: MeshSplitResolver | null = null;
   private _meshes: Mesh[] = [];
-  // TODO meshCollerctor dispose 把mesh都dispose
-  // renderer销毁的时候也需要同样操作
-  // 瓦片dispose时候对应的splitMesh需要dispose
   private _disposed: boolean = false;
 
-  constructor(query: MeshCollectorQuery, plugin: MeshHelperHost) {
+  constructor(query: MeshCollectorQuery) {
     super();
     const oids = normalizeMeshCollectorOids(query.oids ?? []);
     const condition = query.condition?.trim() || undefined;
@@ -178,17 +197,22 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     }
     this.queryOids = oids;
     this.condition = condition;
-    this.cacheKey = meshCollectorQueryCacheKey({ oids, condition });
-    this.plugin = plugin;
+    this._interactionGroupKey = `mc-${++MeshCollector._nextInteractionId}`;
+  }
 
-    // TODO 移除plugin,_registerCollector移动到plugin里面调用
-    plugin._registerCollector(this);
-
+  /**
+   * 挂接到插件（meshSplit、MeshCollectorLifecycle）。须在使用前调用一次。
+   */
+  _onRegister(meshSplit: MeshSplitResolver): void {
+    if (this._disposed) return;
+    this.meshSplit = meshSplit;
+    
     this._updateMeshes();
   }
 
-  getCacheKey(): string {
-    return this.cacheKey;
+  /** 实例唯一标识（样式/高亮监听、冻结/隔离等按收集器实例区分） */
+  getInteractionGroupKey(): string {
+    return this._interactionGroupKey;
   }
 
   /** 查询里显式传入的 OID（规范化后）；仅用 condition 筛选时可能为空数组 */
@@ -212,9 +236,9 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
 
   _updateMeshes(): void {
     if (this._disposed) return;
+    if (!this.meshSplit) return;
 
-    // TODO 移到meshCollector里面
-    const newMeshes = this.plugin.meshSplit.getMeshesForCollectorQuery({
+    const newMeshes = this.meshSplit.getMeshesForCollectorQuery({
       oids: this.queryOids,
       condition: this.condition,
     });
@@ -232,7 +256,14 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
-    this.plugin._unregisterCollector(this);
+
+    // 清理当前 collector 引用的 split mesh
+    if ( this._meshes.length > 0) {
+      for (const mesh of this._meshes) {
+        disposeMergedSplitMeshResources(mesh);
+      }
+    }
+
     this._meshes = [];
   }
 }

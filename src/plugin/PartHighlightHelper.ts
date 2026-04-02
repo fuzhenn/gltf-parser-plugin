@@ -199,7 +199,9 @@ export class PartHighlightHelper {
         restoreMeshAppearanceMaps(mesh, maps);
         mesh.removeFromParent();
       });
-      const handler = this.meshChangeHandlers.get(collector.getCacheKey());
+      const handler = this.meshChangeHandlers.get(
+        collector.getInteractionGroupKey(),
+      );
       if (handler) {
         collector.removeEventListener("mesh-change", handler);
       }
@@ -256,7 +258,7 @@ export class PartHighlightHelper {
       });
       this.highlightCollectors.push(collector);
 
-      const cacheKey = collector.getCacheKey();
+      const groupKey = collector.getInteractionGroupKey();
       const handler = () => {
         const s = this.context.getRootGroup();
         if (!s) return;
@@ -264,7 +266,7 @@ export class PartHighlightHelper {
           applyStyleAppearanceToMesh(mesh, appearance, s, maps);
         });
       };
-      this.meshChangeHandlers.set(cacheKey, handler);
+      this.meshChangeHandlers.set(groupKey, handler);
       collector.addEventListener("mesh-change", handler);
       handler();
     }

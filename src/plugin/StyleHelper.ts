@@ -47,7 +47,7 @@ export class StyleHelper {
   private hiddenOids = new Set<number>();
   private originalMaterialByMesh = new Map<string, Material>();
   private originalTransformByMesh = new Map<string, StoredTransform>();
-  /** 按材质分组后的收集器，key 与 collector.getCacheKey() 一致 */
+  /** 按收集器实例（interactionGroupKey）挂接 mesh-change */
   private meshChangeHandlers = new Map<string, () => void>();
   /** 当前样式占用的收集器（用于 clearStyle / 下次 applyStyle 前卸载监听） */
   private styleCollectors: MeshCollector[] = [];
@@ -96,7 +96,9 @@ export class StyleHelper {
         mesh.removeFromParent();
       });
 
-      const handler = this.meshChangeHandlers.get(collector.getCacheKey());
+      const handler = this.meshChangeHandlers.get(
+        collector.getInteractionGroupKey(),
+      );
       if (handler) {
         collector.removeEventListener("mesh-change", handler);
       }
@@ -123,7 +125,9 @@ export class StyleHelper {
     const propertyByOid = getPropertyDataMapFromTiles(tiles);
 
     for (const collector of this.styleCollectors) {
-      const h = this.meshChangeHandlers.get(collector.getCacheKey());
+      const h = this.meshChangeHandlers.get(
+        collector.getInteractionGroupKey(),
+      );
       if (h) collector.removeEventListener("mesh-change", h);
     }
     this.styleCollectors = [];
@@ -163,14 +167,14 @@ export class StyleHelper {
       });
       this.styleCollectors.push(collector);
 
-      const cacheKey = collector.getCacheKey();
+      const groupKey = collector.getInteractionGroupKey();
       const handler = () => {
         if (!rootGroup) return;
         collector.meshes.forEach((mesh) => {
           applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps);
         });
       };
-      this.meshChangeHandlers.set(cacheKey, handler);
+      this.meshChangeHandlers.set(groupKey, handler);
       collector.addEventListener("mesh-change", handler);
       handler();
     }

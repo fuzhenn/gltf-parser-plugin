@@ -16,10 +16,8 @@ import {
 import {
   MeshCollector,
   MeshSplitResolver,
-  meshCollectorQueryCacheKey,
   normalizeMeshCollectorOids,
   type MeshCollectorQuery,
-  type MeshHelperHost,
 } from "./MeshCollector";
 import {
   buildStyleConditionEvaluatorMap,
@@ -67,7 +65,7 @@ interface TileWithCache {
   };
 }
 
-export class GLTFParserPlugin implements MeshHelperHost {
+export class GLTFParserPlugin {
   name = "GLTFParserPlugin";
 
   private tiles: (TilesRenderer & Record<string, any>) | null = null;
@@ -99,7 +97,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
   private _renderer: WebGLRenderer | null = null;
   readonly meshSplit = new MeshSplitResolver(() => this.tiles);
   private collectors: Set<MeshCollector> = new Set();
-  private collectorCache: Map<string, MeshCollector> = new Map();
 
   /**
    * Create a GLTFParserPlugin instance
@@ -118,7 +115,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
     }
 
     this._interactionFilter = new InteractionFilter({
-      getCollectorCache: () => this.collectorCache,
+      getCollectors: () => this.collectors,
     });
 
     setMaxWorkers(this._options.maxWorkers!);
@@ -250,7 +247,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   // =============================================
 
   /** 与 tileset 同目录的侧车 JSON，如 structure.json / modelInfo.json */
-  private _sidecarJsonUrl(fileName: string): string | null {
+  private _tocJsonUrl(fileName: string): string | null {
     const rootURL = this.tiles?.rootURL as string | undefined;
     if (!rootURL) return null;
     return rootURL.replace(/[^/]+$/, fileName);
@@ -316,21 +313,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
   getNodeTreeByOid(oid: number): StructureNode | null {
     this._syncStructureFromTileset();
     return this._oidNodeMap.get(oid) ?? null;
-  }
-
-  /**
-   * 根据 oid 数组批量获取结构树节点
-   */
-  getNodeTreeByOids(oids: number[]): Map<number, StructureNode> {
-    this._syncStructureFromTileset();
-    const result = new Map<number, StructureNode>();
-    for (const oid of oids) {
-      const node = this._oidNodeMap.get(oid);
-      if (node) {
-        result.set(oid, node);
-      }
-    }
-    return result;
   }
 
   /**
@@ -406,7 +388,7 @@ export class GLTFParserPlugin implements MeshHelperHost {
   // =============================================
 
   private async _fetchModelInfo(): Promise<ModelInfo | null> {
-    const url = this._sidecarJsonUrl("modelInfo.json");
+    const url = this._tocJsonUrl("modelInfo.json");
     if (!url) {
       console.warn(
         "[GLTFParserPlugin] Cannot derive modelInfo.json URL: tiles not initialized",
@@ -482,17 +464,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
     }
     this._styleHelper?.onTilesLoadEnd();
     this._partHighlightHelper?.onTilesLoadEnd();
-  }
-
-  _registerCollector(collector: MeshCollector): void {
-    this.collectors.add(collector);
-  }
-
-  _unregisterCollector(collector: MeshCollector): void {
-    const key = collector.getCacheKey();
-    this.collectors.delete(collector);
-    this.collectorCache.delete(key);
-    this._interactionFilter.onUnregisterCollector(key);
   }
 
   /**
@@ -627,7 +598,8 @@ export class GLTFParserPlugin implements MeshHelperHost {
   }
 
   /**
-   * 根据查询获取 MeshCollector（oids + 可选 condition，缓存键相同则复用实例）
+   * 根据查询创建新的 MeshCollector（oids + 可选 condition）。
+   * 每次调用都会新建实例；相同 condition / oids 多次调用会得到多个独立收集器，可同时存在。
    */
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector {
     const oids = query.oids ?? [];
@@ -639,19 +611,14 @@ export class GLTFParserPlugin implements MeshHelperHost {
       );
     }
 
-    // TODO collectorCache 不需要了，每一个condition对应一个MeshCollector
-    const key = meshCollectorQueryCacheKey(query);
-    const existing = this.collectorCache.get(key);
-    if (existing) {
-      return existing;
-    }
-    const collector = new MeshCollector(query, this);
-    this.collectorCache.set(key, collector);
+    const collector = new MeshCollector(query);
+    this._registerMeshCollector(collector);
+    const groupKey = collector.getInteractionGroupKey();
 
-    this._interactionFilter.onCollectorMeshChange(key, collector.meshes);
+    this._interactionFilter.onCollectorMeshChange(groupKey, collector.meshes);
 
     collector.addEventListener("mesh-change", (event) => {
-      this._interactionFilter.onCollectorMeshChange(key, event.meshes);
+      this._interactionFilter.onCollectorMeshChange(groupKey, event.meshes);
     });
 
     return collector;
@@ -706,6 +673,20 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._partHighlightHelper?.cancelAllHighlight();
   }
 
+  _registerMeshCollector(collector: MeshCollector): void {
+    collector._onRegister(this.meshSplit);
+    this.collectors.add(collector);
+  }
+
+  // TODO collector注销，setStyle clearStyle hightlight 也得注销
+  // TODO mesh回收
+  _unregisterMeshCollector(collector: MeshCollector): void {
+    const key = collector.getInteractionGroupKey();
+    this.collectors.delete(collector);
+    this._interactionFilter.onUnregisterCollector(key);
+    collector.dispose();
+  }
+
   /**
    * Plugin disposal
    */
@@ -722,10 +703,9 @@ export class GLTFParserPlugin implements MeshHelperHost {
     }
 
     for (const collector of this.collectors) {
-      collector.dispose();
+     this._unregisterMeshCollector(collector);
     }
     this.collectors.clear();
-    this.collectorCache.clear();
 
     this.meshSplit.clearCache();
 
@@ -737,7 +717,6 @@ export class GLTFParserPlugin implements MeshHelperHost {
     this._modelInfo = null;
     this._modelInfoPromise = null;
 
-    //  TODO 没用的helper可以去掉
     this._interactionFilter.dispose();
     this._styleHelper?.dispose();
     this._styleHelper = null;
