@@ -4,6 +4,7 @@ import {
   Material,
   Mesh,
   Object3D,
+  Texture,
 } from "three";
 
 import { TilesRenderer } from "3d-tiles-renderer";
@@ -168,18 +169,30 @@ function getMeshMaterials(mesh: Mesh | undefined): Material[] {
   return Array.isArray(m) ? m : [m];
 }
 
-/** 两材质是否共享任一贴图类资源（同引用则对其中一方 material.dispose 会波及另一方） */
-function materialSharesAnyTextureLikeWith(a: Material, b: Material): boolean {
-  const ra = a as unknown as Record<string, unknown>;
-  const rb = b as unknown as Record<string, unknown>;
+/**
+ * 释放 clone 材质：与瓦片同引用的贴图只 detach，不 dispose；否则 dispose 贴图。
+ * 最后 `material.dispose()` 释放着色器程序等；共享贴图已置空，避免误伤瓦片。
+ */
+function disposeSplitMaterialVsTile(
+  mat: Material,
+  tileMat: Material | undefined,
+): void {
+  const ra = mat as unknown as Record<string, unknown>;
+  const rb = (tileMat ?? null) as unknown as Record<string, unknown> | null;
+
   for (const key of TEXTURE_LIKE_MATERIAL_KEYS) {
     const va = ra[key];
-    const vb = rb[key];
-    if (va != null && va === vb) {
-      return true;
+    if (va == null) continue;
+    const vb = rb?.[key];
+    const shared = vb != null && va === vb;
+    if (shared) {
+      ra[key] = null;
+    } else {
+      (va as Texture).dispose();
+      ra[key] = null;
     }
   }
-  return false;
+  mat.dispose();
 }
 
 function splitIndexIsSharedWithTileGeometry(
@@ -190,11 +203,40 @@ function splitIndexIsSharedWithTileGeometry(
   return splitGeom.index === tileGeom.index;
 }
 
+function attributeIsSharedWithTileGeometry(
+  splitGeom: BufferGeometry,
+  tileGeom: BufferGeometry | undefined,
+  name: string,
+): boolean {
+  if (!tileGeom) return false;
+  const a = splitGeom.getAttribute(name);
+  const t = tileGeom.getAttribute(name);
+  return Boolean(a && t && a === t);
+}
+
+/** 仅释放与瓦片非共享的顶点属性（同引用则保留，避免误伤瓦片几何） */
+function disposeSplitGeometryAttributesNotSharedWithTile(
+  geom: BufferGeometry,
+  tileGeom: BufferGeometry | undefined,
+): void {
+  if (!tileGeom) return;
+
+  const names = Object.keys(geom.attributes);
+  for (const name of names) {
+    if (attributeIsSharedWithTileGeometry(geom, tileGeom, name)) {
+      continue;
+    }
+    const attr = geom.getAttribute(name);
+    geom.deleteAttribute(name);
+    (attr as unknown as { dispose(): void }).dispose();
+  }
+}
+
 /**
  * 释放 {@link splitMeshByOidsMerged} 生成 mesh 的独占资源。
- * - 材质：`clone()` 与瓦片材质通常共享 map 等贴图引用，仅在与瓦片**无任何**贴图类字段同引用时才 `dispose`，否则只丢引用避免误伤瓦片。
- * - 几何：顶点属性与瓦片共享，不得对整块 geometry dispose；仅释放 split 自有的 index。
- * - **不要**对 `THREE.Mesh` 调用 `dispose()`：核心库中 `Mesh` 无此方法；且若自行对 `mesh.geometry.dispose()` 会连带释放与瓦片共用的顶点缓冲。
+ * - 材质：clone 与瓦片逐贴图比对引用；非共享贴图 dispose，共享贴图先 detach 再 `material.dispose()`，避免误伤瓦片。
+ * - 几何：不得对整块 `geometry.dispose()`（会波及共享缓冲）；仅释放与瓦片非共享的 index 与 attributes。
+ * - **不要**对 `THREE.Mesh` 调用 `dispose()`：核心库中 `Mesh` 无此方法。
  */
 export function disposeMergedSplitMeshResources(mesh: Mesh): void {
   const tileMesh = mesh.userData?.originalMesh as Mesh | undefined;
@@ -207,25 +249,23 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
     const mat = list[i];
     if (!mat) continue;
     const tileMat = tileMats[i] ?? tileMats[0];
-    if (tileMat && materialSharesAnyTextureLikeWith(mat, tileMat)) {
-      continue;
-    }
-    mat.dispose();
+    disposeSplitMaterialVsTile(mat, tileMat);
   }
-// material和geo回收判断是针对map和attribute以及index
+
   const geom = mesh.geometry;
   if (!geom) return;
 
   const tileGeom = tileMesh?.geometry as BufferGeometry | undefined;
-  if (splitIndexIsSharedWithTileGeometry(geom, tileGeom)) {
-    return;
+
+  if (!splitIndexIsSharedWithTileGeometry(geom, tileGeom)) {
+    const idx = geom.index;
+    if (idx) {
+      (idx as unknown as { dispose(): void }).dispose();
+      geom.setIndex(null);
+    }
   }
 
-  const idx = geom.index;
-  if (idx) {
-    (idx as unknown as { dispose(): void }).dispose();
-    geom.setIndex(null);
-  }
+  disposeSplitGeometryAttributesNotSharedWithTile(geom, tileGeom);
 }
 
 /** 瓦片内原始 feature mesh（非 split 子网格） */
