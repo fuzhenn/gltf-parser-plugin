@@ -1,4 +1,5 @@
 import {
+  MESH_CACHE_NAMESPACE_HIGHLIGHT,
   normalizeMeshCollectorOids,
   type MeshCollector,
 } from "../MeshCollector";
@@ -255,6 +256,7 @@ export class PartHighlightHelper {
       const sortedOids = normalizeMeshCollectorOids(oids);
       const collector = this.context.getMeshCollectorByCondition({
         oids: sortedOids,
+        meshCacheNamespace: MESH_CACHE_NAMESPACE_HIGHLIGHT,
       });
       this.highlightCollectors.push(collector);
 

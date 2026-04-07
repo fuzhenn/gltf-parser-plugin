@@ -7,8 +7,10 @@ export type {
 } from "./plugin-types";
 export {
   MeshCollector,
-  MeshCollectorLifecycle,
+  MESH_CACHE_NAMESPACE_HIGHLIGHT,
+  MESH_CACHE_NAMESPACE_STYLE,
   MeshSplitResolver,
+  disposeTileMeshSplitGeometryCache,
   meshCollectorGroupKey,
   meshCollectorQueryCacheKey,
   normalizeMeshCollectorOids,
@@ -17,7 +19,6 @@ export type {
   MeshChangeEvent,
   MeshCollectorEventMap,
   MeshCollectorQuery,
-  MeshHelperHost,
 } from "./MeshCollector";
 export {
   buildStyleConditionEvaluatorMap,

@@ -1,4 +1,5 @@
 import {
+  MESH_CACHE_NAMESPACE_STYLE,
   normalizeMeshCollectorOids,
   type MeshCollector,
   type MeshCollectorQuery,
@@ -164,6 +165,7 @@ export class StyleHelper {
       const sortedOids = normalizeMeshCollectorOids(oids);
       const collector = this.context.getMeshCollectorByCondition({
         oids: sortedOids,
+        meshCacheNamespace: MESH_CACHE_NAMESPACE_STYLE,
       });
       this.styleCollectors.push(collector);
 

@@ -53,12 +53,12 @@ function createGeometryForFeatureIdSet(
 }
 
 /**
- * 将同一瓦片 mesh 内、属于给定 OID 集合的所有 feature 合并为 **单个** Mesh（每瓦片最多一个）
+ * 仅构建合并后的 split 几何（与瓦片共享顶点属性 + 独立 index），供多路 Mesh 复用。
  */
-export function splitMeshByOidsMerged(
+export function buildMergedSplitGeometryForTileMesh(
   originalMesh: Mesh,
   oidSet: ReadonlySet<number>,
-): Mesh | null {
+): BufferGeometry | null {
   if (oidSet.size === 0) return null;
 
   const idMap = originalMesh.userData?.idMap as
@@ -66,7 +66,7 @@ export function splitMeshByOidsMerged(
     | undefined;
   if (!idMap) return null;
 
-  const { meshFeatures, structuralMetadata } = originalMesh.userData;
+  const { meshFeatures } = originalMesh.userData;
   const { geometry, featureIds } = meshFeatures;
   const featureId = featureIds[0];
   const featureIdAttr = geometry.getAttribute(
@@ -79,12 +79,10 @@ export function splitMeshByOidsMerged(
   }
 
   const targetFids = new Set<number>();
-  const oidsOnMesh: number[] = [];
   for (const oid of oidSet) {
     const fid = idMap[oid];
     if (fid !== undefined) {
       targetFids.add(fid);
-      oidsOnMesh.push(oid);
     }
   }
 
@@ -100,6 +98,39 @@ export function splitMeshByOidsMerged(
     return null;
   }
 
+  return newGeometry;
+}
+
+/**
+ * 由已构建的 split 几何创建 Mesh（独立材质）；可选标记由全局几何缓存托管，dispose 时不释放几何缓冲。
+ */
+export function createMergedSplitMeshFromGeometry(
+  originalMesh: Mesh,
+  newGeometry: BufferGeometry,
+  oidSet: ReadonlySet<number>,
+  options?: { splitGeometryManagedByCache?: boolean },
+): Mesh | null {
+  if (oidSet.size === 0) return null;
+
+  const idMap = originalMesh.userData?.idMap as
+    | Record<number, number>
+    | undefined;
+  if (!idMap) return null;
+
+  const { meshFeatures, structuralMetadata } = originalMesh.userData;
+  const { featureIds } = meshFeatures;
+  const featureId = featureIds[0];
+
+  const oidsOnMesh: number[] = [];
+  for (const oid of oidSet) {
+    if (idMap[oid] !== undefined) {
+      oidsOnMesh.push(oid);
+    }
+  }
+  oidsOnMesh.sort((a, b) => a - b);
+  if (oidsOnMesh.length === 0) return null;
+  const primaryOid = oidsOnMesh[0]!;
+
   const newMaterial = (originalMesh.material as Material).clone();
   const newMesh = new Mesh(newGeometry, newMaterial);
   newMesh.parent = originalMesh.parent;
@@ -107,9 +138,6 @@ export function splitMeshByOidsMerged(
   newMesh.rotation.copy(originalMesh.rotation);
   newMesh.scale.copy(originalMesh.scale);
   newMesh.matrixWorld.copy(originalMesh.matrixWorld);
-
-  oidsOnMesh.sort((a, b) => a - b);
-  const primaryOid = oidsOnMesh[0]!;
 
   let propertyData: unknown = null;
   if (structuralMetadata && idMap[primaryOid] !== undefined) {
@@ -123,7 +151,7 @@ export function splitMeshByOidsMerged(
     }
   }
 
-  newMesh.userData = {
+  const userData: Record<string, unknown> = {
     ...originalMesh.userData,
     featureId: idMap[primaryOid],
     oid: primaryOid,
@@ -133,9 +161,25 @@ export function splitMeshByOidsMerged(
     isSplit: true,
     isMergedSplit: true,
   };
+  if (options?.splitGeometryManagedByCache) {
+    userData.splitGeometryManagedByCache = true;
+  }
+  newMesh.userData = userData;
 
   newMesh.name = `merged_features_${oidsOnMesh.length}_${primaryOid}`;
   return newMesh;
+}
+
+/**
+ * 将同一瓦片 mesh 内、属于给定 OID 集合的所有 feature 合并为 **单个** Mesh（每瓦片最多一个）
+ */
+export function splitMeshByOidsMerged(
+  originalMesh: Mesh,
+  oidSet: ReadonlySet<number>,
+): Mesh | null {
+  const geom = buildMergedSplitGeometryForTileMesh(originalMesh, oidSet);
+  if (!geom) return null;
+  return createMergedSplitMeshFromGeometry(originalMesh, geom, oidSet);
 }
 
 /** 与贴图/环境等相关的材质字段（与瓦片共用同一引用时不能 dispose 材质） */
@@ -250,6 +294,12 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
     if (!mat) continue;
     const tileMat = tileMats[i] ?? tileMats[0];
     disposeSplitMaterialVsTile(mat, tileMat);
+  }
+
+  /** 几何由 MeshSplitResolver 全局缓存多路复用时，仅释放材质；解绑 geometry 引用，便于 clearCache 对 BufferGeometry dispose */
+  if (mesh.userData?.splitGeometryManagedByCache) {
+    (mesh as unknown as { geometry: BufferGeometry | null }).geometry = null;
+    return;
   }
 
   const geom = mesh.geometry;

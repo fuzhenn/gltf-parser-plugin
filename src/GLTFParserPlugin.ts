@@ -1,6 +1,7 @@
 import {
   Box3,
   Intersection,
+  Mesh,
   Object3D,
   Vector3,
   WebGLRenderer,
@@ -8,6 +9,7 @@ import {
 import {
   FeatureInfo,
   buildOidToFeatureIdMap,
+  disposeMergedSplitMeshResources,
   getAllOidsFromTiles,
   getPropertyDataByOid,
   queryFeatureFromIntersection,
@@ -145,6 +147,7 @@ export class GLTFParserPlugin {
     tiles.manager.addHandler(this._gltfRegex, this._loader);
 
     tiles.addEventListener("load-model", this._onLoadModelCB);
+    tiles.addEventListener("dispose-model", this._onDisposeModelCB);
     tiles.addEventListener("tiles-load-end", this._onTilesLoadEndCB);
     tiles.addEventListener("load-root-tileset", this._onLoadRootTilesetCB);
     this._syncStructureFromTileset();
@@ -444,6 +447,21 @@ export class GLTFParserPlugin {
   };
 
   /**
+   * 瓦片卸载（LRU 等触发 disposeTile）前，先卸掉依赖该 tile 场景的 split mesh，再清瓦片 userData 上的几何缓存。
+   * 与 3d-tiles-renderer 中 `TilesRenderer.disposeTile` 派发顺序一致。
+   */
+  private _onDisposeModelCB = ({ scene }: { scene: Object3D }) => {
+    for (const collector of this.collectors) {
+      collector.releaseSplitMeshesForTileScene(scene);
+    }
+    scene.traverse((obj) => {
+      if (obj instanceof Mesh) {
+        this.meshSplit.disposeSplitMeshesByTile(obj);
+      }
+    });
+  };
+
+  /**
    * Tiles load end callback
    */
   private _onTilesLoadEndCB = () => {
@@ -593,6 +611,9 @@ export class GLTFParserPlugin {
       mesh.updateMatrixWorld(true);
       meshBox.expandByObject(mesh);
     }
+    for (const mesh of meshes) {
+      disposeMergedSplitMeshResources(mesh);
+    }
     if (meshBox.isEmpty()) return null;
     return meshBox.getCenter(new Vector3());
   }
@@ -694,6 +715,7 @@ export class GLTFParserPlugin {
     if (this.tiles) {
       this.tiles.manager.removeHandler(this._gltfRegex);
       this.tiles.removeEventListener("load-model", this._onLoadModelCB);
+      this.tiles.removeEventListener("dispose-model", this._onDisposeModelCB);
       this.tiles.removeEventListener("tiles-load-end", this._onTilesLoadEndCB);
       this.tiles.removeEventListener("load-root-tileset", this._onLoadRootTilesetCB);
     }

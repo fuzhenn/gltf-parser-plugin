@@ -1,16 +1,43 @@
-import { EventDispatcher, Mesh } from "three";
+import { BufferGeometry, EventDispatcher, Mesh, Object3D } from "three";
 import { TilesRenderer } from "3d-tiles-renderer";
 import {
+  buildMergedSplitGeometryForTileMesh,
+  createMergedSplitMeshFromGeometry,
   disposeMergedSplitMeshResources,
   getAllOidsFromTiles,
   getPropertyDataByOid,
   getTileMeshesByOid,
-  splitMeshByOidsMerged,
 } from "./mesh-helper";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
 } from "./plugin/style-condition-eval";
+
+/** 挂在瓦片 feature mesh 的 userData 上：按「排序后 OID 集」复用合并 split 的 BufferGeometry */
+const TILE_SPLIT_GEOMETRY_CACHE_KEY = "_gltfParserMergedSplitGeometryCache";
+
+function getTileSplitGeometryCache(tileMesh: Mesh): Map<string, BufferGeometry> {
+  const existing = tileMesh.userData[
+    TILE_SPLIT_GEOMETRY_CACHE_KEY
+  ] as Map<string, BufferGeometry> | undefined;
+  if (existing) return existing;
+  const map = new Map<string, BufferGeometry>();
+  tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY] = map;
+  return map;
+}
+
+/** 释放该瓦片 mesh 上缓存的 split 几何；瓦片卸载 / dispose 前应调用（或由 {@link MeshSplitResolver.disposeSplitMeshesByTile}） */
+export function disposeTileMeshSplitGeometryCache(tileMesh: Mesh): void {
+  const map = tileMesh.userData[
+    TILE_SPLIT_GEOMETRY_CACHE_KEY
+  ] as Map<string, BufferGeometry> | undefined;
+  if (!map) return;
+  for (const geom of map.values()) {
+    geom.dispose();
+  }
+  map.clear();
+  delete tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY];
+}
 
 /** 收集器查询：OID 范围 + 可选属性条件（语义同 setStyle 的 show / conditions 中的表达式字符串） */
 export interface MeshCollectorQuery {
@@ -22,32 +49,61 @@ export interface MeshCollectorQuery {
    * 属性表达式，如 `type === "wall"`，与 setStyle 里 `show` 或 `conditions[i][0]`（为 string 时）相同
    */
   condition?: string;
+  /**
+   * 区分样式 / 高亮等（参与 `meshCollectorQueryCacheKey` 等语义），与几何缓存无关。
+   */
+  meshCacheNamespace?: string;
 }
 
 /**
  * 瓦片级 split mesh 缓存与按 OID / 条件查询（原 GLTFParserPlugin 内 mesh 合并逻辑）
  */
 export class MeshSplitResolver {
-  private splitMeshCache = new Map<string, Mesh[]>();
-
   constructor(private readonly getTiles: () => TilesRenderer | null) {}
 
   /**
-   * 清空 split 缓存并释放独占资源（clone 材质 + 独立 index），避免仅 `Map.clear()` 导致的 GPU/对象滞留。
-   * 顶点属性与瓦片共享，不在此处对共享 BufferAttribute 做 dispose。
+   * 遍历场景，释放所有瓦片 mesh 上挂的 split 几何缓存。
+   * 调用前须已通过 `disposeMergedSplitMeshResources` 解绑各 split Mesh 对几何的引用。
    */
   clearCache(): void {
-    for (const meshes of this.splitMeshCache.values()) {
-      for (const mesh of meshes) {
-        disposeMergedSplitMeshResources(mesh);
+    const tiles = this.getTiles();
+    if (!tiles) return;
+    tiles.group.traverse((obj) => {
+      if (obj instanceof Mesh) {
+        disposeTileMeshSplitGeometryCache(obj);
       }
-    }
-    this.splitMeshCache.clear();
+    });
   }
 
   /** 按 OID 列表取合并 split mesh（每瓦片一条），供中心点等计算 */
   getMeshesByOids(oids: readonly number[]): Mesh[] {
     return this.getMergedSplitMeshesForOidSet(new Set(oids));
+  }
+
+  /**
+   * 解析结果 + 涉及瓦片 UUID 的稳定签名，供 MeshCollector 在「解析结果未变」时跳过重复 new Mesh。
+   */
+  getMeshesForCollectorQuerySignature(params: {
+    oids: readonly number[];
+    condition?: string;
+  }): string {
+    const targetOids = this.resolveTargetOidsForCollectorQuery(params);
+    const tiles = this.getTiles();
+    if (!tiles) {
+      return targetOids.join(",");
+    }
+    const oidSet = new Set(targetOids);
+    const candidateTiles = new Set<Mesh>();
+    for (const oid of oidSet) {
+      for (const tm of getTileMeshesByOid(tiles, oid)) {
+        candidateTiles.add(tm);
+      }
+    }
+    const uuids = [...candidateTiles]
+      .map((m) => m.uuid)
+      .sort()
+      .join(",");
+    return `${targetOids.join(",")}|${uuids}`;
   }
 
   /**
@@ -57,37 +113,44 @@ export class MeshSplitResolver {
   getMeshesForCollectorQuery(params: {
     oids: readonly number[];
     condition?: string;
+    meshCacheNamespace?: string;
   }): Mesh[] {
+    const targetOids = this.resolveTargetOidsForCollectorQuery(params);
+    return this.getMergedSplitMeshesForOidSet(new Set(targetOids));
+  }
+
+  private resolveTargetOidsForCollectorQuery(params: {
+    oids: readonly number[];
+    condition?: string;
+  }): number[] {
     const tiles = this.getTiles();
     if (!tiles) return [];
 
     const cond = params.condition?.trim();
-    let targetOids: number[];
 
     if (!cond) {
       if (params.oids.length === 0) return [];
-      targetOids = [...new Set(params.oids)].sort((a, b) => a - b);
-    } else {
-      const candidate =
-        params.oids.length === 0
-          ? getAllOidsFromTiles(tiles)
-          : [...new Set(params.oids)];
-      const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
-      targetOids = [];
-      for (const oid of candidate) {
-        const data = getPropertyDataByOid(tiles, oid);
-        if (evaluateStyleCondition(cond, data, evaluators)) {
-          targetOids.push(oid);
-        }
-      }
-      targetOids.sort((a, b) => a - b);
+      return [...new Set(params.oids)].sort((a, b) => a - b);
     }
 
-    return this.getMeshesByOids(targetOids);
+    const candidate =
+      params.oids.length === 0
+        ? getAllOidsFromTiles(tiles)
+        : [...new Set(params.oids)];
+    const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
+    const targetOids: number[] = [];
+    for (const oid of candidate) {
+      const data = getPropertyDataByOid(tiles, oid);
+      if (evaluateStyleCondition(cond, data, evaluators)) {
+        targetOids.push(oid);
+      }
+    }
+    targetOids.sort((a, b) => a - b);
+    return targetOids;
   }
 
   /**
-   * 按 OID 集合：每个瓦片 mesh 只生成 **一个** 合并后的 split mesh（同一组 oid / condition 一条几何）
+   * 按 OID 集合：每个瓦片 mesh **新建** 一个 Mesh，几何取自该 tileMesh.userData 上的缓存（按 sortedOids 键）
    */
   private getMergedSplitMeshesForOidSet(oidSet: Set<number>): Mesh[] {
     const tiles = this.getTiles();
@@ -104,41 +167,35 @@ export class MeshSplitResolver {
     }
 
     for (const tileMesh of candidateTiles) {
-      const cacheKey = `merged|${tileMesh.uuid}|${sortedKey}`;
-      let cached = this.splitMeshCache.get(cacheKey);
-      if (!cached) {
-        const m = splitMeshByOidsMerged(tileMesh, oidSet);
-        cached = m ? [m] : [];
-        this.splitMeshCache.set(cacheKey, cached);
+      const perTile = getTileSplitGeometryCache(tileMesh);
+      let geometry: BufferGeometry | undefined = perTile.get(sortedKey);
+      if (!geometry) {
+        const built = buildMergedSplitGeometryForTileMesh(tileMesh, oidSet);
+        if (built) {
+          geometry = built;
+          perTile.set(sortedKey, geometry);
+        }
       }
-      result.push(...cached);
+
+      if (!geometry) {
+        continue;
+      }
+      const m = createMergedSplitMeshFromGeometry(tileMesh, geometry, oidSet, {
+        splitGeometryManagedByCache: true,
+      });
+      if (m) {
+        result.push(m);
+      }
     }
     return result;
   }
 
   /**
-   * 清理指定 tileMesh 相关的所有 split mesh
-   * 在瓦片 dispose 时调用
+   * 释放挂在该 feature mesh `userData` 上的合并 split 几何缓存。
+   * 通常由插件在 `TilesRenderer` 的 `dispose-model` 中与 {@link releaseSplitMeshesForTileScene} 一起调用。
    */
   disposeSplitMeshesByTile(tileMesh: Mesh): void {
-    const prefix = `merged|${tileMesh.uuid}|`;
-    const keysToDelete: string[] = [];
-
-    for (const key of this.splitMeshCache.keys()) {
-      if (key.startsWith(prefix)) {
-        keysToDelete.push(key);
-      }
-    }
-
-    for (const key of keysToDelete) {
-      const meshes = this.splitMeshCache.get(key);
-      if (meshes) {
-        for (const mesh of meshes) {
-          disposeMergedSplitMeshResources(mesh);
-        }
-      }
-      this.splitMeshCache.delete(key);
-    }
+    disposeTileMeshSplitGeometryCache(tileMesh);
   }
 }
 
@@ -164,8 +221,14 @@ export function meshCollectorQueryCacheKey(query: MeshCollectorQuery): string {
   const oidPart = oidsNorm.length > 0 ? oidsNorm.join(",") : "*";
   const condRaw = query.condition?.trim() ?? "";
   const condPart = condRaw === "" ? "_" : encodeURIComponent(condRaw);
-  return `${oidPart}@@${condPart}`;
+  const ns = query.meshCacheNamespace?.trim() || "default";
+  return `${oidPart}@@${condPart}@@${ns}`;
 }
+
+/** StyleHelper 传入 `meshCollectorQueryCacheKey` 等语义区分 */
+export const MESH_CACHE_NAMESPACE_STYLE = "style";
+/** PartHighlightHelper 传入 `meshCollectorQueryCacheKey` 等语义区分 */
+export const MESH_CACHE_NAMESPACE_HIGHLIGHT = "highlight";
 
 /** @deprecated 请使用 meshCollectorQueryCacheKey({ oids }) */
 export function meshCollectorGroupKey(oids: readonly number[]): string {
@@ -180,10 +243,13 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
 
   private readonly queryOids: number[];
   private readonly condition: string | undefined;
+  private readonly meshCacheNamespace: string;
   /** 实例唯一键（样式/高亮/冻结等按收集器实例追踪） */
   private readonly _interactionGroupKey: string;
   private meshSplit: MeshSplitResolver | null = null;
   private _meshes: Mesh[] = [];
+  /** 解析 OID + 瓦片集合 + 本收集器 id，未变则不再 new Mesh */
+  private _lastMeshSignature: string | null = null;
   private _disposed: boolean = false;
 
   constructor(query: MeshCollectorQuery) {
@@ -197,6 +263,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     }
     this.queryOids = oids;
     this.condition = condition;
+    this.meshCacheNamespace = query.meshCacheNamespace?.trim() || "default";
     this._interactionGroupKey = `mc-${++MeshCollector._nextInteractionId}`;
   }
 
@@ -206,7 +273,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   _onRegister(meshSplit: MeshSplitResolver): void {
     if (this._disposed) return;
     this.meshSplit = meshSplit;
-    
+
     this._updateMeshes();
   }
 
@@ -238,17 +305,57 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     if (this._disposed) return;
     if (!this.meshSplit) return;
 
+    const sig = `${this._interactionGroupKey}|${this.meshSplit.getMeshesForCollectorQuerySignature({
+      oids: this.queryOids,
+      condition: this.condition,
+    })}`;
+
+    if (sig === this._lastMeshSignature) {
+      return;
+    }
+
     const newMeshes = this.meshSplit.getMeshesForCollectorQuery({
       oids: this.queryOids,
       condition: this.condition,
+      meshCacheNamespace: this.meshCacheNamespace,
     });
 
-    const hasChanged =
-      newMeshes.length !== this._meshes.length ||
-      newMeshes.some((mesh: Mesh, i: number) => mesh !== this._meshes[i]);
+    for (const mesh of this._meshes) {
+      disposeMergedSplitMeshResources(mesh);
+    }
+    this._meshes = newMeshes;
+    this._lastMeshSignature = sig;
 
-    if (hasChanged) {
-      this._meshes = newMeshes;
+    this.dispatchEvent({ type: "mesh-change", meshes: this._meshes });
+  }
+
+  /**
+   * 3d-tiles `dispose-model` 时调用：释放 `userData.originalMesh` 落在该瓦片 scene 内的 split mesh，
+   * 避免随后释放瓦片几何缓存时仍被 split Mesh 引用。
+   */
+  releaseSplitMeshesForTileScene(scene: Object3D): void {
+    if (this._disposed) return;
+
+    const sourceMeshes = new Set<Mesh>();
+    scene.traverse((o) => {
+      if (o instanceof Mesh) {
+        sourceMeshes.add(o);
+      }
+    });
+
+    const kept: Mesh[] = [];
+    for (const sm of this._meshes) {
+      const orig = sm.userData?.originalMesh as Mesh | undefined;
+      if (orig && sourceMeshes.has(orig)) {
+        disposeMergedSplitMeshResources(sm);
+      } else {
+        kept.push(sm);
+      }
+    }
+
+    if (kept.length !== this._meshes.length) {
+      this._meshes = kept;
+      this._lastMeshSignature = null;
       this.dispatchEvent({ type: "mesh-change", meshes: this._meshes });
     }
   }
@@ -258,12 +365,13 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     this._disposed = true;
 
     // 清理当前 collector 引用的 split mesh
-    if ( this._meshes.length > 0) {
+    if (this._meshes.length > 0) {
       for (const mesh of this._meshes) {
         disposeMergedSplitMeshResources(mesh);
       }
     }
 
     this._meshes = [];
+    this._lastMeshSignature = null;
   }
 }
