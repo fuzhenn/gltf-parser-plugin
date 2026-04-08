@@ -239,35 +239,81 @@ function disposeSplitMaterialVsTile(
   mat.dispose();
 }
 
-function splitIndexIsSharedWithTileGeometry(
-  splitGeom: BufferGeometry,
-  tileGeom: BufferGeometry | undefined,
-): boolean {
-  if (!tileGeom?.index || !splitGeom.index) return false;
-  return splitGeom.index === tileGeom.index;
+/** 合并 split 与 buildMergedSplitGeometryForTileMesh 的来源一致，可能与 mesh.geometry 非同一引用 */
+function getGeometrySourcesForTileFeatureMesh(tileMesh: Mesh): BufferGeometry[] {
+  const out: BufferGeometry[] = [];
+  const gMesh = tileMesh.geometry as BufferGeometry | undefined;
+  if (gMesh) out.push(gMesh);
+  const mf = tileMesh.userData?.meshFeatures as
+    | { geometry?: BufferGeometry }
+    | undefined;
+  const gMf = mf?.geometry;
+  if (gMf && gMf !== gMesh) out.push(gMf);
+  return out;
 }
 
-function attributeIsSharedWithTileGeometry(
+function splitIndexIsSharedWithAnySource(
   splitGeom: BufferGeometry,
-  tileGeom: BufferGeometry | undefined,
+  sources: BufferGeometry[],
+): boolean {
+  const idx = splitGeom.index;
+  if (!idx) return false;
+  for (const src of sources) {
+    if (src.index && idx === src.index) return true;
+  }
+  return false;
+}
+
+function attributeIsSharedWithAnySource(
+  splitGeom: BufferGeometry,
+  sources: BufferGeometry[],
   name: string,
 ): boolean {
-  if (!tileGeom) return false;
   const a = splitGeom.getAttribute(name);
-  const t = tileGeom.getAttribute(name);
-  return Boolean(a && t && a === t);
+  if (!a) return false;
+  for (const src of sources) {
+    const t = src.getAttribute(name);
+    if (t && a === t) return true;
+  }
+  return false;
+}
+
+/**
+ * 释放 tileMesh.userData 上缓存的合并 split BufferGeometry。
+ * 合并几何与瓦片共享顶点属性引用；直接 `dispose()` 会从 WebGL 移除共享 BufferAttribute，瓦片会发瘪/缺面。
+ * 需先从合并几何上 deleteAttribute 摘掉共享引用，再 dispose（仅清独立 index 与 dispose 事件）。
+ */
+export function disposeMergedSplitGeometryCacheEntry(
+  mergedGeom: BufferGeometry,
+  tileMesh: Mesh,
+): void {
+  const sources = getGeometrySourcesForTileFeatureMesh(tileMesh);
+  if (sources.length === 0) {
+    mergedGeom.dispose();
+    return;
+  }
+  const names = Object.keys(mergedGeom.attributes);
+  for (const name of names) {
+    if (attributeIsSharedWithAnySource(mergedGeom, sources, name)) {
+      mergedGeom.deleteAttribute(name);
+    }
+  }
+  if (splitIndexIsSharedWithAnySource(mergedGeom, sources)) {
+    mergedGeom.setIndex(null);
+  }
+  mergedGeom.dispose();
 }
 
 /** 仅释放与瓦片非共享的顶点属性（同引用则保留，避免误伤瓦片几何） */
-function disposeSplitGeometryAttributesNotSharedWithTile(
+function disposeSplitGeometryAttributesNotSharedWithSources(
   geom: BufferGeometry,
-  tileGeom: BufferGeometry | undefined,
+  sources: BufferGeometry[],
 ): void {
-  if (!tileGeom) return;
+  if (sources.length === 0) return;
 
   const names = Object.keys(geom.attributes);
   for (const name of names) {
-    if (attributeIsSharedWithTileGeometry(geom, tileGeom, name)) {
+    if (attributeIsSharedWithAnySource(geom, sources, name)) {
       continue;
     }
     const attr = geom.getAttribute(name);
@@ -305,9 +351,11 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
   const geom = mesh.geometry;
   if (!geom) return;
 
-  const tileGeom = tileMesh?.geometry as BufferGeometry | undefined;
+  const sources = tileMesh
+    ? getGeometrySourcesForTileFeatureMesh(tileMesh)
+    : [];
 
-  if (!splitIndexIsSharedWithTileGeometry(geom, tileGeom)) {
+  if (!splitIndexIsSharedWithAnySource(geom, sources)) {
     const idx = geom.index;
     if (idx) {
       (idx as unknown as { dispose(): void }).dispose();
@@ -315,7 +363,7 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
     }
   }
 
-  disposeSplitGeometryAttributesNotSharedWithTile(geom, tileGeom);
+  disposeSplitGeometryAttributesNotSharedWithSources(geom, sources);
 }
 
 /** 瓦片内原始 feature mesh（非 split 子网格） */

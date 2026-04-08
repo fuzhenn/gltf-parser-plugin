@@ -3,6 +3,7 @@ import { TilesRenderer } from "3d-tiles-renderer";
 import {
   buildMergedSplitGeometryForTileMesh,
   createMergedSplitMeshFromGeometry,
+  disposeMergedSplitGeometryCacheEntry,
   disposeMergedSplitMeshResources,
   getAllOidsFromTiles,
   getPropertyDataByOid,
@@ -33,7 +34,7 @@ export function disposeTileMeshSplitGeometryCache(tileMesh: Mesh): void {
   ] as Map<string, BufferGeometry> | undefined;
   if (!map) return;
   for (const geom of map.values()) {
-    geom.dispose();
+    disposeMergedSplitGeometryCacheEntry(geom, tileMesh);
   }
   map.clear();
   delete tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY];
