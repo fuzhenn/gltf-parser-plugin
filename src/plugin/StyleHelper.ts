@@ -34,6 +34,7 @@ interface StyleHelperContext {
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
+  releaseMeshCollector(collector: MeshCollector): void;
   getRootGroup(): Object3D | null;
 }
 
@@ -103,6 +104,7 @@ export class StyleHelper {
       if (handler) {
         collector.removeEventListener("mesh-change", handler);
       }
+      this.context.releaseMeshCollector(collector);
     }
     this.meshChangeHandlers.clear();
     this.styleCollectors = [];
@@ -130,6 +132,7 @@ export class StyleHelper {
         collector.getInteractionGroupKey(),
       );
       if (h) collector.removeEventListener("mesh-change", h);
+      this.context.releaseMeshCollector(collector);
     }
     this.styleCollectors = [];
     this.meshChangeHandlers.clear();

@@ -206,6 +206,7 @@ export class PartHighlightHelper {
       if (handler) {
         collector.removeEventListener("mesh-change", handler);
       }
+      this.context.releaseMeshCollector(collector);
     }
     this.meshChangeHandlers.clear();
     this.highlightCollectors = [];

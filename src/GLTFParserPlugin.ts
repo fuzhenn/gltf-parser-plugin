@@ -135,6 +135,7 @@ export class GLTFParserPlugin {
       hidePartsByOids: partFx.hidePartsByOids,
       showPartsByOids: partFx.showPartsByOids,
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
+      releaseMeshCollector: partFx.releaseMeshCollector,
       getRootGroup: partFx.getRootGroup,
     });
     this._partHighlightHelper = new PartHighlightHelper(partFx);
@@ -173,8 +174,18 @@ export class GLTFParserPlugin {
       hidePartsByOids: (oids) => this.partVisibility.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.partVisibility.showPartsByOids(oids),
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
+      releaseMeshCollector: (c) => this.releaseMeshCollector(c),
       getRootGroup: () => this.tiles?.group ?? null,
     };
+  }
+
+  /**
+   * 注销通过 {@link getMeshCollectorByCondition} 创建的收集器（与创建成对调用）。
+   * 样式/高亮在 clearStyle、切换样式、取消高亮时会内部调用；业务自建收集器也应在不用时调用。
+   */
+  releaseMeshCollector(collector: MeshCollector): void {
+    if (!this.collectors.has(collector)) return;
+    this._unregisterMeshCollector(collector);
   }
 
   // =============================================
@@ -699,8 +710,6 @@ export class GLTFParserPlugin {
     this.collectors.add(collector);
   }
 
-  // TODO collector注销，setStyle clearStyle hightlight 也得注销
-  // TODO mesh回收
   _unregisterMeshCollector(collector: MeshCollector): void {
     const key = collector.getInteractionGroupKey();
     this.collectors.delete(collector);
@@ -724,10 +733,18 @@ export class GLTFParserPlugin {
       this._loader.removeListeners();
     }
 
+    // 先让样式/高亮 releaseMeshCollector，再注销其余自建收集器；InteractionFilter 需在此之后 dispose（onUnregisterCollector 仍有效）
+    this._styleHelper?.dispose();
+    this._styleHelper = null;
+    this._partHighlightHelper?.dispose();
+    this._partHighlightHelper = null;
+
     for (const collector of this.collectors) {
-     this._unregisterMeshCollector(collector);
+      this._unregisterMeshCollector(collector);
     }
     this.collectors.clear();
+
+    this._interactionFilter.dispose();
 
     this.meshSplit.clearCache();
 
@@ -738,12 +755,6 @@ export class GLTFParserPlugin {
     // Clear model info data
     this._modelInfo = null;
     this._modelInfoPromise = null;
-
-    this._interactionFilter.dispose();
-    this._styleHelper?.dispose();
-    this._styleHelper = null;
-    this._partHighlightHelper?.dispose();
-    this._partHighlightHelper = null;
 
     this._loader = null;
     this.tiles = null;

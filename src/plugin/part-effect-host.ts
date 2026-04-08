@@ -8,5 +8,7 @@ export interface PartEffectHost {
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
+  /** 与 getMeshCollectorByCondition 成对：不再使用该收集器时从插件注销并 dispose（样式/高亮内部会调用） */
+  releaseMeshCollector(collector: MeshCollector): void;
   getRootGroup(): Object3D | null;
 }
