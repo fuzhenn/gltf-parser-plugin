@@ -7,6 +7,11 @@ import {
 } from "three";
 import type { GLTFWorkerData, MaterialBuilder } from "../types";
 
+/** 与 glTF 2.0 / three.js GLTFLoader 一致 */
+const GLTF_ALPHA_OPAQUE = "OPAQUE";
+const GLTF_ALPHA_MASK = "MASK";
+const GLTF_ALPHA_BLEND = "BLEND";
+
 /**
  * Build materials from GLTF data
  */
@@ -42,7 +47,7 @@ function defaultMaterialBuilder(
   if (matData.pbrMetallicRoughness) {
     const pbr = matData.pbrMetallicRoughness;
 
-    // Base color
+    // Base color（A 通道写入 opacity；是否与透明混合由下方 alphaMode 决定，见 glTF 2.0 material）
     if (pbr.baseColorFactor) {
       material.color.setRGB(
         pbr.baseColorFactor[0],
@@ -51,7 +56,6 @@ function defaultMaterialBuilder(
       );
       if (pbr.baseColorFactor[3] !== undefined) {
         material.opacity = pbr.baseColorFactor[3];
-        if (material.opacity < 1) material.transparent = true;
       }
     }
 
@@ -121,15 +125,25 @@ function defaultMaterialBuilder(
     );
   }
 
-  // Double sided rendering
-  material.side = matData.doubleSided ? DoubleSide : FrontSide;
+  // doubleSided：默认 false（glTF 2.0）
+  material.side = matData.doubleSided === true ? DoubleSide : FrontSide;
 
-  // Alpha mode
-  if (matData.alphaMode === "BLEND") {
+  // alphaMode / alphaCutoff：与 glTF 2.0 及 three.js GLTFLoader 一致
+  // https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#_material_alphamode
+  const alphaMode = matData.alphaMode ?? GLTF_ALPHA_OPAQUE;
+
+  if (alphaMode === GLTF_ALPHA_BLEND) {
     material.transparent = true;
-  } else if (matData.alphaMode === "MASK") {
-    material.alphaTest =
-      matData.alphaCutoff !== undefined ? matData.alphaCutoff : 0.5;
+    material.depthWrite = false;
+  } else {
+    material.transparent = false;
+    if (alphaMode === GLTF_ALPHA_MASK) {
+      material.alphaTest =
+        matData.alphaCutoff !== undefined ? matData.alphaCutoff : 0.5;
+    } else {
+      // OPAQUE：不使用 alpha 裁剪；规范要求忽略 alpha 用于混合，此处与 Loader 一致保留 opacity 供贴图 A 通道等
+      material.alphaTest = 0;
+    }
   }
 
   return material;
