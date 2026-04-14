@@ -65,6 +65,9 @@ function resolveStyleMaterial(
   appearance: StyleAppearance,
   originalMaterial: Material,
 ): Material {
+  if (appearance.material === undefined) {
+    return originalMaterial;
+  }
   if (typeof appearance.material === "function") {
     return appearance.material(extractStyleMaterialMaps(originalMaterial));
   }
@@ -118,9 +121,11 @@ export function applyEuler(target: Euler, input: StyleEulerInput): void {
 
 export function appearanceGroupKey(a: StyleAppearance): string {
   const m =
-    typeof a.material === "function"
-      ? `matFn#${styleFnIdentity(a.material)}`
-      : a.material.uuid;
+    a.material === undefined
+      ? "mat:keep"
+      : typeof a.material === "function"
+        ? `matFn#${styleFnIdentity(a.material)}`
+        : a.material.uuid;
   const meshPart = a.mesh ? `|meshFn#${styleFnIdentity(a.mesh)}` : "";
   const t = vec3Key(a.translation);
   const s = vec3Key(a.scale);

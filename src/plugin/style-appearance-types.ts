@@ -38,10 +38,10 @@ export type StyleMeshFactory = (
   material: Material,
 ) => Mesh;
 
-/** 条件命中后的外观：材质必填，位姿可选（未传则不改对应分量） */
+/** 条件命中后的外观：材质与位姿均可选（未传则保留原 mesh 对应分量） */
 export interface StyleAppearance {
-  /** 直接材质，或根据 {@link StyleMaterialMaps} 从原构件材质生成 */
-  material: Material | StyleMaterialResolver;
+  /** 直接材质，或根据 {@link StyleMaterialMaps} 从原构件材质生成；省略则不改材质 */
+  material?: Material | StyleMaterialResolver;
   /**
    * 可选：自定义 Mesh 构建；默认仅替换 geometry/material。
    * 返回的 Mesh 会将其 geometry、material 写回当前 split mesh，uuid 不变。

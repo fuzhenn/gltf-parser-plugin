@@ -32,9 +32,9 @@ import {
 /** 高亮材质：Three.js Material 或 { color, opacity } */
 export type HighlightMaterial = Material | { color?: ColorInput; opacity?: number };
 
-/** 条件命中后的外观：材质可为简写、函数或 Material；位姿与 setStyle 一致 */
+/** 条件命中后的外观：材质可为简写、函数或 Material（可省略）；位姿与 setStyle 一致 */
 export interface HighlightAppearance {
-  material: HighlightMaterial | StyleMaterialResolver;
+  material?: HighlightMaterial | StyleMaterialResolver;
   mesh?: StyleMeshFactory;
   translation?: StyleVec3Input;
   scale?: StyleVec3Input;
@@ -86,20 +86,22 @@ function toMaterial(value: HighlightMaterial): Material {
 
 function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
   const mat = ha.material;
-  const material: StyleAppearance["material"] =
-    typeof mat === "function"
-      ? mat
-      : mat instanceof Material
-        ? mat
-        : toMaterial(mat);
-  return {
-    material,
+  const appearance: StyleAppearance = {
     mesh: ha.mesh,
     translation: ha.translation,
     scale: ha.scale,
     rotation: ha.rotation,
     origin: ha.origin,
   };
+  if (mat !== undefined) {
+    appearance.material =
+      typeof mat === "function"
+        ? mat
+        : mat instanceof Material
+          ? mat
+          : toMaterial(mat);
+  }
+  return appearance;
 }
 
 interface HighlightGroupConfig {

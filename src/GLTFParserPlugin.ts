@@ -27,10 +27,7 @@ import {
 } from "./plugin/style-condition-eval";
 import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
 import type { PartEffectHost } from "./plugin/part-effect-host";
-import {
-  StyleHelper,
-  type StyleConfig,
-} from "./plugin/StyleHelper";
+import { StyleHelper, type StyleConfig } from "./plugin/StyleHelper";
 import {
   PartHighlightHelper,
   type HighlightOptions,
@@ -397,6 +394,15 @@ export class GLTFParserPlugin {
     return selectByPolygonFromOidMap(this._oidNodeMap, polygon, axis);
   }
 
+  /**
+   * 根据 OID 获取精细模型（detail model）的 URL。
+   * 路径规则：与 tileset.json 同级 `details/{oid % 1000, 三位零填充}/{oid}.glb`
+   */
+  getDetailModelUrl(oid: number): string {
+    const folder = String(oid % 1000).padStart(3, "0");
+    return this._tocJsonUrl(`details/${folder}/${oid}.glb`) ?? "";
+  }
+
   // =============================================
   // Model Info Methods
   // =============================================
@@ -483,7 +489,7 @@ export class GLTFParserPlugin {
     this.meshSplit.clearCache();
 
     buildOidToFeatureIdMap(scene);
-    
+
     this.partVisibility.applyVisibilityToScene(scene);
   }
 
@@ -726,7 +732,10 @@ export class GLTFParserPlugin {
       this.tiles.removeEventListener("load-model", this._onLoadModelCB);
       this.tiles.removeEventListener("dispose-model", this._onDisposeModelCB);
       this.tiles.removeEventListener("tiles-load-end", this._onTilesLoadEndCB);
-      this.tiles.removeEventListener("load-root-tileset", this._onLoadRootTilesetCB);
+      this.tiles.removeEventListener(
+        "load-root-tileset",
+        this._onLoadRootTilesetCB,
+      );
     }
 
     if (this._loader) {
