@@ -697,6 +697,20 @@ export class GLTFParserPlugin {
   }
 
   /**
+   * 按名称获取最近一次 highlight 传入的配置（取消高亮后返回 undefined）
+   */
+  getHighlightConfigByName(name: string): HighlightOptions | undefined {
+    return this._partHighlightHelper?.getHighlightConfigByName(name);
+  }
+
+  /**
+   * 按名称获取 highlight 位姿对应的4×4 矩阵（列主序 16 个数）。多种不同 TRS 条件并存时返回 undefined。
+   */
+  getHighlightMatrixByName(name: string): number[] | undefined {
+    return this._partHighlightHelper?.getHighlightMatrixByName(name);
+  }
+
+  /**
    * 取消指定名称的高亮
    * @param name 高亮组名称
    */

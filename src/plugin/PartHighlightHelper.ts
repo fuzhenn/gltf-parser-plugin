@@ -12,7 +12,14 @@ import {
 import type { PartEffectHost } from "./part-effect-host";
 import type { ColorInput } from "../utils/color-input";
 import { toColor } from "../utils/color-input";
-import { Color, Material, MeshStandardMaterial } from "three";
+import {
+  Color,
+  Euler,
+  Material,
+  MeshStandardMaterial,
+  Object3D,
+  Vector3,
+} from "three";
 import type {
   StyleAppearance,
   StyleEulerInput,
@@ -22,9 +29,14 @@ import type {
 } from "./style-appearance-types";
 import {
   appearanceGroupKey,
+  applyEuler,
   applyStyleAppearanceToMesh,
+  applyVec3,
+  buildPivotStyleMatrix,
+  eulerKey,
   resolveConditionsAppearance,
   restoreMeshAppearanceMaps,
+  vec3Key,
   type MeshAppearanceMaps,
   type StoredTransform,
 } from "./style-appearance-shared";
@@ -110,12 +122,94 @@ interface HighlightGroupConfig {
   oids?: number[];
 }
 
+function cloneHighlightOptions(options: HighlightOptions): HighlightOptions {
+  return {
+    name: options.name,
+    show: options.show,
+    conditions: options.conditions?.map(
+      ([c, h]): HighlightCondition => [c, { ...h }],
+    ),
+    oids: options.oids?.slice(),
+  };
+}
+
+function highlightAppearanceNeedsTransform(ha: HighlightAppearance): boolean {
+  return (
+    ha.translation !== undefined ||
+    ha.scale !== undefined ||
+    ha.rotation !== undefined
+  );
+}
+
+function highlightAppearanceTransformKey(ha: HighlightAppearance): string {
+  return `${vec3Key(ha.translation)}|${vec3Key(ha.scale)}|${eulerKey(ha.rotation)}|${vec3Key(ha.origin)}`;
+}
+
+/**
+ * 与 {@link applyStyleAppearanceToMesh} 一致：基准为单位变换时，仅由 TRS 与 origin 枢轴得到的局部矩阵，列主序 16 个数（Three.js `Matrix4.elements` 顺序）。
+ */
+function localMatrix16FromHighlightAppearance(
+  ha: HighlightAppearance,
+): number[] | undefined {
+  if (!highlightAppearanceNeedsTransform(ha)) return undefined;
+
+  const obj = new Object3D();
+  const hasScaleOrRotation =
+    ha.scale !== undefined || ha.rotation !== undefined;
+
+  if (hasScaleOrRotation) {
+    const pivot = new Vector3();
+    if (ha.origin !== undefined) {
+      applyVec3(pivot, ha.origin);
+    } else {
+      pivot.set(0, 0, 0);
+    }
+
+    let sx = 1;
+    let sy = 1;
+    let sz = 1;
+    if (ha.scale !== undefined) {
+      if (Array.isArray(ha.scale)) {
+        sx = ha.scale[0] ?? 1;
+        sy = ha.scale[1] ?? 1;
+        sz = ha.scale[2] ?? 1;
+      } else {
+        const sc = ha.scale as Vector3;
+        sx = sc.x;
+        sy = sc.y;
+        sz = sc.z;
+      }
+    }
+
+    const euler = new Euler();
+    if (ha.rotation !== undefined) {
+      applyEuler(euler, ha.rotation);
+    } else {
+      euler.set(0, 0, 0);
+    }
+
+    const styleM = buildPivotStyleMatrix(pivot, sx, sy, sz, euler);
+    obj.updateMatrix();
+    obj.matrix.multiply(styleM);
+    obj.matrix.decompose(obj.position, obj.quaternion, obj.scale);
+  }
+
+  if (ha.translation !== undefined) {
+    applyVec3(obj.position, ha.translation);
+  }
+
+  obj.updateMatrix();
+  return Array.from(obj.matrix.elements);
+}
+
 /**
  * 构件高亮辅助器
  * 与 setStyle 相同的 show / conditions / 位姿语义，多组命名高亮；底层通过 hidePartsByOids + split mesh 实现
  */
 export class PartHighlightHelper {
   private highlightGroups = new Map<string, HighlightGroupConfig>();
+  /** 最近一次 highlight(name, …) 传入的完整参数，供 getHighlightConfigByName 读取 */
+  private highlightConfigByName = new Map<string, HighlightOptions>();
 
   private originalMaterialByMesh = new Map<string, Material>();
   private originalTransformByMesh = new Map<string, StoredTransform>();
@@ -290,13 +384,50 @@ export class PartHighlightHelper {
     }
 
     this.highlightGroups.set(name, { show, conditions, oids });
+    this.highlightConfigByName.set(name, cloneHighlightOptions(options));
     this.reapplyAll();
+  }
+
+  /**
+   * 按名称获取最近一次 highlight 传入的配置（取消高亮后不再可用）
+   */
+  getHighlightConfigByName(name: string): HighlightOptions | undefined {
+    const saved = this.highlightConfigByName.get(name);
+    return saved ? cloneHighlightOptions(saved) : undefined;
+  }
+
+  /**
+   * 按名称从已保存的 highlight 配置中取出位姿矩阵（列主序 16 个数，同 Three.js Matrix4）。
+   * 仅当 `conditions` 里所有「含 translation / scale / rotation」的外观其 TRS+origin 完全一致时返回；否则返回 undefined。
+   */
+  getHighlightMatrixByName(name: string): number[] | undefined {
+    const saved = this.highlightConfigByName.get(name);
+    if (!saved?.conditions?.length) return undefined;
+
+    let matrix: number[] | undefined;
+    let seenKey: string | undefined;
+
+    for (const [, ha] of saved.conditions) {
+      if (!highlightAppearanceNeedsTransform(ha)) continue;
+      const m = localMatrix16FromHighlightAppearance(ha);
+      if (!m) continue;
+      const k = highlightAppearanceTransformKey(ha);
+      if (seenKey === undefined) {
+        seenKey = k;
+        matrix = m;
+      } else if (seenKey !== k) {
+        return undefined;
+      }
+    }
+
+    return matrix ? matrix.slice() : undefined;
   }
 
   /**
    * 取消指定名称的高亮
    */
   cancelHighlight(name: string): void {
+    this.highlightConfigByName.delete(name);
     if (!this.highlightGroups.has(name)) return;
     this.highlightGroups.delete(name);
     this.reapplyAll();
@@ -307,6 +438,7 @@ export class PartHighlightHelper {
    */
   cancelAllHighlight(): void {
     this.highlightGroups.clear();
+    this.highlightConfigByName.clear();
     this.reapplyAll();
   }
 
