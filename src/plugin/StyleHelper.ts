@@ -5,7 +5,10 @@ import {
   type MeshCollectorQuery,
 } from "../MeshCollector";
 import type { TilesRenderer } from "3d-tiles-renderer";
-import { getPropertyDataMapFromTiles } from "../mesh-helper/mesh";
+import {
+  getPropertyDataMapFromTiles,
+  type PropertyDataEnricher,
+} from "../mesh-helper/mesh";
 import { Object3D } from "three";
 import type { Material } from "three";
 import type { StyleConfig } from "./style-appearance-types";
@@ -36,6 +39,8 @@ interface StyleHelperContext {
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   releaseMeshCollector(collector: MeshCollector): void;
   getRootGroup(): Object3D | null;
+  /** 可选：propertyData 扩充器（如注入层级 `_path`），用于 condition 求值前扩展属性 */
+  getPropertyEnricher?(): PropertyDataEnricher | undefined;
 }
 
 /**
@@ -125,7 +130,10 @@ export class StyleHelper {
     const tiles = this.context.getTiles();
     if (!tiles) return;
 
-    const propertyByOid = getPropertyDataMapFromTiles(tiles);
+    const propertyByOid = getPropertyDataMapFromTiles(
+      tiles,
+      this.context.getPropertyEnricher?.(),
+    );
 
     for (const collector of this.styleCollectors) {
       const h = this.meshChangeHandlers.get(

@@ -8,6 +8,7 @@ import {
   getAllOidsFromTiles,
   getPropertyDataByOid,
   getTileMeshesByOid,
+  type PropertyDataEnricher,
 } from "./mesh-helper";
 import {
   buildStyleConditionEvaluatorMap,
@@ -60,7 +61,12 @@ export interface MeshCollectorQuery {
  * 瓦片级 split mesh 缓存与按 OID / 条件查询（原 GLTFParserPlugin 内 mesh 合并逻辑）
  */
 export class MeshSplitResolver {
-  constructor(private readonly getTiles: () => TilesRenderer | null) {}
+  constructor(
+    private readonly getTiles: () => TilesRenderer | null,
+    private readonly getPropertyEnricher: () =>
+      | PropertyDataEnricher
+      | undefined = () => undefined,
+  ) {}
 
   /**
    * 遍历场景，释放所有瓦片 mesh 上挂的 split 几何缓存。
@@ -139,9 +145,10 @@ export class MeshSplitResolver {
         ? getAllOidsFromTiles(tiles)
         : [...new Set(params.oids)];
     const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
+    const enricher = this.getPropertyEnricher();
     const targetOids: number[] = [];
     for (const oid of candidate) {
-      const data = getPropertyDataByOid(tiles, oid);
+      const data = getPropertyDataByOid(tiles, oid, enricher);
       if (evaluateStyleCondition(cond, data, evaluators)) {
         targetOids.push(oid);
       }

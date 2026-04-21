@@ -14,6 +14,7 @@ import {
   getPropertyDataByOid,
   queryFeatureFromIntersection,
 } from "./mesh-helper";
+import type { PropertyDataEnricher } from "./mesh-helper/mesh";
 
 import {
   MeshCollector,
@@ -75,8 +76,20 @@ export class GLTFParserPlugin {
   // --- Structure data（tileset.asset.extras.maptalks.structureUri 等，同步解压，不请求 structure.json）---
   private _structureData: StructureData | null = null;
   private _oidNodeMap: Map<number, StructureNode> = new Map();
+  /** OID → 从根到该节点的斜杠分隔路径，如 "/1/5/7/"；用于 condition 里按层级匹配后代 */
+  private _oidPathMap: Map<number, string> = new Map();
   /** rootTileset 已存在且已尝试过内嵌解析后仍为 null，则不再重复 gunzip */
   private _structureEmbedResolved = false;
+
+  /**
+   * propertyData 扩充器：在原始属性表数据上注入层级 `_path`（`"/1/5/7/"` 形式）。
+   * 用法：condition 表达式里写 `_path && _path.indexOf('/7/') >= 0` 即可匹配 OID 7 及其所有后代；
+   * 结构未就绪时 `_path` 为 `""`，表达式短路返回 false，不会抛错。
+   */
+  private _propertyEnricher: PropertyDataEnricher = (oid, data) => {
+    const path = this._oidPathMap.get(oid) ?? "";
+    return { ...data, _path: path };
+  };
 
   // --- Model info properties ---
   private _modelInfo: ModelInfo | null = null;
@@ -94,7 +107,10 @@ export class GLTFParserPlugin {
     return this._renderer;
   }
   private _renderer: WebGLRenderer | null = null;
-  readonly meshSplit = new MeshSplitResolver(() => this.tiles);
+  readonly meshSplit = new MeshSplitResolver(
+    () => this.tiles,
+    () => this._propertyEnricher,
+  );
   private collectors: Set<MeshCollector> = new Set();
 
   /**
@@ -134,6 +150,7 @@ export class GLTFParserPlugin {
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
       releaseMeshCollector: partFx.releaseMeshCollector,
       getRootGroup: partFx.getRootGroup,
+      getPropertyEnricher: () => this._propertyEnricher,
     });
     this._partHighlightHelper = new PartHighlightHelper(partFx);
 
@@ -173,6 +190,7 @@ export class GLTFParserPlugin {
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       releaseMeshCollector: (c) => this.releaseMeshCollector(c),
       getRootGroup: () => this.tiles?.group ?? null,
+      getPropertyEnricher: () => this._propertyEnricher,
     };
   }
 
@@ -278,10 +296,33 @@ export class GLTFParserPlugin {
     }
   }
 
+  /**
+   * 构建 OID → 路径字符串（形如 "/1/5/7/"）。
+   * 无 `id` 的中间节点不写入自身，但它的父路径会继续传递给子节点；
+   * 两端 `/` 是为了让 `path.indexOf('/X/') >= 0` 不会把 `X=7` 误匹配到 `17`/`75`。
+   */
+  private _buildOidPathMap(
+    node: StructureNode,
+    prefix: string,
+    map: Map<number, string>,
+  ): void {
+    let cur = prefix;
+    if (typeof node.id === "number") {
+      cur = `${prefix}${node.id}/`;
+      map.set(node.id, cur);
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        this._buildOidPathMap(child, cur, map);
+      }
+    }
+  }
+
   /** 仅根 tileset 变化时重解析 structureUri（子 tileset 的 load-tileset 不会触发） */
   private _onLoadRootTilesetCB = (): void => {
     this._structureData = null;
     this._oidNodeMap.clear();
+    this._oidPathMap.clear();
     this._structureEmbedResolved = false;
     this._syncStructureFromTileset();
   };
@@ -310,9 +351,11 @@ export class GLTFParserPlugin {
 
     this._structureData = embedded;
     this._oidNodeMap.clear();
+    this._oidPathMap.clear();
     if (embedded.trees) {
       for (const tree of embedded.trees) {
         this._buildOidNodeMap(tree, this._oidNodeMap);
+        this._buildOidPathMap(tree, "/", this._oidPathMap);
       }
     }
     return embedded;
@@ -359,7 +402,7 @@ export class GLTFParserPlugin {
     const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
     const targetOids: number[] = [];
     for (const oid of getAllOidsFromTiles(this.tiles)) {
-      const data = getPropertyDataByOid(this.tiles, oid);
+      const data = getPropertyDataByOid(this.tiles, oid, this._propertyEnricher);
       if (evaluateStyleCondition(cond, data, evaluators)) {
         targetOids.push(oid);
       }
@@ -543,7 +586,7 @@ export class GLTFParserPlugin {
     const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
     const targetOids: number[] = [];
     for (const oid of getAllOidsFromTiles(this.tiles)) {
-      const data = getPropertyDataByOid(this.tiles, oid);
+      const data = getPropertyDataByOid(this.tiles, oid, this._propertyEnricher);
       if (evaluateStyleCondition(cond, data, evaluators)) {
         targetOids.push(oid);
       }
@@ -773,6 +816,7 @@ export class GLTFParserPlugin {
 
     this._structureData = null;
     this._oidNodeMap.clear();
+    this._oidPathMap.clear();
     this._structureEmbedResolved = false;
 
     // Clear model info data

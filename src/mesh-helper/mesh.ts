@@ -373,6 +373,15 @@ function isFeatureSourceMesh(mesh: Mesh): boolean {
 }
 
 /**
+ * 可选的 propertyData 扩充器：在原始属性表数据基础上派生/注入额外字段（如层级 `_path`）。
+ * 返回新对象；约定不修改入参。
+ */
+export type PropertyDataEnricher = (
+  oid: number,
+  data: Record<string, unknown>,
+) => Record<string, unknown>;
+
+/**
  * 从瓦片中获取所有 OID
  */
 export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
@@ -396,7 +405,8 @@ export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
  */
 export function getPropertyDataByOid(
   tiles: TilesRenderer,
-  oid: number
+  oid: number,
+  enricher?: PropertyDataEnricher,
 ): Record<string, unknown> | null {
   let result: Record<string, unknown> | null = null;
 
@@ -415,9 +425,9 @@ export function getPropertyDataByOid(
     try {
       const data = structuralMetadata.getPropertyTableData(
         featureId.propertyTable,
-        fid
-      );
-      result = data as Record<string, unknown>;
+        fid,
+      ) as Record<string, unknown>;
+      result = enricher ? enricher(oid, data) : data;
     } catch {
       // ignore
     }
@@ -432,6 +442,7 @@ export function getPropertyDataByOid(
  */
 export function getPropertyDataMapFromTiles(
   tiles: TilesRenderer,
+  enricher?: PropertyDataEnricher,
 ): Map<number, Record<string, unknown> | null> {
   const map = new Map<number, Record<string, unknown> | null>();
 
@@ -455,8 +466,8 @@ export function getPropertyDataMapFromTiles(
         const data = structuralMetadata.getPropertyTableData(
           propertyTable,
           fid,
-        );
-        map.set(oid, data as Record<string, unknown>);
+        ) as Record<string, unknown>;
+        map.set(oid, enricher ? enricher(oid, data) : data);
       } catch {
         map.set(oid, null);
       }

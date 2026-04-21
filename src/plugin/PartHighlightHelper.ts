@@ -245,9 +245,10 @@ export class PartHighlightHelper {
           toStyleAppearance(h),
         ],
       );
+      const oidsSet = hl.oids ? new Set(hl.oids) : null;
       for (const [oid, propertyData] of propertyByOid) {
         if (propertyData == null) continue;
-        if (hl.oids && !hl.oids.includes(oid)) continue;
+        if (oidsSet && !oidsSet.has(oid)) continue;
         if (
           hl.show &&
           !evaluateStyleCondition(hl.show, propertyData, evaluators)
@@ -275,9 +276,10 @@ export class PartHighlightHelper {
         show: hl.show,
         conditions: (hl.conditions ?? []) as StyleCondition[],
       });
+      const oidsSet = hl.oids ? new Set(hl.oids) : null;
       for (const [oid, propertyData] of propertyByOid) {
         if (propertyData == null) continue;
-        if (hl.oids && !hl.oids.includes(oid)) continue;
+        if (oidsSet && !oidsSet.has(oid)) continue;
         if (
           hl.show &&
           !evaluateStyleCondition(hl.show, propertyData, evaluators)
@@ -324,7 +326,10 @@ export class PartHighlightHelper {
     const scene = this.context.getRootGroup();
     if (!tiles || !scene) return;
 
-    const propertyByOid = getPropertyDataMapFromTiles(tiles);
+    const propertyByOid = getPropertyDataMapFromTiles(
+      tiles,
+      this.context.getPropertyEnricher?.(),
+    );
     const appearanceByOid = this.mergeAppearanceByOid(propertyByOid);
     const unionHide = this.collectUnionShowHide(propertyByOid);
 
