@@ -34,7 +34,6 @@ import {
   applyVec3,
   buildPivotStyleMatrix,
   eulerKey,
-  resolveConditionsAppearance,
   restoreMeshAppearanceMaps,
   vec3Key,
   type MeshAppearanceMaps,
@@ -56,13 +55,19 @@ export interface HighlightAppearance {
 
 export type HighlightCondition = [string | boolean, HighlightAppearance];
 
-/** 高亮配置：语义与 setStyle 一致，并多一个 name 用于命名分组 */
+/**
+ * 高亮配置：语义与 setStyle 相似，多一个 name 用于命名分组
+ *
+ * 与 setStyle 的关键差异：`conditions` 中**所有**命中的条目都会各自生效，
+ * 分别创建独立的 MeshCollector 与 split mesh 实例，视觉上叠加；
+ * 典型用途如"填充 + 线框"同时存在（见 `src/plugin/demo.html`）。
+ */
 export interface HighlightOptions {
   /** 高亮组名称，用于 cancelHighlight(name) 取消 */
   name: string;
   /** 可见性表达式，仅满足条件的构件参与高亮，如 'foo === bar' */
   show?: string;
-  /** 条件外观数组，第一个满足条件的应用对应外观；[true, appearance] 为默认 */
+  /** 条件外观数组；所有命中的条目都会各自生效并叠加渲染；`[true, appearance]` 为默认 */
   conditions?: HighlightCondition[];
   /** 若指定，仅在这些 OID 与属性数据的交集中应用（与 conditions 组合） */
   oids?: number[];
@@ -228,12 +233,23 @@ export class PartHighlightHelper {
   }
 
   /**
-   * 合并多组命名高亮：按 Map 插入顺序，后写入的组覆盖同一 OID 的外观
+   * 聚合所有命名 highlight 组产出的外观分组，并返回涉及的 OID 集合（用于隐藏原片）。
+   *
+   * `conditions` 中所有命中的条目都会各自进入对应 `appearanceGroupKey` 分组，
+   * 每个分组独立创建 MeshCollector / split mesh，实现多外观叠加（如填充 + 线框）。
    */
-  private mergeAppearanceByOid(
+  private buildAppearanceGroups(
     propertyByOid: Map<number, Record<string, unknown> | null>,
-  ): Map<number, StyleAppearance> {
-    const appearanceByOid = new Map<number, StyleAppearance>();
+  ): {
+    groups: Map<string, { appearance: StyleAppearance; oids: number[] }>;
+    styledOids: Set<number>;
+  } {
+    const groupsByKey = new Map<
+      string,
+      { appearance: StyleAppearance; oids: Set<number> }
+    >();
+    const styledOids = new Set<number>();
+
     for (const [, hl] of this.highlightGroups) {
       const evaluators = buildStyleConditionEvaluatorMap({
         show: hl.show,
@@ -246,6 +262,7 @@ export class PartHighlightHelper {
         ],
       );
       const oidsSet = hl.oids ? new Set(hl.oids) : null;
+
       for (const [oid, propertyData] of propertyByOid) {
         if (propertyData == null) continue;
         if (oidsSet && !oidsSet.has(oid)) continue;
@@ -254,16 +271,30 @@ export class PartHighlightHelper {
           !evaluateStyleCondition(hl.show, propertyData, evaluators)
         )
           continue;
-        const app = resolveConditionsAppearance(
-          conditions,
-          propertyData,
-          evaluators,
-        );
-        if (!app) continue;
-        appearanceByOid.set(oid, app);
+
+        for (const [cond, appearance] of conditions) {
+          if (!evaluateStyleCondition(cond, propertyData, evaluators)) continue;
+          const gkey = appearanceGroupKey(appearance);
+          let g = groupsByKey.get(gkey);
+          if (!g) {
+            g = { appearance, oids: new Set() };
+            groupsByKey.set(gkey, g);
+          }
+          g.oids.add(oid);
+          styledOids.add(oid);
+        }
       }
     }
-    return appearanceByOid;
+
+    const groups = new Map<
+      string,
+      { appearance: StyleAppearance; oids: number[] }
+    >();
+    for (const [gkey, g] of groupsByKey) {
+      groups.set(gkey, { appearance: g.appearance, oids: [...g.oids] });
+    }
+
+    return { groups, styledOids };
   }
 
   /** 各组 show 失败需隐藏的 OID（与 setStyle 一致：show 不满足则隐藏原片） */
@@ -330,27 +361,11 @@ export class PartHighlightHelper {
       tiles,
       this.context.getPropertyEnricher?.(),
     );
-    const appearanceByOid = this.mergeAppearanceByOid(propertyByOid);
+    const { groups, styledOids } = this.buildAppearanceGroups(propertyByOid);
     const unionHide = this.collectUnionShowHide(propertyByOid);
 
-    const oidsToHide = [
-      ...new Set([...appearanceByOid.keys(), ...unionHide]),
-    ];
+    const oidsToHide = [...new Set([...styledOids, ...unionHide])];
     this.lastHiddenOids = oidsToHide;
-
-    const groups = new Map<
-      string,
-      { appearance: StyleAppearance; oids: number[] }
-    >();
-    for (const [oid, app] of appearanceByOid) {
-      const gkey = appearanceGroupKey(app);
-      let g = groups.get(gkey);
-      if (!g) {
-        g = { appearance: app, oids: [] };
-        groups.set(gkey, g);
-      }
-      g.oids.push(oid);
-    }
 
     const maps = this.getMaps();
 
