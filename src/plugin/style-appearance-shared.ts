@@ -213,6 +213,9 @@ export function buildAppearanceGroupsFromPropertyMap(
   return { hiddenOidsList, groups };
 }
 
+/** 当 `appearance.mesh` 工厂被使用时，把产物 Object3D 暂存到原 mesh 的 userData，便于还原时清理 */
+const STYLE_APPEARANCE_BUILT_KEY = "_gltfParserStyleAppearanceBuilt";
+
 export function restoreMeshAppearanceMaps(
   mesh: Mesh,
   maps: MeshAppearanceMaps,
@@ -228,6 +231,13 @@ export function restoreMeshAppearanceMaps(
     mesh.scale.copy(origT.scale);
     mesh.rotation.copy(origT.rotation);
     maps.originalTransformByMesh.delete(mesh.uuid);
+  }
+  const built = mesh.userData?.[STYLE_APPEARANCE_BUILT_KEY] as
+    | Object3D
+    | undefined;
+  if (built) {
+    built.removeFromParent();
+    delete mesh.userData[STYLE_APPEARANCE_BUILT_KEY];
   }
 }
 
@@ -247,8 +257,16 @@ export function applyStyleAppearanceToMesh(
   const resolvedMaterial = resolveStyleMaterial(appearance, originalMaterial);
 
   if (appearance.mesh) {
-    const built = appearance.mesh(mesh.geometry, resolvedMaterial);
-    mesh = built
+    const originalMesh = mesh;
+    const prevBuilt = originalMesh.userData?.[STYLE_APPEARANCE_BUILT_KEY] as
+      | Object3D
+      | undefined;
+    if (prevBuilt) {
+      prevBuilt.removeFromParent();
+    }
+    const built = appearance.mesh(originalMesh.geometry, resolvedMaterial);
+    originalMesh.userData[STYLE_APPEARANCE_BUILT_KEY] = built;
+    mesh = built as unknown as Mesh;
   } else {
     mesh.material = resolvedMaterial;
   }
