@@ -1,13 +1,16 @@
 import {
+  Color,
   Euler,
   type EulerOrder,
   Material,
   Matrix4,
   Mesh,
+  MeshStandardMaterial,
   Object3D,
   Vector3,
 } from "three";
 import { evaluateStyleCondition } from "./style-condition-eval";
+import { toColor, type ColorInput } from "../utils/color-input";
 import type {
   StyleAppearance,
   StyleCondition,
@@ -61,15 +64,74 @@ export function extractStyleMaterialMaps(material: Material): StyleMaterialMaps 
   };
 }
 
+/** color-only：按颜色 hex 缓存默认 MeshStandardMaterial，多 mesh 共享同一实例 */
+const defaultColorMaterialCache = new Map<number, MeshStandardMaterial>();
+
+/** material 实例 + color：克隆原 material 并改写其 color，按 (Material, hex) 缓存避免每 mesh 重复 clone */
+const colorOverrideMaterialCache = new WeakMap<
+  Material,
+  Map<number, Material>
+>();
+
+function colorHex(c: ColorInput): number {
+  return toColor(c).getHex();
+}
+
+function materialHasColor(mat: Material): mat is Material & { color: Color } {
+  const c = (mat as unknown as { color?: unknown }).color;
+  return c instanceof Color;
+}
+
+function getDefaultColorMaterial(c: ColorInput): MeshStandardMaterial {
+  const hex = colorHex(c);
+  let m = defaultColorMaterialCache.get(hex);
+  if (!m) {
+    m = new MeshStandardMaterial({ color: hex });
+    defaultColorMaterialCache.set(hex, m);
+  }
+  return m;
+}
+
+function applyColorToMaterialInstance(mat: Material, c: ColorInput): Material {
+  if (!materialHasColor(mat)) return mat;
+  const hex = colorHex(c);
+  let perMat = colorOverrideMaterialCache.get(mat);
+  if (!perMat) {
+    perMat = new Map();
+    colorOverrideMaterialCache.set(mat, perMat);
+  }
+  let cloned = perMat.get(hex);
+  if (!cloned) {
+    cloned = mat.clone();
+    (cloned as Material & { color: Color }).color.setHex(hex);
+    perMat.set(hex, cloned);
+  }
+  return cloned;
+}
+
 function resolveStyleMaterial(
   appearance: StyleAppearance,
   originalMaterial: Material,
 ): Material {
+  const colorInput = appearance.color;
+
   if (appearance.material === undefined) {
+    if (colorInput !== undefined) {
+      return getDefaultColorMaterial(colorInput);
+    }
     return originalMaterial;
   }
+
   if (typeof appearance.material === "function") {
-    return appearance.material(extractStyleMaterialMaps(originalMaterial));
+    const mat = appearance.material(extractStyleMaterialMaps(originalMaterial));
+    if (colorInput !== undefined && materialHasColor(mat)) {
+      mat.color.setHex(colorHex(colorInput));
+    }
+    return mat;
+  }
+
+  if (colorInput !== undefined) {
+    return applyColorToMaterialInstance(appearance.material, colorInput);
   }
   return appearance.material;
 }
@@ -126,12 +188,13 @@ export function appearanceGroupKey(a: StyleAppearance): string {
       : typeof a.material === "function"
         ? `matFn#${styleFnIdentity(a.material)}`
         : a.material.uuid;
+  const colorPart = a.color !== undefined ? `|c:${colorHex(a.color)}` : "";
   const meshPart = a.mesh ? `|meshFn#${styleFnIdentity(a.mesh)}` : "";
   const t = vec3Key(a.translation);
   const s = vec3Key(a.scale);
   const r = eulerKey(a.rotation);
   const o = vec3Key(a.origin);
-  return `${m}${meshPart}|${t}|${s}|${r}|${o}`;
+  return `${m}${colorPart}${meshPart}|${t}|${s}|${r}|${o}`;
 }
 
 export function buildPivotStyleMatrix(

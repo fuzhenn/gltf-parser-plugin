@@ -46,6 +46,13 @@ export type HighlightMaterial = Material | { color?: ColorInput; opacity?: numbe
 /** 条件命中后的外观：材质可为简写、函数或 Material（可省略）；位姿与 setStyle 一致 */
 export interface HighlightAppearance {
   material?: HighlightMaterial | StyleMaterialResolver;
+  /**
+   * 直接以颜色定义材质（可被 JSON 序列化），与 `material` 同级。
+   * - 仅提供 `color`：使用默认 `MeshStandardMaterial` 并应用该颜色；
+   * - 同时提供 `color` 与 `material`：解析 material 后把颜色写入其 `.color`（若存在），
+   *   传入 Material 实例或简写时会内部克隆，不污染入参/缓存。
+   */
+  color?: ColorInput;
   mesh?: StyleMeshFactory;
   translation?: StyleVec3Input;
   scale?: StyleVec3Input;
@@ -110,6 +117,9 @@ function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
     rotation: ha.rotation,
     origin: ha.origin,
   };
+  if (ha.color !== undefined) {
+    appearance.color = ha.color;
+  }
   if (mat !== undefined) {
     appearance.material =
       typeof mat === "function"
