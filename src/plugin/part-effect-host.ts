@@ -1,7 +1,7 @@
 import type { Object3D } from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
 import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
-import type { PropertyDataEnricher } from "../mesh-helper/mesh";
+import type { InternalData } from "../mesh-helper/mesh";
 
 /** 构件外观辅助（着色 / 闪烁 / 线框 / 高亮）从插件注入的能力 */
 export interface PartEffectHost {
@@ -13,8 +13,8 @@ export interface PartEffectHost {
   releaseMeshCollector(collector: MeshCollector): void;
   getRootGroup(): Object3D | null;
   /**
-   * 可选：从插件读取 propertyData 扩充器（如注入层级 `_path`）。
+   * 可选：从插件读取内部数据钩子（如注入层级 `_path`）。
    * 所有 condition 表达式求值前会用它扩展 propertyData。
    */
-  getPropertyEnricher?(): PropertyDataEnricher | undefined;
+  getInternalData?(): InternalData | undefined;
 }

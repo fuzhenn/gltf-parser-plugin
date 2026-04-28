@@ -8,7 +8,7 @@ import {
   getAllOidsFromTiles,
   getPropertyDataByOid,
   getTileMeshesByOid,
-  type PropertyDataEnricher,
+  type InternalData,
 } from "./mesh-helper";
 import {
   buildStyleConditionEvaluatorMap,
@@ -63,8 +63,8 @@ export interface MeshCollectorQuery {
 export class MeshSplitResolver {
   constructor(
     private readonly getTiles: () => TilesRenderer | null,
-    private readonly getPropertyEnricher: () =>
-      | PropertyDataEnricher
+    private readonly getInternalData: () =>
+      | InternalData
       | undefined = () => undefined,
   ) {}
 
@@ -145,10 +145,10 @@ export class MeshSplitResolver {
         ? getAllOidsFromTiles(tiles)
         : [...new Set(params.oids)];
     const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
-    const enricher = this.getPropertyEnricher();
+    const internalData = this.getInternalData();
     const targetOids: number[] = [];
     for (const oid of candidate) {
-      const data = getPropertyDataByOid(tiles, oid, enricher);
+      const data = getPropertyDataByOid(tiles, oid, internalData);
       if (evaluateStyleCondition(cond, data, evaluators)) {
         targetOids.push(oid);
       }

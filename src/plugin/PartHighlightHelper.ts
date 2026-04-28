@@ -11,12 +11,9 @@ import {
 } from "./style-condition-eval";
 import type { PartEffectHost } from "./part-effect-host";
 import type { ColorInput } from "../utils/color-input";
-import { toColor } from "../utils/color-input";
 import {
-  Color,
   Euler,
   Material,
-  MeshStandardMaterial,
   Object3D,
   Vector3,
 } from "three";
@@ -40,19 +37,15 @@ import {
   type StoredTransform,
 } from "./style-appearance-shared";
 
-/** 高亮材质：Three.js Material 或 { color, opacity } */
-export type HighlightMaterial = Material | { color?: ColorInput; opacity?: number };
+/** 高亮用材质：与 {@link StyleAppearance.material} 相同，不含内嵌 color/opacity */
+export type HighlightMaterial = Material | StyleMaterialResolver;
 
-/** 条件命中后的外观：材质可为简写、函数或 Material（可省略）；位姿与 setStyle 一致 */
+/** 条件命中后的外观；`color` / `opacity` 与 `material` 同级，语义同 setStyle */
 export interface HighlightAppearance {
-  material?: HighlightMaterial | StyleMaterialResolver;
-  /**
-   * 直接以颜色定义材质（可被 JSON 序列化），与 `material` 同级。
-   * - 仅提供 `color`：使用默认 `MeshStandardMaterial` 并应用该颜色；
-   * - 同时提供 `color` 与 `material`：解析 material 后把颜色写入其 `.color`（若存在），
-   *   传入 Material 实例或简写时会内部克隆，不污染入参/缓存。
-   */
+  material?: HighlightMaterial;
   color?: ColorInput;
+  /** 0–1，与 `material` 同级 */
+  opacity?: number;
   mesh?: StyleMeshFactory;
   translation?: StyleVec3Input;
   scale?: StyleVec3Input;
@@ -80,36 +73,7 @@ export interface HighlightOptions {
   oids?: number[];
 }
 
-const highlightMaterialCache = new Map<string, MeshStandardMaterial>();
-
-function getMaterialForHighlight(
-  style: { color?: ColorInput; opacity?: number },
-): MeshStandardMaterial {
-  const color = style.color != null ? toColor(style.color) : new Color(0xffff00);
-  const opacity =
-    style.opacity != null ? Math.max(0, Math.min(1, style.opacity)) : 1;
-  const key = `${color.getHex()}_${opacity}`;
-
-  if (!highlightMaterialCache.has(key)) {
-    const mat = new MeshStandardMaterial({
-      color: color.clone(),
-      roughness: 0.5,
-      metalness: 0.1,
-      opacity,
-      transparent: opacity < 1,
-    });
-    highlightMaterialCache.set(key, mat);
-  }
-  return highlightMaterialCache.get(key)!;
-}
-
-function toMaterial(value: HighlightMaterial): Material {
-  if (value instanceof Material) return value;
-  return getMaterialForHighlight(value);
-}
-
 function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
-  const mat = ha.material;
   const appearance: StyleAppearance = {
     mesh: ha.mesh,
     translation: ha.translation,
@@ -117,17 +81,9 @@ function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
     rotation: ha.rotation,
     origin: ha.origin,
   };
-  if (ha.color !== undefined) {
-    appearance.color = ha.color;
-  }
-  if (mat !== undefined) {
-    appearance.material =
-      typeof mat === "function"
-        ? mat
-        : mat instanceof Material
-          ? mat
-          : toMaterial(mat);
-  }
+  if (ha.color !== undefined) appearance.color = ha.color;
+  if (ha.opacity !== undefined) appearance.opacity = ha.opacity;
+  if (ha.material !== undefined) appearance.material = ha.material;
   return appearance;
 }
 
@@ -223,7 +179,7 @@ function localMatrix16FromHighlightAppearance(
  */
 export class PartHighlightHelper {
   private highlightGroups = new Map<string, HighlightGroupConfig>();
-  /** 最近一次 highlight(name, …) 传入的完整参数，供 getHighlightConfigByName 读取 */
+  /** 最近一次 highlight(name, …) 传入的完整参数，供 getHighlightByName 读取 */
   private highlightConfigByName = new Map<string, HighlightOptions>();
 
   private originalMaterialByMesh = new Map<string, Material>();
@@ -369,7 +325,7 @@ export class PartHighlightHelper {
 
     const propertyByOid = getPropertyDataMapFromTiles(
       tiles,
-      this.context.getPropertyEnricher?.(),
+      this.context.getInternalData?.(),
     );
     const { groups, styledOids } = this.buildAppearanceGroups(propertyByOid);
     const unionHide = this.collectUnionShowHide(propertyByOid);
@@ -421,7 +377,7 @@ export class PartHighlightHelper {
   /**
    * 按名称获取最近一次 highlight 传入的配置（取消高亮后不再可用）
    */
-  getHighlightConfigByName(name: string): HighlightOptions | undefined {
+  getHighlightByName(name: string): HighlightOptions | undefined {
     const saved = this.highlightConfigByName.get(name);
     return saved ? cloneHighlightOptions(saved) : undefined;
   }

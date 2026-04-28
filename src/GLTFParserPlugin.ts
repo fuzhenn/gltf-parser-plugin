@@ -14,7 +14,7 @@ import {
   getPropertyDataByOid,
   queryFeatureFromIntersection,
 } from "./mesh-helper";
-import type { PropertyDataEnricher } from "./mesh-helper/mesh";
+import type { InternalData } from "./mesh-helper/mesh";
 
 import {
   MeshCollector,
@@ -82,11 +82,11 @@ export class GLTFParserPlugin {
   private _structureEmbedResolved = false;
 
   /**
-   * propertyData 扩充器：在原始属性表数据上注入层级 `_path`（`"/1/5/7/"` 形式）。
+   * 内部数据：在原始属性表数据上注入层级 `_path`（`"/1/5/7/"` 形式）。
    * 用法：condition 表达式里写 `_path && _path.indexOf('/7/') >= 0` 即可匹配 OID 7 及其所有后代；
    * 结构未就绪时 `_path` 为 `""`，表达式短路返回 false，不会抛错。
    */
-  private _propertyEnricher: PropertyDataEnricher = (oid, data) => {
+  private _internalData: InternalData = (oid, data) => {
     const path = this._oidPathMap.get(oid) ?? "";
     return { ...data, _path: path };
   };
@@ -109,7 +109,7 @@ export class GLTFParserPlugin {
   private _renderer: WebGLRenderer | null = null;
   readonly meshSplit = new MeshSplitResolver(
     () => this.tiles,
-    () => this._propertyEnricher,
+    () => this._internalData,
   );
   private collectors: Set<MeshCollector> = new Set();
 
@@ -150,7 +150,7 @@ export class GLTFParserPlugin {
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
       releaseMeshCollector: partFx.releaseMeshCollector,
       getRootGroup: partFx.getRootGroup,
-      getPropertyEnricher: () => this._propertyEnricher,
+      getInternalData: () => this._internalData,
     });
     this._partHighlightHelper = new PartHighlightHelper(partFx);
 
@@ -190,7 +190,7 @@ export class GLTFParserPlugin {
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       releaseMeshCollector: (c) => this.releaseMeshCollector(c),
       getRootGroup: () => this.tiles?.group ?? null,
-      getPropertyEnricher: () => this._propertyEnricher,
+      getInternalData: () => this._internalData,
     };
   }
 
@@ -402,7 +402,7 @@ export class GLTFParserPlugin {
     const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
     const targetOids: number[] = [];
     for (const oid of getAllOidsFromTiles(this.tiles)) {
-      const data = getPropertyDataByOid(this.tiles, oid, this._propertyEnricher);
+      const data = getPropertyDataByOid(this.tiles, oid, this._internalData);
       if (evaluateStyleCondition(cond, data, evaluators)) {
         targetOids.push(oid);
       }
@@ -586,7 +586,7 @@ export class GLTFParserPlugin {
     const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
     const targetOids: number[] = [];
     for (const oid of getAllOidsFromTiles(this.tiles)) {
-      const data = getPropertyDataByOid(this.tiles, oid, this._propertyEnricher);
+      const data = getPropertyDataByOid(this.tiles, oid, this._internalData);
       if (evaluateStyleCondition(cond, data, evaluators)) {
         targetOids.push(oid);
       }
@@ -742,8 +742,8 @@ export class GLTFParserPlugin {
   /**
    * 按名称获取最近一次 highlight 传入的配置（取消高亮后返回 undefined）
    */
-  getHighlightConfigByName(name: string): HighlightOptions | undefined {
-    return this._partHighlightHelper?.getHighlightConfigByName(name);
+  getHighlightByName(name: string): HighlightOptions | undefined {
+    return this._partHighlightHelper?.getHighlightByName(name);
   }
 
   /**

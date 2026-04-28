@@ -41,16 +41,23 @@ export type StyleMeshFactory = (
 
 /** 条件命中后的外观：材质与位姿均可选（未传则保留原 mesh 对应分量） */
 export interface StyleAppearance {
-  /** 直接材质，或根据 {@link StyleMaterialMaps} 从原构件材质生成；省略且未提供 `color` 时不改材质 */
+  /**
+   * 直接材质，或根据 {@link StyleMaterialMaps} 从原构件材质生成。
+   * 不含 `color` / `opacity` 字段；着色与透明度请使用同级的 {@link StyleAppearance.color}、{@link StyleAppearance.opacity}。
+   */
   material?: Material | StyleMaterialResolver;
   /**
-   * 直接以颜色定义材质（可被 JSON 序列化），与 `material` 同级。
-   * - 仅提供 `color`：使用默认 `MeshStandardMaterial` 并应用该颜色；
-   * - 同时提供 `color` 与 `material`：解析 material 后把颜色写入其 `.color`（若存在）。
-   *   当 `material` 为 `Material` 实例时会内部克隆一份再设置颜色，不污染入参；
-   *   当 `material` 为回调时会直接修改返回值的 `.color`，请确保回调每次返回新实例。
+   * 与 `material` 同级：直接以颜色参与解析（可被 JSON 序列化）。
+   * - 仅提供 `color`（且无 `material`）：使用默认 `MeshStandardMaterial`；
+   * - 与 `material` 同时提供：解析 material 后写入其 `.color`（若存在该属性）。
+   *   实例材质会克隆后再改；回调返回的材质会直接修改 `.color`，请确保每次返回新实例。
    */
   color?: ColorInput;
+  /**
+   * 与 `material` 同级：0–1，写入解析结果材质的 `opacity` / `transparent`（若材质支持）。
+   * 可与 `color` 组合；仅 `opacity` 时会在原材质或默认色材质上应用透明度。
+   */
+  opacity?: number;
   /**
    * 可选：自定义 Mesh 构建；默认仅替换 geometry/material。
    * 返回的 Mesh 会将其 geometry、material 写回当前 split mesh，uuid 不变。

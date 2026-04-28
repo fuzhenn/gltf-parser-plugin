@@ -373,10 +373,10 @@ function isFeatureSourceMesh(mesh: Mesh): boolean {
 }
 
 /**
- * 可选的 propertyData 扩充器：在原始属性表数据基础上派生/注入额外字段（如层级 `_path`）。
+ * 内部数据钩子：在原始属性表数据基础上派生/注入额外字段（如层级 `_path`）。
  * 返回新对象；约定不修改入参。
  */
-export type PropertyDataEnricher = (
+export type InternalData = (
   oid: number,
   data: Record<string, unknown>,
 ) => Record<string, unknown>;
@@ -406,7 +406,7 @@ export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
 export function getPropertyDataByOid(
   tiles: TilesRenderer,
   oid: number,
-  enricher?: PropertyDataEnricher,
+  internalData?: InternalData,
 ): Record<string, unknown> | null {
   let result: Record<string, unknown> | null = null;
 
@@ -427,7 +427,7 @@ export function getPropertyDataByOid(
         featureId.propertyTable,
         fid,
       ) as Record<string, unknown>;
-      result = enricher ? enricher(oid, data) : data;
+      result = internalData ? internalData(oid, data) : data;
     } catch {
       // ignore
     }
@@ -442,7 +442,7 @@ export function getPropertyDataByOid(
  */
 export function getPropertyDataMapFromTiles(
   tiles: TilesRenderer,
-  enricher?: PropertyDataEnricher,
+  internalData?: InternalData,
 ): Map<number, Record<string, unknown> | null> {
   const map = new Map<number, Record<string, unknown> | null>();
 
@@ -467,7 +467,7 @@ export function getPropertyDataMapFromTiles(
           propertyTable,
           fid,
         ) as Record<string, unknown>;
-        map.set(oid, enricher ? enricher(oid, data) : data);
+        map.set(oid, internalData ? internalData(oid, data) : data);
       } catch {
         map.set(oid, null);
       }

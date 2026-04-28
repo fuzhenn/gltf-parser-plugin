@@ -7,7 +7,7 @@ import {
 import type { TilesRenderer } from "3d-tiles-renderer";
 import {
   getPropertyDataMapFromTiles,
-  type PropertyDataEnricher,
+  type InternalData,
 } from "../mesh-helper/mesh";
 import { Object3D } from "three";
 import type { Material } from "three";
@@ -39,8 +39,8 @@ interface StyleHelperContext {
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   releaseMeshCollector(collector: MeshCollector): void;
   getRootGroup(): Object3D | null;
-  /** 可选：propertyData 扩充器（如注入层级 `_path`），用于 condition 求值前扩展属性 */
-  getPropertyEnricher?(): PropertyDataEnricher | undefined;
+  /** 可选：内部数据钩子（如注入层级 `_path`），用于 condition 求值前扩展属性 */
+  getInternalData?(): InternalData | undefined;
 }
 
 /**
@@ -132,7 +132,7 @@ export class StyleHelper {
 
     const propertyByOid = getPropertyDataMapFromTiles(
       tiles,
-      this.context.getPropertyEnricher?.(),
+      this.context.getInternalData?.(),
     );
 
     for (const collector of this.styleCollectors) {

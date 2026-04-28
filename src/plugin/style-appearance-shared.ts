@@ -79,24 +79,24 @@ export function extractStyleMaterialMaps(material: Material): StyleMaterialMaps 
 }
 
 /**
- * color-only 路径的进程级缓存：颜色 hex → 默认 `MeshStandardMaterial`。
+ * color-only（及 color+opacity）路径的进程级缓存：`hex_op` → 默认 `MeshStandardMaterial`。
  *
- * 同色多 mesh 共享同一 Material 实例，避免每 mesh `new` 一份。
- * 用普通 `Map`：颜色 hex 是数字、空间小，长期持有可接受。
+ * 同色同透明度多 mesh 共享同一 Material 实例，避免每 mesh `new` 一份。
  */
-const defaultColorMaterialCache = new Map<number, MeshStandardMaterial>();
+const defaultColorMaterialCache = new Map<string, MeshStandardMaterial>();
 
 /**
- * `material` 实例 + `color` 路径的缓存：原始 Material → (颜色 hex → 克隆体)。
+ * `material` 实例 + 同级 `color` / `opacity` 的缓存：原始 Material → (复合 key → 克隆体)。
  *
- * - 克隆 + 改 `.color` 是为了**不污染用户传入的 Material 实例**；
+ * - 克隆是为了**不污染用户传入的 Material 实例**；
  * - 用 `WeakMap` 持有原始 Material 作为外层 key，原始 Material 被 GC 时
  *   缓存条目自动回收，避免内存泄漏。
  */
-const colorOverrideMaterialCache = new WeakMap<
-  Material,
-  Map<number, Material>
->();
+const colorOverrideMaterialCache = new WeakMap<Material, Map<string, Material>>();
+
+function clampOpacity01(o: number): number {
+  return Math.max(0, Math.min(1, o));
+}
 
 function colorHex(c: ColorInput): number {
   return toColor(c).getHex();
@@ -107,29 +107,74 @@ function materialHasColor(mat: Material): mat is Material & { color: Color } {
   return c instanceof Color;
 }
 
-function getDefaultColorMaterial(c: ColorInput): MeshStandardMaterial {
+function materialSupportsOpacity(mat: Material): boolean {
+  return typeof (mat as unknown as { opacity?: unknown }).opacity === "number";
+}
+
+function overrideMaterialCacheKey(
+  colorInput: ColorInput | undefined,
+  opacityOverride: number | undefined,
+): string {
+  const h = colorInput !== undefined ? String(colorHex(colorInput)) : "_";
+  const o =
+    opacityOverride !== undefined ? clampOpacity01(opacityOverride).toFixed(4) : "_";
+  return `${h},${o}`;
+}
+
+function getDefaultColorMaterial(
+  c: ColorInput,
+  opacity?: number,
+): MeshStandardMaterial {
   const hex = colorHex(c);
-  let m = defaultColorMaterialCache.get(hex);
+  const op = opacity != null ? clampOpacity01(opacity) : 1;
+  const key = `${hex}_${op}`;
+  let m = defaultColorMaterialCache.get(key);
   if (!m) {
-    m = new MeshStandardMaterial({ color: hex });
-    defaultColorMaterialCache.set(hex, m);
+    m =
+      op < 1
+        ? new MeshStandardMaterial({
+            color: hex,
+            opacity: op,
+            transparent: true,
+          })
+        : new MeshStandardMaterial({ color: hex });
+    defaultColorMaterialCache.set(key, m);
   }
   return m;
 }
 
-function applyColorToMaterialInstance(mat: Material, c: ColorInput): Material {
-  if (!materialHasColor(mat)) return mat;
-  const hex = colorHex(c);
+function applyAppearanceOverridesToMaterialInstance(
+  mat: Material,
+  colorInput: ColorInput | undefined,
+  opacityOverride: number | undefined,
+): Material {
+  const wantColor = colorInput !== undefined;
+  const wantOpacity = opacityOverride !== undefined;
+  const canColor = wantColor && materialHasColor(mat);
+  const canOpacity = wantOpacity && materialSupportsOpacity(mat);
+  if (!canColor && !canOpacity) return mat;
+
+  const key = overrideMaterialCacheKey(
+    canColor ? colorInput : undefined,
+    canOpacity ? opacityOverride : undefined,
+  );
   let perMat = colorOverrideMaterialCache.get(mat);
   if (!perMat) {
     perMat = new Map();
     colorOverrideMaterialCache.set(mat, perMat);
   }
-  let cloned = perMat.get(hex);
+  let cloned = perMat.get(key);
   if (!cloned) {
     cloned = mat.clone();
-    (cloned as Material & { color: Color }).color.setHex(hex);
-    perMat.set(hex, cloned);
+    if (canColor) {
+      (cloned as Material & { color: Color }).color.setHex(colorHex(colorInput!));
+    }
+    if (canOpacity) {
+      const o = clampOpacity01(opacityOverride!);
+      (cloned as Material & { opacity: number }).opacity = o;
+      (cloned as Material & { transparent?: boolean }).transparent = o < 1;
+    }
+    perMat.set(key, cloned);
   }
   return cloned;
 }
@@ -137,32 +182,30 @@ function applyColorToMaterialInstance(mat: Material, c: ColorInput): Material {
 /**
  * 解析单个 mesh 最终要使用的 Material 实例。
  *
- * 支持的 (material, color) 组合（与 {@link StyleAppearance} 文档保持一致）：
- *
- * | material   | color  | 行为                                                         |
- * | ---------- | ------ | ------------------------------------------------------------ |
- * | undefined  | 无     | 保留原 mesh 材质                                             |
- * | undefined  | 有     | 返回缓存的默认 `MeshStandardMaterial`（按颜色 hex 共享实例） |
- * | 回调       | 任意   | 调用回调；若有 color 且产物含 `.color`，**直接 mutate** 之   |
- * | Material   | 无     | 直接返回该 Material                                          |
- * | Material   | 有     | 返回 `(material, hex)` 缓存中的克隆体（不污染入参）          |
- *
- * 该函数会被每个 split mesh 调用一次（一次 setStyle 可能数百~数千次），因此两条带
- * color 的路径必须靠缓存共享实例，否则会按 mesh 数量线性 new / clone Material。
- *
- * 回调路径选择"直接 mutate 返回值"而非克隆：
- * 这与 `material` 为回调时的现有约定一致——回调被视为"按 mesh 生产新材质"，
- * 直接修改其 `.color` 既高效又避免维护一份难以缓存的 (callback, hex) 索引。
+ * `color` / `opacity` 与 `material` 同级；`material` 本身不含内嵌 color/opacity 字段。
+ * 带 `color` 的默认材质路径靠 {@link defaultColorMaterialCache} 共享实例；
+ * 改写实例材质靠 {@link colorOverrideMaterialCache}。回调返回的材质在提供 `color` /
+ * `opacity` 时**直接 mutate**（约定每次返回新实例）。
  */
 function resolveStyleMaterial(
   appearance: StyleAppearance,
   originalMaterial: Material,
 ): Material {
   const colorInput = appearance.color;
+  const opacityRaw = appearance.opacity;
+  const opacityOverride =
+    opacityRaw != null ? clampOpacity01(opacityRaw) : undefined;
 
   if (appearance.material === undefined) {
     if (colorInput !== undefined) {
-      return getDefaultColorMaterial(colorInput);
+      return getDefaultColorMaterial(colorInput, opacityOverride);
+    }
+    if (opacityOverride !== undefined) {
+      return applyAppearanceOverridesToMaterialInstance(
+        originalMaterial,
+        undefined,
+        opacityOverride,
+      );
     }
     return originalMaterial;
   }
@@ -172,11 +215,19 @@ function resolveStyleMaterial(
     if (colorInput !== undefined && materialHasColor(mat)) {
       mat.color.setHex(colorHex(colorInput));
     }
+    if (opacityOverride !== undefined && materialSupportsOpacity(mat)) {
+      mat.opacity = opacityOverride;
+      mat.transparent = opacityOverride < 1;
+    }
     return mat;
   }
 
-  if (colorInput !== undefined) {
-    return applyColorToMaterialInstance(appearance.material, colorInput);
+  if (colorInput !== undefined || opacityOverride !== undefined) {
+    return applyAppearanceOverridesToMaterialInstance(
+      appearance.material,
+      colorInput,
+      opacityOverride,
+    );
   }
   return appearance.material;
 }
@@ -234,7 +285,7 @@ export function applyEuler(target: Euler, input: StyleEulerInput): void {
  * 把一个 {@link StyleAppearance} 序列化为分组 key，决定哪些 OID 会被合并到同一个
  * MeshCollector / split mesh 实例中。
  *
- * 包含的字段：material（实例 uuid 或回调身份）、color、mesh 工厂身份、TRS 与枢轴。
+ * 包含的字段：material（实例 uuid 或回调身份）、color、opacity、mesh 工厂身份、TRS 与枢轴。
  * 任意一项不同即应分到不同 group，否则它们会共用同一终态 Material/Mesh 实例
  * 造成"后写覆盖前写"。
  *
@@ -250,12 +301,14 @@ export function appearanceGroupKey(a: StyleAppearance): string {
         ? `matFn#${styleFnIdentity(a.material)}`
         : a.material.uuid;
   const colorPart = a.color !== undefined ? `|c:${colorHex(a.color)}` : "";
+  const opacityPart =
+    a.opacity != null ? `|o:${clampOpacity01(a.opacity).toFixed(4)}` : "";
   const meshPart = a.mesh ? `|meshFn#${styleFnIdentity(a.mesh)}` : "";
   const t = vec3Key(a.translation);
   const s = vec3Key(a.scale);
   const r = eulerKey(a.rotation);
   const o = vec3Key(a.origin);
-  return `${m}${colorPart}${meshPart}|${t}|${s}|${r}|${o}`;
+  return `${m}${colorPart}${opacityPart}${meshPart}|${t}|${s}|${r}|${o}`;
 }
 
 /**
