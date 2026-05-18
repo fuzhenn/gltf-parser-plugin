@@ -84,7 +84,7 @@ function load(root: string, data: any, options: any) {
     fetchSchema,
   });
   return loader.load({
-    skipAttributeTransform: true,
+    skipAttributeTransform: false,
   });
 }
 
