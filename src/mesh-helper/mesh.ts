@@ -10,14 +10,31 @@ import {
 import { TilesRenderer } from "3d-tiles-renderer";
 
 /**
+ * split 必须从「隐藏原片前」的完整 index 抽取三角形。
+ * `hidePartsByOids` 会改写 `geometry.index`；若用当前 index，被高亮 OID 的三角已被删掉 → split 为空。
+ */
+function getFeatureSplitSourceIndex(
+  tileMesh: Mesh,
+  geometry: BufferGeometry,
+): ArrayLike<number> | null {
+  const stored = (tileMesh.userData as { _originalIndex?: ArrayLike<number> })
+    ._originalIndex;
+  if (stored && stored.length > 0) return stored;
+  return geometry.index?.array ?? null;
+}
+
+/**
  * 合并多个 feature 的三角形为单一 BufferGeometry（共享顶点属性，index 为并集）
+ * @param strict true：三顶点 feature id 相同；false：任一顶点命中（细化 LOD 回退）
  */
 function createGeometryForFeatureIdSet(
   originalGeometry: BufferGeometry,
   featureIdAttr: BufferAttribute,
   targetFids: Set<number>,
+  sourceIndex: ArrayLike<number>,
+  strict: boolean,
 ): BufferGeometry | null {
-  if (targetFids.size === 0 || !originalGeometry.index) {
+  if (targetFids.size === 0 || sourceIndex.length === 0) {
     return null;
   }
 
@@ -27,19 +44,19 @@ function createGeometryForFeatureIdSet(
     newGeometry.setAttribute(attributeName, attributes[attributeName]);
   }
 
-  const originalIndex = originalGeometry.index.array;
   const newIndices: number[] = [];
 
-  for (let i = 0; i < originalIndex.length; i += 3) {
-    const a = originalIndex[i];
-    const b = originalIndex[i + 1];
-    const c = originalIndex[i + 2];
+  for (let i = 0; i < sourceIndex.length; i += 3) {
+    const a = sourceIndex[i]!;
+    const b = sourceIndex[i + 1]!;
+    const c = sourceIndex[i + 2]!;
     const fa = featureIdAttr.getX(a);
-    if (
-      fa === featureIdAttr.getX(b) &&
-      fa === featureIdAttr.getX(c) &&
-      targetFids.has(fa)
-    ) {
+    const fb = featureIdAttr.getX(b);
+    const fc = featureIdAttr.getX(c);
+    const match = strict
+      ? fa === fb && fa === fc && targetFids.has(fa)
+      : targetFids.has(fa) || targetFids.has(fb) || targetFids.has(fc);
+    if (match) {
       newIndices.push(a, b, c);
     }
   }
@@ -88,11 +105,25 @@ export function buildMergedSplitGeometryForTileMesh(
 
   if (targetFids.size === 0) return null;
 
-  const newGeometry = createGeometryForFeatureIdSet(
+  const sourceIndex = getFeatureSplitSourceIndex(originalMesh, geometry);
+  if (!sourceIndex) return null;
+
+  let newGeometry = createGeometryForFeatureIdSet(
     geometry,
     featureIdAttr,
     targetFids,
+    sourceIndex,
+    true,
   );
+  if (!newGeometry) {
+    newGeometry = createGeometryForFeatureIdSet(
+      geometry,
+      featureIdAttr,
+      targetFids,
+      sourceIndex,
+      false,
+    );
+  }
 
   if (!newGeometry || newGeometry.attributes.position.count === 0) {
     return null;
@@ -331,6 +362,14 @@ function disposeSplitGeometryAttributesNotSharedWithSources(
  * - **不要**对 `THREE.Mesh` 调用 `dispose()`：核心库中 `Mesh` 无此方法。
  */
 export function disposeMergedSplitMeshResources(mesh: Mesh): void {
+  const builtKey = "_gltfParserStyleAppearanceBuilt";
+  const built = mesh.userData?.[builtKey] as Object3D | undefined;
+  if (built) {
+    built.removeFromParent();
+    delete mesh.userData[builtKey];
+  }
+  mesh.removeFromParent();
+
   const tileMesh = mesh.userData?.originalMesh as Mesh | undefined;
   const tileMats = getMeshMaterials(tileMesh);
 
@@ -463,10 +502,11 @@ export function getPropertyDataMapFromTiles(
     const propertyTable = featureId.propertyTable;
 
     for (const oid of Object.keys(idMap).map(Number)) {
-      if (map.has(oid)) continue;
-
       const fid = idMap[oid];
       if (fid === undefined) continue;
+
+      const existing = map.get(oid);
+      if (existing != null) continue;
 
       try {
         const data = structuralMetadata.getPropertyTableData(
@@ -475,7 +515,9 @@ export function getPropertyDataMapFromTiles(
         ) as Record<string, unknown>;
         map.set(oid, internalData ? internalData(oid, data) : data);
       } catch {
-        map.set(oid, null);
+        if (!map.has(oid)) {
+          map.set(oid, null);
+        }
       }
     }
   });

@@ -14,6 +14,7 @@ import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
 } from "./plugin/style-condition-eval";
+import { detachStyledMeshFromScene } from "./plugin/style-appearance-shared";
 
 /** 挂在瓦片 feature mesh 的 userData 上：按「排序后 OID 集」复用合并 split 的 BufferGeometry */
 const TILE_SPLIT_GEOMETRY_CACHE_KEY = "_gltfParserMergedSplitGeometryCache";
@@ -329,6 +330,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     });
 
     for (const mesh of this._meshes) {
+      detachStyledMeshFromScene(mesh);
       disposeMergedSplitMeshResources(mesh);
     }
     this._meshes = newMeshes;
@@ -355,6 +357,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     for (const sm of this._meshes) {
       const orig = sm.userData?.originalMesh as Mesh | undefined;
       if (orig && sourceMeshes.has(orig)) {
+        detachStyledMeshFromScene(sm);
         disposeMergedSplitMeshResources(sm);
       } else {
         kept.push(sm);
@@ -375,6 +378,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     // 清理当前 collector 引用的 split mesh
     if (this._meshes.length > 0) {
       for (const mesh of this._meshes) {
+        detachStyledMeshFromScene(mesh);
         disposeMergedSplitMeshResources(mesh);
       }
     }

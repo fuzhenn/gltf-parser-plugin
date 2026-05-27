@@ -415,6 +415,21 @@ export function buildAppearanceGroupsFromPropertyMap(
 const STYLE_APPEARANCE_BUILT_KEY = "_gltfParserStyleAppearanceBuilt";
 
 /**
+ * 从场景图移除样式 split mesh（及 `appearance.mesh` 工厂产物）。
+ * 必须在把 `geometry` 置为 `null` 之前调用，否则渲染时 `Frustum.intersectsObject` 会读 `null.boundingSphere` 崩溃。
+ */
+export function detachStyledMeshFromScene(mesh: Mesh): void {
+  const built = mesh.userData?.[STYLE_APPEARANCE_BUILT_KEY] as
+    | Object3D
+    | undefined;
+  if (built) {
+    built.removeFromParent();
+    delete mesh.userData[STYLE_APPEARANCE_BUILT_KEY];
+  }
+  mesh.removeFromParent();
+}
+
+/**
  * 撤销 {@link applyStyleAppearanceToMesh} 对该 mesh 的所有副作用：
  *
  * 1. 把 material 还原为应用前的原始 Material；
@@ -464,12 +479,21 @@ export function restoreMeshAppearanceMaps(
  * 注意：本函数与 `StyleHelper.applyAppearanceToCollector` 共享同一套语义，
  * 任何修改需保持两边对齐。
  */
+function applyWorldMatrixAsLocalUnderRoot(mesh: Mesh, root: Object3D): void {
+  root.updateMatrixWorld(true);
+  const inv = new Matrix4().copy(root.matrixWorld).invert();
+  mesh.matrix.copy(mesh.matrixWorld).premultiply(inv);
+  mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+}
+
 export function applyStyleAppearanceToMesh(
   mesh: Mesh,
   appearance: StyleAppearance,
   scene: Object3D,
   maps: MeshAppearanceMaps,
 ): void {
+  if (!mesh.geometry) return;
+
   if (!maps.originalMaterialByMesh.has(mesh.uuid)) {
     maps.originalMaterialByMesh.set(mesh.uuid, mesh.material as Material);
   }
@@ -554,6 +578,7 @@ export function applyStyleAppearanceToMesh(
     }
   }
 
-  mesh.updateMatrixWorld();
+  mesh.updateMatrixWorld(true);
+  applyWorldMatrixAsLocalUnderRoot(mesh, scene);
   scene.add(mesh);
 }

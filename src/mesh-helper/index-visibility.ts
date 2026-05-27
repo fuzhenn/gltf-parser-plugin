@@ -1,9 +1,4 @@
-import {
-  BufferAttribute,
-  BufferGeometry,
-  Mesh,
-  Object3D,
-} from "three";
+import { BufferAttribute, Mesh, Object3D } from "three";
 
 /** 从 mesh 的 idMap 和 hiddenOids 构建需要隐藏的 feature ID 集合 */
 function getHiddenFeatureIds(
@@ -27,11 +22,14 @@ export function applyVisibilityToMesh(
   hiddenOids: Set<number>
 ): void {
   const { meshFeatures } = mesh.userData;
-  if (!meshFeatures) return;
+  if (!meshFeatures?.featureIds?.length) return;
 
-  const geometry = mesh.geometry as BufferGeometry;
+  const geometry = (meshFeatures.geometry ?? mesh.geometry) as import("three").BufferGeometry;
+  const featureId = meshFeatures.featureIds[0];
+  const featureIdAttr = geometry.getAttribute(
+    `_feature_id_${featureId.attribute}`,
+  );
   const index = geometry.index;
-  const featureIdAttr = geometry.getAttribute("_feature_id_0");
 
   if (!index || !featureIdAttr) return;
 
@@ -75,7 +73,8 @@ export function restoreMeshIndex(mesh: Mesh): void {
   const original = (mesh.userData as any)?._originalIndex;
   if (!original) return;
 
-  const geometry = mesh.geometry as BufferGeometry;
+  const { meshFeatures } = mesh.userData;
+  const geometry = (meshFeatures?.geometry ?? mesh.geometry) as import("three").BufferGeometry;
   if (!geometry?.index) return;
 
   geometry.setIndex(new BufferAttribute(original, 1));

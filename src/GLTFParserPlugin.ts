@@ -529,7 +529,11 @@ export class GLTFParserPlugin {
   };
 
   private _onLoadModel(scene: Object3D) {
-    this.meshSplit.clearCache();
+    scene.traverse((obj) => {
+      if (obj instanceof Mesh) {
+        this.meshSplit.disposeSplitMeshesByTile(obj);
+      }
+    });
 
     buildOidToFeatureIdMap(scene);
 
@@ -537,11 +541,13 @@ export class GLTFParserPlugin {
   }
 
   private _notifyCollectors(): void {
+    // 先 teardown 样式/高亮（从场景摘掉 split），再 _updateMeshes；否则 dispose 时 geometry=null 的 mesh 仍参与渲染会崩
+    this._styleHelper?.onTilesLoadEnd();
+    this._partHighlightHelper?.onTilesLoadEnd();
+
     for (const collector of this.collectors) {
       collector._updateMeshes();
     }
-    this._styleHelper?.onTilesLoadEnd();
-    this._partHighlightHelper?.onTilesLoadEnd();
   }
 
   /**

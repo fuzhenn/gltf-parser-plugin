@@ -16,6 +16,8 @@ import { buildStyleConditionEvaluatorMap } from "./style-condition-eval";
 import {
   applyStyleAppearanceToMesh,
   buildAppearanceGroupsFromPropertyMap,
+  detachStyledMeshFromScene,
+  restoreMeshAppearanceMaps,
   type MeshAppearanceMaps,
   type StoredTransform,
 } from "./style-appearance-shared";
@@ -86,21 +88,14 @@ export class StyleHelper {
     const styledOidsList = Array.from(this.styledOids);
     const hiddenOidsList = Array.from(this.hiddenOids);
 
+    const maps: MeshAppearanceMaps = {
+      originalMaterialByMesh: this.originalMaterialByMesh,
+      originalTransformByMesh: this.originalTransformByMesh,
+    };
     for (const collector of this.styleCollectors) {
       collector.meshes.forEach((mesh) => {
-        const original = this.originalMaterialByMesh.get(mesh.uuid);
-        if (original) {
-          mesh.material = original;
-          this.originalMaterialByMesh.delete(mesh.uuid);
-        }
-        const origT = this.originalTransformByMesh.get(mesh.uuid);
-        if (origT) {
-          mesh.position.copy(origT.position);
-          mesh.scale.copy(origT.scale);
-          mesh.rotation.copy(origT.rotation);
-          this.originalTransformByMesh.delete(mesh.uuid);
-        }
-        mesh.removeFromParent();
+        restoreMeshAppearanceMaps(mesh, maps);
+        detachStyledMeshFromScene(mesh);
       });
 
       const handler = this.meshChangeHandlers.get(

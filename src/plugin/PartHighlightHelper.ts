@@ -30,6 +30,7 @@ import {
   applyStyleAppearanceToMesh,
   applyVec3,
   buildPivotStyleMatrix,
+  detachStyledMeshFromScene,
   eulerKey,
   restoreMeshAppearanceMaps,
   vec3Key,
@@ -228,10 +229,13 @@ export class PartHighlightHelper {
         ],
       );
       const oidsSet = hl.oids ? new Set(hl.oids) : null;
+      const candidateOids = oidsSet
+        ? [...oidsSet]
+        : [...propertyByOid.keys()];
 
-      for (const [oid, propertyData] of propertyByOid) {
-        if (propertyData == null) continue;
-        if (oidsSet && !oidsSet.has(oid)) continue;
+      for (const oid of candidateOids) {
+        const propertyData = propertyByOid.get(oid) ?? null;
+        if (propertyData == null && !oidsSet) continue;
         if (
           hl.show &&
           !evaluateStyleCondition(hl.show, propertyData, evaluators)
@@ -274,9 +278,12 @@ export class PartHighlightHelper {
         conditions: (hl.conditions ?? []) as StyleCondition[],
       });
       const oidsSet = hl.oids ? new Set(hl.oids) : null;
-      for (const [oid, propertyData] of propertyByOid) {
-        if (propertyData == null) continue;
-        if (oidsSet && !oidsSet.has(oid)) continue;
+      const candidateOids = oidsSet
+        ? [...oidsSet]
+        : [...propertyByOid.keys()];
+      for (const oid of candidateOids) {
+        const propertyData = propertyByOid.get(oid) ?? null;
+        if (propertyData == null && !oidsSet) continue;
         if (
           hl.show &&
           !evaluateStyleCondition(hl.show, propertyData, evaluators)
@@ -293,7 +300,7 @@ export class PartHighlightHelper {
     for (const collector of this.highlightCollectors) {
       collector.meshes.forEach((mesh) => {
         restoreMeshAppearanceMaps(mesh, maps);
-        mesh.removeFromParent();
+        detachStyledMeshFromScene(mesh);
       });
       const handler = this.meshChangeHandlers.get(
         collector.getInteractionGroupKey(),
