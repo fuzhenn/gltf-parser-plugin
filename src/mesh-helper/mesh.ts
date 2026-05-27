@@ -240,7 +240,9 @@ function disposeSplitMaterialVsTile(
 }
 
 /** 合并 split 与 buildMergedSplitGeometryForTileMesh 的来源一致，可能与 mesh.geometry 非同一引用 */
-function getGeometrySourcesForTileFeatureMesh(tileMesh: Mesh): BufferGeometry[] {
+function getGeometrySourcesForTileFeatureMesh(
+  tileMesh: Mesh,
+): BufferGeometry[] {
   const out: BufferGeometry[] = [];
   const gMesh = tileMesh.geometry as BufferGeometry | undefined;
   if (gMesh) out.push(gMesh);
@@ -342,7 +344,11 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
     disposeSplitMaterialVsTile(mat, tileMat);
   }
 
-  /** 几何由 MeshSplitResolver 全局缓存多路复用时，仅释放材质；解绑 geometry 引用，便于 clearCache 对 BufferGeometry dispose */
+  /**
+   * splitGeometryManagedByCache为true时,只释放材质
+   * mesh.geometry 不是 split mesh 独占的，而是挂在 瓦片源 mesh 的 userData 缓存里（按 OID 集合键复用），
+   * 所以需要从 userData 缓存里删除，避免后续释放瓦片几何缓存时仍被 split Mesh 引用
+   */
   if (mesh.userData?.splitGeometryManagedByCache) {
     (mesh as unknown as { geometry: BufferGeometry | null }).geometry = null;
     return;
