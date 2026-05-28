@@ -8,6 +8,7 @@ import {
   getAllOidsFromTiles,
   getPropertyDataByOid,
   getTileMeshesByOid,
+  selectDominantTileMeshesForOidSet,
   type InternalData,
 } from "./mesh-helper";
 import {
@@ -175,7 +176,9 @@ export class MeshSplitResolver {
       }
     }
 
-    for (const tileMesh of candidateTiles) {
+    const tileMeshes = selectDominantTileMeshesForOidSet(candidateTiles, oidSet);
+
+    for (const tileMesh of tileMeshes) {
       const perTile = getTileSplitGeometryCache(tileMesh);
       let geometry: BufferGeometry | undefined = perTile.get(sortedKey);
       if (!geometry) {

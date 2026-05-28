@@ -133,6 +133,61 @@ export function buildMergedSplitGeometryForTileMesh(
 }
 
 /**
+ * 同一 OID 在父子 LOD 瓦片上常会同时存在。若对每个瓦片各建一层 split 高亮，
+ * 半透明材质会叠加，视觉上比单层更「实」。对共享 OID 只保留三角形更多的瓦片。
+ */
+export function selectDominantTileMeshesForOidSet(
+  candidateTiles: Iterable<Mesh>,
+  oidSet: ReadonlySet<number>,
+): Mesh[] {
+  type TileEntry = { mesh: Mesh; triCount: number; oids: Set<number> };
+  const entries: TileEntry[] = [];
+
+  for (const tileMesh of candidateTiles) {
+    const idMap = tileMesh.userData?.idMap as
+      | Record<number, number>
+      | undefined;
+    if (!idMap) continue;
+
+    const oidsOnMesh = new Set<number>();
+    for (const oid of oidSet) {
+      if (idMap[oid] !== undefined) oidsOnMesh.add(oid);
+    }
+    if (oidsOnMesh.size === 0) continue;
+
+    const probe = buildMergedSplitGeometryForTileMesh(tileMesh, oidSet);
+    if (!probe) continue;
+    const triCount = probe.index?.count ?? 0;
+    disposeMergedSplitGeometryCacheEntry(probe, tileMesh);
+    if (triCount === 0) continue;
+
+    entries.push({ mesh: tileMesh, triCount, oids: oidsOnMesh });
+  }
+
+  entries.sort((a, b) => b.triCount - a.triCount);
+
+  const selected: TileEntry[] = [];
+  for (const entry of entries) {
+    let dominated = false;
+    for (let i = selected.length - 1; i >= 0; i--) {
+      const kept = selected[i]!;
+      const sharesOid = [...entry.oids].some((oid) => kept.oids.has(oid));
+      if (!sharesOid) continue;
+
+      if (entry.triCount > kept.triCount) {
+        selected.splice(i, 1);
+      } else {
+        dominated = true;
+        break;
+      }
+    }
+    if (!dominated) selected.push(entry);
+  }
+
+  return selected.map((e) => e.mesh);
+}
+
+/**
  * 由已构建的 split 几何创建 Mesh（独立材质）；可选标记由全局几何缓存托管，dispose 时不释放几何缓冲。
  */
 export function createMergedSplitMeshFromGeometry(
