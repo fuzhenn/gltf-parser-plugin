@@ -1,5 +1,6 @@
 import { BufferAttribute, Mesh, Object3D } from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
+import { forEachLoadedFeatureMesh } from "./mesh";
 
 /** 与 split / 高亮一致：仅改 meshFeatures.geometry（若无则用 mesh.geometry） */
 function getVisibilityGeometry(mesh: Mesh): import("three").BufferGeometry | null {
@@ -42,17 +43,6 @@ function setGeometryIndexFromArray(
   geometry.index!.needsUpdate = true;
 }
 
-function collectFeatureMeshesUnder(
-  root: Object3D,
-  out: Map<string, Mesh>,
-): void {
-  root.traverse((obj) => {
-    const mesh = obj as Mesh;
-    if (!mesh.userData?.meshFeatures || mesh.userData?.isSplit) return;
-    if (!out.has(mesh.uuid)) out.set(mesh.uuid, mesh);
-  });
-}
-
 /**
  * 对当前已加载的所有瓦片 feature mesh 应用显隐（按 mesh.uuid 去重）。
  * 同时遍历 tiles.group 与各 tile.engineData.scene。
@@ -61,25 +51,16 @@ export function applyVisibilityToAllLoadedMeshes(
   tiles: TilesRenderer,
   hiddenOids: Set<number>,
 ): void {
-  const meshes = new Map<string, Mesh>();
-  collectFeatureMeshesUnder(tiles.group, meshes);
-  tiles.traverse((tile: unknown) => {
-    const scene = (tile as { engineData?: { scene?: Object3D } }).engineData
-      ?.scene;
-    if (scene) collectFeatureMeshesUnder(scene, meshes);
-    return true;
-  }, null);
-
   if (hiddenOids.size === 0) {
-    for (const mesh of meshes.values()) restoreMeshIndex(mesh);
+    forEachLoadedFeatureMesh(tiles, (mesh) => restoreMeshIndex(mesh));
     return;
   }
 
-  for (const mesh of meshes.values()) {
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
     if (isTileFeatureSourceMesh(mesh)) {
       applyVisibilityToMesh(mesh, hiddenOids);
     }
-  }
+  });
 }
 
 /** 对单个 mesh 应用可见性过滤（通过修改 index 排除隐藏的三角形） */

@@ -515,6 +515,33 @@ function isFeatureSourceMesh(mesh: Mesh): boolean {
 }
 
 /**
+ * 遍历当前已加载的瓦片 feature mesh（tiles.group + 各 tile.engineData.scene，按 uuid 去重）。
+ * 新瓦片在挂到 group 前只存在于 tile scene，样式/高亮/显隐须走此入口。
+ */
+export function forEachLoadedFeatureMesh(
+  tiles: TilesRenderer,
+  fn: (mesh: Mesh) => void,
+): void {
+  const seen = new Set<string>();
+  const visitRoot = (root: Object3D) => {
+    root.traverse((child) => {
+      const mesh = child as Mesh;
+      if (!isFeatureSourceMesh(mesh)) return;
+      if (seen.has(mesh.uuid)) return;
+      seen.add(mesh.uuid);
+      fn(mesh);
+    });
+  };
+  visitRoot(tiles.group);
+  tiles.traverse((tile: unknown) => {
+    const scene = (tile as { engineData?: { scene?: Object3D } }).engineData
+      ?.scene;
+    if (scene) visitRoot(scene);
+    return true;
+  }, null);
+}
+
+/**
  * 内部数据钩子：在原始属性表数据基础上派生/注入额外字段（如层级 `_path`）。
  * 返回新对象；约定不修改入参。
  */
@@ -529,9 +556,7 @@ export type InternalData = (
 export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
   const oidSet = new Set<number>();
 
-  tiles.group.traverse((child: Object3D) => {
-    const mesh = child as Mesh;
-    if (!isFeatureSourceMesh(mesh)) return;
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
     const idMap = mesh.userData.idMap as Record<number, number> | undefined;
     if (!idMap) return;
     for (const oid of Object.keys(idMap).map(Number)) {
@@ -552,11 +577,9 @@ export function getPropertyDataByOid(
 ): Record<string, unknown> | null {
   let result: Record<string, unknown> | null = null;
 
-  tiles.group.traverse((child: Object3D) => {
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
     if (result) return;
 
-    const mesh = child as Mesh;
-    if (!isFeatureSourceMesh(mesh)) return;
     const idMap = mesh.userData.idMap as Record<number, number> | undefined;
     if (!idMap || idMap[oid] === undefined) return;
 
@@ -588,9 +611,7 @@ export function getPropertyDataMapFromTiles(
 ): Map<number, Record<string, unknown> | null> {
   const map = new Map<number, Record<string, unknown> | null>();
 
-  tiles.group.traverse((child: Object3D) => {
-    const mesh = child as Mesh;
-    if (!isFeatureSourceMesh(mesh)) return;
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
     const idMap = mesh.userData.idMap as Record<number, number> | undefined;
     if (!idMap) return;
 
@@ -628,9 +649,8 @@ export function getPropertyDataMapFromTiles(
 export function getTileMeshesByOid(tiles: TilesRenderer, oid: number): Mesh[] {
   const tileMeshes: Mesh[] = [];
 
-  tiles.group.traverse((child: Object3D) => {
-    const mesh = child as Mesh;
-    if (isFeatureSourceMesh(mesh) && checkMeshContainsOid(mesh, oid)) {
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
+    if (checkMeshContainsOid(mesh, oid)) {
       tileMeshes.push(mesh);
     }
   });

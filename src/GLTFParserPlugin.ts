@@ -516,11 +516,11 @@ export class GLTFParserPlugin {
     this._notifyCollectors();
   };
 
-  /** LRU 瓦片再次显示（仅 group.add）时不会走 load-model，须重刷 hiddenOids */
+  /** LRU 瓦片再次显示（仅 group.add）时不会走 load-model，须重刷显隐/样式/高亮 */
   private _onTileVisibilityChangeCB = (event: TileVisibilityChangeEvent) => {
     if (!event.visible || !event.scene) return;
     buildOidToFeatureIdMap(event.scene);
-    this.partVisibility.applyVisibilityToScene(event.scene);
+    this._notifyCollectors();
   };
 
   /**
