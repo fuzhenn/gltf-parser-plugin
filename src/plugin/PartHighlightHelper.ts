@@ -429,6 +429,25 @@ export class PartHighlightHelper {
   }
 
   /**
+   * 仅刷新 hidePartsByOids 列表（新瓦片 OID），不 teardown 高亮收集器。
+   */
+  refreshHiddenOidsOnly(): void {
+    if (this.highlightGroups.size === 0) return;
+
+    const tiles = this.context.getTiles();
+    if (!tiles) return;
+
+    const propertyByOid = getPropertyDataMapFromTiles(
+      tiles,
+      this.context.getInternalData?.(),
+    );
+    const { styledOids } = this.buildAppearanceGroups(propertyByOid);
+    const unionHide = this.collectUnionShowHide(propertyByOid);
+    const oidsToHide = [...new Set([...styledOids, ...unionHide])];
+    this.context.hidePartsByOids(oidsToHide);
+  }
+
+  /**
    * 瓦片加载完成后重新应用高亮（由插件调用）
    */
   onTilesLoadEnd(): void {

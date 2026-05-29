@@ -119,6 +119,9 @@ export class GLTFParserPlugin {
     () => this._internalData,
   );
   private collectors: Set<MeshCollector> = new Set();
+  /** 合并缩放时高频的 tile-visibility-change，避免每帧全量 applyStyle/reapplyAll */
+  private _tileVisibilityFollowUpTimer: ReturnType<typeof setTimeout> | null =
+    null;
 
   /**
    * Create a GLTFParserPlugin instance
@@ -516,12 +519,43 @@ export class GLTFParserPlugin {
     this._notifyCollectors();
   };
 
-  /** LRU 瓦片再次显示（仅 group.add）时不会走 load-model，须重刷显隐/样式/高亮 */
+  /**
+   * LRU 瓦片再次显示时不会走 load-model。
+   * 仅对本 scene 做轻量显隐；样式/高亮全量重算合并到防抖回调（缩放时会高频触发）。
+   */
   private _onTileVisibilityChangeCB = (event: TileVisibilityChangeEvent) => {
     if (!event.visible || !event.scene) return;
     buildOidToFeatureIdMap(event.scene);
-    this._notifyCollectors();
+    this.partVisibility.applyVisibilityToScene(event.scene);
+    this._scheduleTileVisibilityFollowUp();
   };
+
+  private _scheduleTileVisibilityFollowUp(): void {
+    if (this._tileVisibilityFollowUpTimer != null) {
+      clearTimeout(this._tileVisibilityFollowUpTimer);
+    }
+    this._tileVisibilityFollowUpTimer = setTimeout(() => {
+      this._tileVisibilityFollowUpTimer = null;
+      this._runTileVisibilityFollowUp();
+    }, 250);
+  }
+
+  /** 防抖后：只刷新隐藏 OID 列表 + 收集器 mesh，不 teardown 样式/高亮收集器 */
+  private _runTileVisibilityFollowUp(): void {
+    this._styleHelper?.refreshHiddenOidsOnly();
+    this._partHighlightHelper?.refreshHiddenOidsOnly();
+
+    for (const collector of this.collectors) {
+      collector._updateMeshes();
+    }
+  }
+
+  private _clearTileVisibilityFollowUpTimer(): void {
+    if (this._tileVisibilityFollowUpTimer != null) {
+      clearTimeout(this._tileVisibilityFollowUpTimer);
+      this._tileVisibilityFollowUpTimer = null;
+    }
+  }
 
   /**
    * 瓦片卸载（LRU 等触发 disposeTile）前，先卸掉依赖该 tile 场景的 split mesh，再清瓦片 userData 上的几何缓存。
@@ -809,6 +843,8 @@ export class GLTFParserPlugin {
    * Plugin disposal
    */
   dispose() {
+    this._clearTileVisibilityFollowUpTimer();
+
     if (this.tiles) {
       this.tiles.manager.removeHandler(this._gltfRegex);
       this.tiles.removeEventListener("load-model", this._onLoadModelCB);

@@ -115,30 +115,31 @@ export class StyleHelper {
     this.context.showPartsByOids([...styledOidsList, ...hiddenOidsList]);
   }
 
-  private applyStyle(): void {
-    const style = this.style;
-    if (!style) return;
+  /**
+   * 仅重算并应用 hidePartsByOids（含新进入 LRU 的瓦片 OID），不重建收集器。
+   * 由插件在 tile-visibility-change 防抖后调用。
+   */
+  refreshHiddenOidsOnly(): void {
+    const resolved = this.resolveStyleFromTiles();
+    if (resolved) {
+      this.context.hidePartsByOids(resolved.oidsToHide);
+    }
+  }
 
-    const rootGroup = this.context.getRootGroup();
-    if (!rootGroup) return;
+  private resolveStyleFromTiles(): {
+    oidsToHide: number[];
+    groups: ReturnType<typeof buildAppearanceGroupsFromPropertyMap>["groups"];
+  } | null {
+    const style = this.style;
+    if (!style) return null;
 
     const tiles = this.context.getTiles();
-    if (!tiles) return;
+    if (!tiles) return null;
 
     const propertyByOid = getPropertyDataMapFromTiles(
       tiles,
       this.context.getInternalData?.(),
     );
-
-    for (const collector of this.styleCollectors) {
-      const h = this.meshChangeHandlers.get(
-        collector.getInteractionGroupKey(),
-      );
-      if (h) collector.removeEventListener("mesh-change", h);
-      this.context.releaseMeshCollector(collector);
-    }
-    this.styleCollectors = [];
-    this.meshChangeHandlers.clear();
 
     const evaluators = buildStyleConditionEvaluatorMap({
       show: style.show,
@@ -150,6 +151,7 @@ export class StyleHelper {
       evaluators,
     );
 
+    this.styledOids.clear();
     for (const { oids } of groups.values()) {
       for (const oid of oids) {
         this.styledOids.add(oid);
@@ -161,6 +163,30 @@ export class StyleHelper {
     for (const { oids } of groups.values()) {
       oidsToHide.push(...oids);
     }
+    return { oidsToHide: [...new Set(oidsToHide)], groups };
+  }
+
+  private applyStyle(): void {
+    const style = this.style;
+    if (!style) return;
+
+    const rootGroup = this.context.getRootGroup();
+    if (!rootGroup) return;
+
+    for (const collector of this.styleCollectors) {
+      const h = this.meshChangeHandlers.get(
+        collector.getInteractionGroupKey(),
+      );
+      if (h) collector.removeEventListener("mesh-change", h);
+      this.context.releaseMeshCollector(collector);
+    }
+    this.styleCollectors = [];
+    this.meshChangeHandlers.clear();
+
+    const resolved = this.resolveStyleFromTiles();
+    if (!resolved) return;
+
+    const { oidsToHide, groups } = resolved;
 
     const maps: MeshAppearanceMaps = {
       originalMaterialByMesh: this.originalMaterialByMesh,
