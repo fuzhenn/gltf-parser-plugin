@@ -13,7 +13,8 @@ import { TilesRenderer } from "3d-tiles-renderer";
  * split 必须从「隐藏原片前」的完整 index 抽取三角形。
  * `hidePartsByOids` 会改写 `geometry.index`；若用当前 index，被高亮 OID 的三角已被删掉 → split 为空。
  */
-function getFeatureSplitSourceIndex(
+/** 完整 index（优先 userData 备份），供 split / hide 使用 */
+export function getFeatureSplitSourceIndex(
   tileMesh: Mesh,
   geometry: BufferGeometry,
 ): ArrayLike<number> | null {
@@ -21,6 +22,50 @@ function getFeatureSplitSourceIndex(
     ._originalIndex;
   if (stored && stored.length > 0) return stored;
   return geometry.index?.array ?? null;
+}
+
+/** 首次隐藏前拷贝完整 index，避免在已过滤的 index 上备份 */
+export function snapshotOriginalIndexForMesh(
+  mesh: Mesh,
+  geometry: BufferGeometry,
+): Uint16Array | Uint32Array | null {
+  const src = getFeatureSplitSourceIndex(mesh, geometry);
+  if (!src || src.length === 0) return null;
+  if (src instanceof Uint32Array) return new Uint32Array(src);
+  if (src instanceof Uint16Array) return new Uint16Array(src);
+  return new Uint32Array(Array.from(src));
+}
+
+export function triangleMatchesFeatureIdSet(
+  fa: number,
+  fb: number,
+  fc: number,
+  targetFids: Set<number>,
+  strict: boolean,
+): boolean {
+  return strict
+    ? fa === fb && fa === fc && targetFids.has(fa)
+    : targetFids.has(fa) || targetFids.has(fb) || targetFids.has(fc);
+}
+
+/** 与 buildMergedSplitGeometryForTileMesh 一致：有 strict 三角则 strict，否则 loose */
+export function resolveHideUsesLooseMode(
+  sourceIndex: ArrayLike<number>,
+  featureIdAttr: { getX(index: number): number },
+  targetFids: Set<number>,
+): boolean {
+  for (let i = 0; i < sourceIndex.length; i += 3) {
+    const a = sourceIndex[i]!;
+    const b = sourceIndex[i + 1]!;
+    const c = sourceIndex[i + 2]!;
+    const fa = featureIdAttr.getX(a);
+    const fb = featureIdAttr.getX(b);
+    const fc = featureIdAttr.getX(c);
+    if (triangleMatchesFeatureIdSet(fa, fb, fc, targetFids, true)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -53,10 +98,7 @@ function createGeometryForFeatureIdSet(
     const fa = featureIdAttr.getX(a);
     const fb = featureIdAttr.getX(b);
     const fc = featureIdAttr.getX(c);
-    const match = strict
-      ? fa === fb && fa === fc && targetFids.has(fa)
-      : targetFids.has(fa) || targetFids.has(fb) || targetFids.has(fc);
-    if (match) {
+    if (triangleMatchesFeatureIdSet(fa, fb, fc, targetFids, strict)) {
       newIndices.push(a, b, c);
     }
   }

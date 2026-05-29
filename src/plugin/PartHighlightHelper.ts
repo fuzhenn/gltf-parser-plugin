@@ -187,8 +187,6 @@ export class PartHighlightHelper {
   private originalTransformByMesh = new Map<string, StoredTransform>();
   private meshChangeHandlers = new Map<string, () => void>();
   private highlightCollectors: MeshCollector[] = [];
-  /** 上次 hidePartsByOids 传入的 OID 列表，用于重新应用前 showParts */
-  private lastHiddenOids: number[] = [];
 
   constructor(private context: PartEffectHost) {}
 
@@ -317,12 +315,8 @@ export class PartHighlightHelper {
   private reapplyAll(): void {
     this.clearCollectorsAndRestoreMeshes();
 
-    if (this.lastHiddenOids.length > 0) {
-      this.context.showPartsByOids(this.lastHiddenOids);
-    }
-
     if (this.highlightGroups.size === 0) {
-      this.lastHiddenOids = [];
+      this.context.hidePartsByOids([]);
       return;
     }
 
@@ -338,7 +332,6 @@ export class PartHighlightHelper {
     const unionHide = this.collectUnionShowHide(propertyByOid);
 
     const oidsToHide = [...new Set([...styledOids, ...unionHide])];
-    this.lastHiddenOids = oidsToHide;
 
     const maps = this.getMaps();
 

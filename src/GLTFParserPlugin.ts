@@ -65,6 +65,13 @@ interface TileWithCache {
   };
 }
 
+interface TileVisibilityChangeEvent {
+  type: "tile-visibility-change";
+  scene: Object3D;
+  tile: unknown;
+  visible: boolean;
+}
+
 export class GLTFParserPlugin {
   name = "GLTFParserPlugin";
 
@@ -164,6 +171,10 @@ export class GLTFParserPlugin {
     tiles.addEventListener("load-model", this._onLoadModelCB);
     tiles.addEventListener("dispose-model", this._onDisposeModelCB);
     tiles.addEventListener("tiles-load-end", this._onTilesLoadEndCB);
+    tiles.addEventListener(
+      "tile-visibility-change",
+      this._onTileVisibilityChangeCB,
+    );
     tiles.addEventListener("load-root-tileset", this._onLoadRootTilesetCB);
     this._syncStructureFromTileset();
 
@@ -502,8 +513,14 @@ export class GLTFParserPlugin {
    */
   private _onLoadModelCB = ({ scene }: { scene: Object3D }) => {
     this._onLoadModel(scene);
-    // 新瓦片进场景后更新各 MeshCollector 并重应用样式/高亮，避免仅依赖 tiles-load-end 时出现未生效
     this._notifyCollectors();
+  };
+
+  /** LRU 瓦片再次显示（仅 group.add）时不会走 load-model，须重刷 hiddenOids */
+  private _onTileVisibilityChangeCB = (event: TileVisibilityChangeEvent) => {
+    if (!event.visible || !event.scene) return;
+    buildOidToFeatureIdMap(event.scene);
+    this.partVisibility.applyVisibilityToScene(event.scene);
   };
 
   /**
@@ -541,13 +558,15 @@ export class GLTFParserPlugin {
   }
 
   private _notifyCollectors(): void {
-    // 先 teardown 样式/高亮（从场景摘掉 split），再 _updateMeshes；否则 dispose 时 geometry=null 的 mesh 仍参与渲染会崩
+    // 先 teardown 样式/高亮（从场景摘掉 split），再 _updateMeshes；否则  geometry=null 的 mesh 仍参与渲染会崩
     this._styleHelper?.onTilesLoadEnd();
     this._partHighlightHelper?.onTilesLoadEnd();
 
     for (const collector of this.collectors) {
       collector._updateMeshes();
     }
+
+    this.partVisibility.reapplyHidden();
   }
 
   /**
@@ -795,6 +814,10 @@ export class GLTFParserPlugin {
       this.tiles.removeEventListener("load-model", this._onLoadModelCB);
       this.tiles.removeEventListener("dispose-model", this._onDisposeModelCB);
       this.tiles.removeEventListener("tiles-load-end", this._onTilesLoadEndCB);
+      this.tiles.removeEventListener(
+        "tile-visibility-change",
+        this._onTileVisibilityChangeCB,
+      );
       this.tiles.removeEventListener(
         "load-root-tileset",
         this._onLoadRootTilesetCB,
