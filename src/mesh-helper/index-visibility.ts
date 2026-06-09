@@ -1,6 +1,10 @@
 import { BufferAttribute, Mesh, Object3D } from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
-import { forEachLoadedFeatureMesh } from "./mesh";
+import {
+  forEachLoadedFeatureMesh,
+  resolveHideUsesLooseMode,
+  triangleMatchesFeatureIdSet,
+} from "./mesh";
 
 /** 与 split / 高亮一致：仅改 meshFeatures.geometry（若无则用 mesh.geometry） */
 function getVisibilityGeometry(mesh: Mesh): import("three").BufferGeometry | null {
@@ -108,11 +112,24 @@ export function applyVisibilityToMesh(
     ? new Uint32Array(originalArray.length)
     : new Uint16Array(originalArray.length);
 
+  const useLoose = resolveHideUsesLooseMode(
+    originalArray,
+    featureIdAttr,
+    hiddenFeatureIds,
+  );
+  const strict = !useLoose;
+
   let writeOffset = 0;
   for (let i = 0; i < originalArray.length; i += 3) {
     const a = originalArray[i]!;
-    const fid = featureIdAttr.getX(a);
-    if (hiddenFeatureIds.has(fid)) continue;
+    const b = originalArray[i + 1]!;
+    const c = originalArray[i + 2]!;
+    const fa = featureIdAttr.getX(a);
+    const fb = featureIdAttr.getX(b);
+    const fc = featureIdAttr.getX(c);
+    if (triangleMatchesFeatureIdSet(fa, fb, fc, hiddenFeatureIds, strict)) {
+      continue;
+    }
 
     filtered[writeOffset++] = originalArray[i];
     filtered[writeOffset++] = originalArray[i + 1];

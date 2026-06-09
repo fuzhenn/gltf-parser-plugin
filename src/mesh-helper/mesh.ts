@@ -1,4 +1,5 @@
 import {
+  Box3,
   BufferAttribute,
   BufferGeometry,
   Material,
@@ -48,7 +49,10 @@ export function triangleMatchesFeatureIdSet(
     : targetFids.has(fa) || targetFids.has(fb) || targetFids.has(fc);
 }
 
-/** 与 buildMergedSplitGeometryForTileMesh 一致：有 strict 三角则 strict，否则 loose */
+/**
+ * split / hide 共用：存在「loose 命中但 strict 不命中」的三角时须用 loose，
+ * 否则 strict 只抽一部分而 hide 会删掉更多 → 高亮缺块。
+ */
 export function resolveHideUsesLooseMode(
   sourceIndex: ArrayLike<number>,
   featureIdAttr: { getX(index: number): number },
@@ -61,11 +65,14 @@ export function resolveHideUsesLooseMode(
     const fa = featureIdAttr.getX(a);
     const fb = featureIdAttr.getX(b);
     const fc = featureIdAttr.getX(c);
-    if (triangleMatchesFeatureIdSet(fa, fb, fc, targetFids, true)) {
-      return false;
+    if (
+      triangleMatchesFeatureIdSet(fa, fb, fc, targetFids, false) &&
+      !triangleMatchesFeatureIdSet(fa, fb, fc, targetFids, true)
+    ) {
+      return true;
     }
   }
-  return true;
+  return false;
 }
 
 /**
@@ -150,22 +157,18 @@ export function buildMergedSplitGeometryForTileMesh(
   const sourceIndex = getFeatureSplitSourceIndex(originalMesh, geometry);
   if (!sourceIndex) return null;
 
-  let newGeometry = createGeometryForFeatureIdSet(
+  const useLoose = resolveHideUsesLooseMode(
+    sourceIndex,
+    featureIdAttr,
+    targetFids,
+  );
+  const newGeometry = createGeometryForFeatureIdSet(
     geometry,
     featureIdAttr,
     targetFids,
     sourceIndex,
-    true,
+    !useLoose,
   );
-  if (!newGeometry) {
-    newGeometry = createGeometryForFeatureIdSet(
-      geometry,
-      featureIdAttr,
-      targetFids,
-      sourceIndex,
-      false,
-    );
-  }
 
   if (!newGeometry || newGeometry.attributes.position.count === 0) {
     return null;
@@ -174,15 +177,54 @@ export function buildMergedSplitGeometryForTileMesh(
   return newGeometry;
 }
 
+function splitBBoxContains(outer: Box3, inner: Box3, eps = 1e-4): boolean {
+  return (
+    outer.min.x <= inner.min.x + eps &&
+    outer.min.y <= inner.min.y + eps &&
+    outer.min.z <= inner.min.z + eps &&
+    outer.max.x >= inner.max.x - eps &&
+    outer.max.y >= inner.max.y - eps &&
+    outer.max.z >= inner.max.z - eps
+  );
+}
+
+function worldSplitBBox(tileMesh: Mesh, localBBox: Box3): Box3 {
+  tileMesh.updateWorldMatrix(true, false);
+  return localBBox.clone().applyMatrix4(tileMesh.matrixWorld);
+}
+
+function measureSplitGeometryForTile(
+  tileMesh: Mesh,
+  oidSet: ReadonlySet<number>,
+): { triCount: number; bbox: Box3 } | null {
+  const probe = buildMergedSplitGeometryForTileMesh(tileMesh, oidSet);
+  if (!probe) return null;
+  const triCount = probe.index?.count ?? 0;
+  if (triCount === 0) {
+    disposeMergedSplitGeometryCacheEntry(probe, tileMesh);
+    return null;
+  }
+  probe.computeBoundingBox();
+  const local = probe.boundingBox?.clone() ?? new Box3();
+  disposeMergedSplitGeometryCacheEntry(probe, tileMesh);
+  return { triCount, bbox: worldSplitBBox(tileMesh, local) };
+}
+
 /**
- * 同一 OID 在父子 LOD 瓦片上常会同时存在。若对每个瓦片各建一层 split 高亮，
- * 半透明材质会叠加，视觉上比单层更「实」。对共享 OID 只保留三角形更多的瓦片。
+ * 同一 OID 在父子 LOD 瓦片上常会同时存在。
+ * - 空间重叠的 LOD（子瓦片 bbox 包住父瓦片）：只保留更细的一层，避免半透明高亮叠加。
+ * - 空间互补的多瓦片（如各带一半轮胎）：全部保留，否则 hide 全瓦片而 split 只出一半 → 缺块。
  */
 export function selectDominantTileMeshesForOidSet(
   candidateTiles: Iterable<Mesh>,
   oidSet: ReadonlySet<number>,
 ): Mesh[] {
-  type TileEntry = { mesh: Mesh; triCount: number; oids: Set<number> };
+  type TileEntry = {
+    mesh: Mesh;
+    triCount: number;
+    oids: Set<number>;
+    bbox: Box3;
+  };
   const entries: TileEntry[] = [];
 
   for (const tileMesh of candidateTiles) {
@@ -197,13 +239,15 @@ export function selectDominantTileMeshesForOidSet(
     }
     if (oidsOnMesh.size === 0) continue;
 
-    const probe = buildMergedSplitGeometryForTileMesh(tileMesh, oidSet);
-    if (!probe) continue;
-    const triCount = probe.index?.count ?? 0;
-    disposeMergedSplitGeometryCacheEntry(probe, tileMesh);
-    if (triCount === 0) continue;
+    const measured = measureSplitGeometryForTile(tileMesh, oidSet);
+    if (!measured) continue;
 
-    entries.push({ mesh: tileMesh, triCount, oids: oidsOnMesh });
+    entries.push({
+      mesh: tileMesh,
+      triCount: measured.triCount,
+      oids: oidsOnMesh,
+      bbox: measured.bbox,
+    });
   }
 
   entries.sort((a, b) => b.triCount - a.triCount);
@@ -211,14 +255,14 @@ export function selectDominantTileMeshesForOidSet(
   const selected: TileEntry[] = [];
   for (const entry of entries) {
     let dominated = false;
-    for (let i = selected.length - 1; i >= 0; i--) {
-      const kept = selected[i]!;
+    for (const kept of selected) {
       const sharesOid = [...entry.oids].some((oid) => kept.oids.has(oid));
       if (!sharesOid) continue;
 
-      if (entry.triCount > kept.triCount) {
-        selected.splice(i, 1);
-      } else {
+      if (
+        kept.triCount >= entry.triCount &&
+        splitBBoxContains(kept.bbox, entry.bbox)
+      ) {
         dominated = true;
         break;
       }
