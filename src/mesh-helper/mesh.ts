@@ -177,6 +177,27 @@ export function buildMergedSplitGeometryForTileMesh(
   return newGeometry;
 }
 
+function splitBBoxVolume(box: Box3): number {
+  const sx = Math.max(0, box.max.x - box.min.x);
+  const sy = Math.max(0, box.max.y - box.min.y);
+  const sz = Math.max(0, box.max.z - box.min.z);
+  return sx * sy * sz;
+}
+
+function splitBBoxIoU(a: Box3, b: Box3): number {
+  const intersection = new Box3().copy(a).intersect(b);
+  if (intersection.isEmpty()) return 0;
+  const iVol = splitBBoxVolume(intersection);
+  const union = splitBBoxVolume(a) + splitBBoxVolume(b) - iVol;
+  return union > 0 ? iVol / union : 0;
+}
+
+/** 两瓦片 split 几何在世界空间是否属于同一构件的 LOD 重叠（而非空间互补分片） */
+function tilesShareLodOverlap(a: Box3, b: Box3): boolean {
+  if (splitBBoxContains(a, b) || splitBBoxContains(b, a)) return true;
+  return splitBBoxIoU(a, b) >= 0.45;
+}
+
 function splitBBoxContains(outer: Box3, inner: Box3, eps = 1e-4): boolean {
   return (
     outer.min.x <= inner.min.x + eps &&
@@ -212,8 +233,8 @@ function measureSplitGeometryForTile(
 
 /**
  * 同一 OID 在父子 LOD 瓦片上常会同时存在。
- * - 空间重叠的 LOD（子瓦片 bbox 包住父瓦片）：只保留更细的一层，避免半透明高亮叠加。
- * - 空间互补的多瓦片（如各带一半轮胎）：全部保留，否则 hide 全瓦片而 split 只出一半 → 缺块。
+ * - IoU 高 / bbox 包含 → 视为 LOD 重叠，只保留三角更多的瓦片（避免重复高亮与错位叠加）。
+ * - IoU 低 → 视为互补分片（如各带一半轮胎），全部保留。
  */
 export function selectDominantTileMeshesForOidSet(
   candidateTiles: Iterable<Mesh>,
@@ -255,16 +276,16 @@ export function selectDominantTileMeshesForOidSet(
   const selected: TileEntry[] = [];
   for (const entry of entries) {
     let dominated = false;
-    for (const kept of selected) {
+    for (let i = selected.length - 1; i >= 0; i--) {
+      const kept = selected[i]!;
       const sharesOid = [...entry.oids].some((oid) => kept.oids.has(oid));
       if (!sharesOid) continue;
+      if (!tilesShareLodOverlap(kept.bbox, entry.bbox)) continue;
 
-      if (
-        kept.triCount >= entry.triCount &&
-        splitBBoxContains(kept.bbox, entry.bbox)
-      ) {
+      if (entry.triCount > kept.triCount) {
+        selected.splice(i, 1);
+      } else {
         dominated = true;
-        break;
       }
     }
     if (!dominated) selected.push(entry);
@@ -305,11 +326,10 @@ export function createMergedSplitMeshFromGeometry(
 
   const newMaterial = (originalMesh.material as Material).clone();
   const newMesh = new Mesh(newGeometry, newMaterial);
-  newMesh.parent = originalMesh.parent;
+  originalMesh.updateWorldMatrix(true, false);
   newMesh.position.copy(originalMesh.position);
   newMesh.rotation.copy(originalMesh.rotation);
   newMesh.scale.copy(originalMesh.scale);
-  newMesh.matrixWorld.copy(originalMesh.matrixWorld);
 
   let propertyData: unknown = null;
   if (structuralMetadata && idMap[primaryOid] !== undefined) {

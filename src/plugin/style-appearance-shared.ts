@@ -479,10 +479,14 @@ export function restoreMeshAppearanceMaps(
  * 注意：本函数与 `StyleHelper.applyAppearanceToCollector` 共享同一套语义，
  * 任何修改需保持两边对齐。
  */
-function applyWorldMatrixAsLocalUnderRoot(mesh: Mesh, root: Object3D): void {
+function placeMeshUnderRoot(
+  mesh: Mesh,
+  root: Object3D,
+  worldMatrix: Matrix4,
+): void {
   root.updateMatrixWorld(true);
   const inv = new Matrix4().copy(root.matrixWorld).invert();
-  mesh.matrix.copy(mesh.matrixWorld).premultiply(inv);
+  mesh.matrix.copy(worldMatrix).premultiply(inv);
   mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
 }
 
@@ -494,25 +498,30 @@ export function applyStyleAppearanceToMesh(
 ): void {
   if (!mesh.geometry) return;
 
-  if (!maps.originalMaterialByMesh.has(mesh.uuid)) {
-    maps.originalMaterialByMesh.set(mesh.uuid, mesh.material as Material);
+  /** split mesh（工厂模式下几何/位姿的锚点） */
+  const anchorMesh = mesh;
+
+  if (!maps.originalMaterialByMesh.has(anchorMesh.uuid)) {
+    maps.originalMaterialByMesh.set(anchorMesh.uuid, anchorMesh.material as Material);
   }
-  const originalMaterial = maps.originalMaterialByMesh.get(mesh.uuid)!;
+  const originalMaterial = maps.originalMaterialByMesh.get(anchorMesh.uuid)!;
   const resolvedMaterial = resolveStyleMaterial(appearance, originalMaterial);
 
+  let renderMesh: Mesh = anchorMesh;
+
   if (appearance.mesh) {
-    const originalMesh = mesh;
-    const prevBuilt = originalMesh.userData?.[STYLE_APPEARANCE_BUILT_KEY] as
+    anchorMesh.updateMatrixWorld(true);
+    const prevBuilt = anchorMesh.userData?.[STYLE_APPEARANCE_BUILT_KEY] as
       | Object3D
       | undefined;
     if (prevBuilt) {
       prevBuilt.removeFromParent();
     }
-    const built = appearance.mesh(originalMesh.geometry, resolvedMaterial);
-    originalMesh.userData[STYLE_APPEARANCE_BUILT_KEY] = built;
-    mesh = built as unknown as Mesh;
+    const built = appearance.mesh(anchorMesh.geometry, resolvedMaterial);
+    anchorMesh.userData[STYLE_APPEARANCE_BUILT_KEY] = built;
+    renderMesh = built as unknown as Mesh;
   } else {
-    mesh.material = resolvedMaterial;
+    anchorMesh.material = resolvedMaterial;
   }
 
   const needTransform =
@@ -521,17 +530,18 @@ export function applyStyleAppearanceToMesh(
     appearance.rotation !== undefined;
 
   if (needTransform) {
-    if (!maps.originalTransformByMesh.has(mesh.uuid)) {
-      maps.originalTransformByMesh.set(mesh.uuid, {
-        position: mesh.position.clone(),
-        scale: mesh.scale.clone(),
-        rotation: mesh.rotation.clone(),
+    const transformKey = renderMesh.uuid;
+    if (!maps.originalTransformByMesh.has(transformKey)) {
+      maps.originalTransformByMesh.set(transformKey, {
+        position: renderMesh.position.clone(),
+        scale: renderMesh.scale.clone(),
+        rotation: renderMesh.rotation.clone(),
       });
     }
-    const bt = maps.originalTransformByMesh.get(mesh.uuid)!;
-    mesh.position.copy(bt.position);
-    mesh.scale.copy(bt.scale);
-    mesh.rotation.copy(bt.rotation);
+    const bt = maps.originalTransformByMesh.get(transformKey)!;
+    renderMesh.position.copy(bt.position);
+    renderMesh.scale.copy(bt.scale);
+    renderMesh.rotation.copy(bt.rotation);
 
     const hasScaleOrRotation =
       appearance.scale !== undefined || appearance.rotation !== undefined;
@@ -568,17 +578,30 @@ export function applyStyleAppearanceToMesh(
       }
 
       const styleM = buildPivotStyleMatrix(pivot, sx, sy, sz, euler);
-      mesh.updateMatrix();
-      mesh.matrix.multiply(styleM);
-      mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+      renderMesh.updateMatrix();
+      renderMesh.matrix.multiply(styleM);
+      renderMesh.matrix.decompose(
+        renderMesh.position,
+        renderMesh.quaternion,
+        renderMesh.scale,
+      );
     }
 
     if (appearance.translation !== undefined) {
-      applyVec3(mesh.position, appearance.translation);
+      applyVec3(renderMesh.position, appearance.translation);
     }
   }
 
-  mesh.updateMatrixWorld(true);
-  applyWorldMatrixAsLocalUnderRoot(mesh, scene);
-  scene.add(mesh);
+  const placementWorld = new Matrix4();
+  if (appearance.mesh) {
+    anchorMesh.updateMatrixWorld(true);
+    renderMesh.updateMatrix();
+    placementWorld.multiplyMatrices(anchorMesh.matrixWorld, renderMesh.matrix);
+  } else {
+    renderMesh.updateMatrixWorld(true);
+    placementWorld.copy(renderMesh.matrixWorld);
+  }
+
+  placeMeshUnderRoot(renderMesh, scene, placementWorld);
+  scene.add(renderMesh);
 }
