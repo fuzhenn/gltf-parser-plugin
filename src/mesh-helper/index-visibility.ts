@@ -88,9 +88,11 @@ export function applyVisibilityToMesh(
 
   const hiddenFeatureIds = getHiddenFeatureIds(mesh, hiddenOids);
 
-  // 全局仍有隐藏 OID，但本 mesh 无对应 feature：不要 restore，避免冲掉其它 mesh 的过滤
+  // 当前隐藏列表里没有本 mesh 需要处理的 OID → 恢复完整 index（若曾被 hide 过）。
+  // 不能只等 hiddenOids 全局为空：例如先高亮 OID1 再高亮 OID2 时，列表变为 {2}，
+  // OID1 所在 mesh 必须在此处 restore，否则 LRU 瓦片再次可见时仍会带着旧的过滤 index。
   if (hiddenFeatureIds.size === 0) {
-    if (hiddenOids.size === 0) restoreMeshIndex(mesh);
+    restoreMeshIndex(mesh);
     return;
   }
 
