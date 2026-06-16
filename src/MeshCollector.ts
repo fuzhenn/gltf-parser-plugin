@@ -2,14 +2,21 @@ import { BufferGeometry, EventDispatcher, Mesh, Object3D } from "three";
 import { TilesRenderer } from "3d-tiles-renderer";
 import {
   buildMergedSplitGeometryForTileMesh,
+  buildMergedSplitGeometryForTileMeshByPids,
   createMergedSplitMeshFromGeometry,
+  createMergedSplitMeshFromGeometryByPids,
   disposeMergedSplitGeometryCacheEntry,
   disposeMergedSplitMeshResources,
   getAllOidsFromTiles,
+  getAllPidsFromTiles,
   getPropertyDataByOid,
+  getPropertyDataByPid,
   getTileMeshesByOid,
+  getTileMeshesByPid,
   selectDominantTileMeshesForOidSet,
+  selectDominantTileMeshesForPidSet,
   type InternalData,
+  type PartIdChannel,
 } from "./mesh-helper";
 import {
   buildStyleConditionEvaluatorMap,
@@ -50,6 +57,10 @@ export interface MeshCollectorQuery {
    */
   oids?: readonly number[];
   /**
+   * 限定在这些 PID 内收集（使用 `_FEATURE_ID_1`）；与 oids 互斥，不可同时指定
+   */
+  pids?: readonly number[];
+  /**
    * 属性表达式，如 `type === "wall"`，与 setStyle 里 `show` 或 `conditions[i][0]`（为 string 时）相同
    */
   condition?: string;
@@ -86,7 +97,12 @@ export class MeshSplitResolver {
 
   /** 按 OID 列表取合并 split mesh（每瓦片一条），供中心点等计算 */
   getMeshesByOids(oids: readonly number[]): Mesh[] {
-    return this.getMergedSplitMeshesForOidSet(new Set(oids));
+    return this.getMergedSplitMeshesForIdSet(new Set(oids), "oid");
+  }
+
+  /** 按 PID 列表取合并 split mesh（每瓦片一条，使用 `_FEATURE_ID_1`） */
+  getMeshesByPids(pids: readonly number[]): Mesh[] {
+    return this.getMergedSplitMeshesForIdSet(new Set(pids), "pid");
   }
 
   /**
@@ -94,17 +110,29 @@ export class MeshSplitResolver {
    */
   getMeshesForCollectorQuerySignature(params: {
     oids: readonly number[];
+    pids?: readonly number[];
     condition?: string;
+    channel?: PartIdChannel;
   }): string {
-    const targetOids = this.resolveTargetOidsForCollectorQuery(params);
+    const channel = params.channel ?? (params.pids?.length ? "pid" : "oid");
+    const targetIds = this.resolveTargetIdsForCollectorQuery({
+      oids: params.oids,
+      pids: params.pids,
+      condition: params.condition,
+      channel,
+    });
     const tiles = this.getTiles();
     if (!tiles) {
-      return targetOids.join(",");
+      return `${channel}:${targetIds.join(",")}`;
     }
-    const oidSet = new Set(targetOids);
+    const idSet = new Set(targetIds);
     const candidateTiles = new Set<Mesh>();
-    for (const oid of oidSet) {
-      for (const tm of getTileMeshesByOid(tiles, oid)) {
+    for (const partId of idSet) {
+      const tileMeshes =
+        channel === "pid"
+          ? getTileMeshesByPid(tiles, partId)
+          : getTileMeshesByOid(tiles, partId);
+      for (const tm of tileMeshes) {
         candidateTiles.add(tm);
       }
     }
@@ -112,7 +140,7 @@ export class MeshSplitResolver {
       .map((m) => m.uuid)
       .sort()
       .join(",");
-    return `${targetOids.join(",")}|${uuids}`;
+    return `${channel}:${targetIds.join(",")}|${uuids}`;
   }
 
   /**
@@ -121,68 +149,100 @@ export class MeshSplitResolver {
    */
   getMeshesForCollectorQuery(params: {
     oids: readonly number[];
+    pids?: readonly number[];
     condition?: string;
     meshCacheNamespace?: string;
+    channel?: PartIdChannel;
   }): Mesh[] {
-    const targetOids = this.resolveTargetOidsForCollectorQuery(params);
-    return this.getMergedSplitMeshesForOidSet(new Set(targetOids));
+    const channel = params.channel ?? (params.pids?.length ? "pid" : "oid");
+    const targetIds = this.resolveTargetIdsForCollectorQuery({
+      oids: params.oids,
+      pids: params.pids,
+      condition: params.condition,
+      channel,
+    });
+    return this.getMergedSplitMeshesForIdSet(new Set(targetIds), channel);
   }
 
-  private resolveTargetOidsForCollectorQuery(params: {
-    oids: readonly number[];
+  private resolveTargetIdsForCollectorQuery(params: {
+    oids?: readonly number[];
+    pids?: readonly number[];
     condition?: string;
+    channel: PartIdChannel;
   }): number[] {
     const tiles = this.getTiles();
     if (!tiles) return [];
 
+    const channel = params.channel;
+    const explicitIds =
+      channel === "pid" ? (params.pids ?? []) : (params.oids ?? []);
     const cond = params.condition?.trim();
 
     if (!cond) {
-      if (params.oids.length === 0) return [];
-      return [...new Set(params.oids)].sort((a, b) => a - b);
+      if (explicitIds.length === 0) return [];
+      return [...new Set(explicitIds)].sort((a, b) => a - b);
     }
 
     const candidate =
-      params.oids.length === 0
-        ? getAllOidsFromTiles(tiles)
-        : [...new Set(params.oids)];
+      explicitIds.length === 0
+        ? channel === "pid"
+          ? getAllPidsFromTiles(tiles)
+          : getAllOidsFromTiles(tiles)
+        : [...new Set(explicitIds)];
     const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
     const internalData = this.getInternalData();
-    const targetOids: number[] = [];
-    for (const oid of candidate) {
-      const data = getPropertyDataByOid(tiles, oid, internalData);
+    const targetIds: number[] = [];
+    for (const partId of candidate) {
+      const data =
+        channel === "pid"
+          ? getPropertyDataByPid(tiles, partId)
+          : getPropertyDataByOid(tiles, partId, internalData);
       if (evaluateStyleCondition(cond, data, evaluators)) {
-        targetOids.push(oid);
+        targetIds.push(partId);
       }
     }
-    targetOids.sort((a, b) => a - b);
-    return targetOids;
+    targetIds.sort((a, b) => a - b);
+    return targetIds;
   }
 
   /**
-   * 按 OID 集合：每个瓦片 mesh **新建** 一个 Mesh，几何取自该 tileMesh.userData 上的缓存（按 sortedOids 键）
+   * 按 OID / PID 集合：每个瓦片 mesh 新建一个 Mesh，几何取自 tileMesh.userData 缓存
    */
-  private getMergedSplitMeshesForOidSet(oidSet: Set<number>): Mesh[] {
+  private getMergedSplitMeshesForIdSet(
+    idSet: Set<number>,
+    channel: PartIdChannel,
+  ): Mesh[] {
     const tiles = this.getTiles();
-    if (!tiles || oidSet.size === 0) return [];
+    if (!tiles || idSet.size === 0) return [];
 
-    const sortedKey = [...oidSet].sort((a, b) => a - b).join(",");
+    const prefix = channel === "pid" ? "p:" : "o:";
+    const sortedKey = prefix + [...idSet].sort((a, b) => a - b).join(",");
     const result: Mesh[] = [];
     const candidateTiles = new Set<Mesh>();
 
-    for (const oid of oidSet) {
-      for (const tm of getTileMeshesByOid(tiles, oid)) {
+    for (const partId of idSet) {
+      const tileMeshes =
+        channel === "pid"
+          ? getTileMeshesByPid(tiles, partId)
+          : getTileMeshesByOid(tiles, partId);
+      for (const tm of tileMeshes) {
         candidateTiles.add(tm);
       }
     }
 
-    const tileMeshes = selectDominantTileMeshesForOidSet(candidateTiles, oidSet);
+    const tileMeshes =
+      channel === "pid"
+        ? selectDominantTileMeshesForPidSet(candidateTiles, idSet)
+        : selectDominantTileMeshesForOidSet(candidateTiles, idSet);
 
     for (const tileMesh of tileMeshes) {
       const perTile = getTileSplitGeometryCache(tileMesh);
       let geometry: BufferGeometry | undefined = perTile.get(sortedKey);
       if (!geometry) {
-        const built = buildMergedSplitGeometryForTileMesh(tileMesh, oidSet);
+        const built =
+          channel === "pid"
+            ? buildMergedSplitGeometryForTileMeshByPids(tileMesh, idSet)
+            : buildMergedSplitGeometryForTileMesh(tileMesh, idSet);
         if (built) {
           geometry = built;
           perTile.set(sortedKey, geometry);
@@ -192,9 +252,14 @@ export class MeshSplitResolver {
       if (!geometry) {
         continue;
       }
-      const m = createMergedSplitMeshFromGeometry(tileMesh, geometry, oidSet, {
-        splitGeometryManagedByCache: true,
-      });
+      const m =
+        channel === "pid"
+          ? createMergedSplitMeshFromGeometryByPids(tileMesh, geometry, idSet, {
+              splitGeometryManagedByCache: true,
+            })
+          : createMergedSplitMeshFromGeometry(tileMesh, geometry, idSet, {
+              splitGeometryManagedByCache: true,
+            });
       if (m) {
         result.push(m);
       }
@@ -225,16 +290,34 @@ export function normalizeMeshCollectorOids(oids: readonly number[]): number[] {
   return [...new Set(oids)].sort((a, b) => a - b);
 }
 
+/** 去重并排序 PID */
+export function normalizeMeshCollectorPids(pids: readonly number[]): number[] {
+  return [...new Set(pids)].sort((a, b) => a - b);
+}
+
+function resolveMeshCollectorChannel(query: MeshCollectorQuery): PartIdChannel {
+  const hasOids = normalizeMeshCollectorOids(query.oids ?? []).length > 0;
+  const hasPids = normalizeMeshCollectorPids(query.pids ?? []).length > 0;
+  if (hasOids && hasPids) {
+    throw new Error("MeshCollectorQuery cannot specify both oids and pids");
+  }
+  return hasPids ? "pid" : "oid";
+}
+
 /**
- * 由查询（oids + condition）生成的语义字符串，可用于日志或外部按查询维度分组。
+ * 由查询（oids / pids + condition）生成的语义字符串，可用于日志或外部按查询维度分组。
  */
 export function meshCollectorQueryCacheKey(query: MeshCollectorQuery): string {
-  const oidsNorm = normalizeMeshCollectorOids(query.oids ?? []);
-  const oidPart = oidsNorm.length > 0 ? oidsNorm.join(",") : "*";
+  const channel = resolveMeshCollectorChannel(query);
+  const idsNorm =
+    channel === "pid"
+      ? normalizeMeshCollectorPids(query.pids ?? [])
+      : normalizeMeshCollectorOids(query.oids ?? []);
+  const idPart = idsNorm.length > 0 ? idsNorm.join(",") : "*";
   const condRaw = query.condition?.trim() ?? "";
   const condPart = condRaw === "" ? "_" : encodeURIComponent(condRaw);
   const ns = query.meshCacheNamespace?.trim() || "default";
-  return `${oidPart}@@${condPart}@@${ns}`;
+  return `${channel}:${idPart}@@${condPart}@@${ns}`;
 }
 
 /** StyleHelper 传入 `meshCollectorQueryCacheKey` 等语义区分 */
@@ -254,26 +337,34 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   private static _nextInteractionId = 0;
 
   private readonly queryOids: number[];
+  private readonly queryPids: number[];
+  private readonly partIdChannel: PartIdChannel;
   private readonly condition: string | undefined;
   private readonly meshCacheNamespace: string;
   /** 实例唯一键（样式/高亮/冻结等按收集器实例追踪） */
   private readonly _interactionGroupKey: string;
   private meshSplit: MeshSplitResolver | null = null;
   private _meshes: Mesh[] = [];
-  /** 解析 OID + 瓦片集合 + 本收集器 id，未变则不再 new Mesh */
+  /** 解析 ID + 瓦片集合 + 本收集器 id，未变则不再 new Mesh */
   private _lastMeshSignature: string | null = null;
   private _disposed: boolean = false;
 
   constructor(query: MeshCollectorQuery) {
     super();
     const oids = normalizeMeshCollectorOids(query.oids ?? []);
+    const pids = normalizeMeshCollectorPids(query.pids ?? []);
     const condition = query.condition?.trim() || undefined;
-    if (oids.length === 0 && !condition) {
+    if (oids.length === 0 && pids.length === 0 && !condition) {
       throw new Error(
-        "MeshCollector requires at least one OID in oids and/or a non-empty condition",
+        "MeshCollector requires at least one OID/PID in oids/pids and/or a non-empty condition",
       );
     }
+    if (oids.length > 0 && pids.length > 0) {
+      throw new Error("MeshCollector cannot specify both oids and pids");
+    }
     this.queryOids = oids;
+    this.queryPids = pids;
+    this.partIdChannel = pids.length > 0 ? "pid" : "oid";
     this.condition = condition;
     this.meshCacheNamespace = query.meshCacheNamespace?.trim() || "default";
     this._interactionGroupKey = `mc-${++MeshCollector._nextInteractionId}`;
@@ -304,6 +395,20 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     return this.queryOids[0];
   }
 
+  /** 查询里显式传入的 PID（规范化后）；仅用 condition 筛选时可能为空数组 */
+  getPids(): readonly number[] {
+    return this.queryPids;
+  }
+
+  /** 有显式 PID 时返回第一个；否则无意义（可能为 undefined） */
+  getPid(): number | undefined {
+    return this.queryPids[0];
+  }
+
+  getPartIdChannel(): PartIdChannel {
+    return this.partIdChannel;
+  }
+
   get meshes(): Mesh[] {
     return this._meshes;
   }
@@ -319,7 +424,9 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
 
     const sig = `${this._interactionGroupKey}|${this.meshSplit.getMeshesForCollectorQuerySignature({
       oids: this.queryOids,
+      pids: this.queryPids,
       condition: this.condition,
+      channel: this.partIdChannel,
     })}`;
 
     if (sig === this._lastMeshSignature) {
@@ -328,8 +435,10 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
 
     const newMeshes = this.meshSplit.getMeshesForCollectorQuery({
       oids: this.queryOids,
+      pids: this.queryPids,
       condition: this.condition,
       meshCacheNamespace: this.meshCacheNamespace,
+      channel: this.partIdChannel,
     });
 
     for (const mesh of this._meshes) {

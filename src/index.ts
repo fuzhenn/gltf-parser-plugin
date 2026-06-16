@@ -15,6 +15,7 @@ export {
   meshCollectorGroupKey,
   meshCollectorQueryCacheKey,
   normalizeMeshCollectorOids,
+  normalizeMeshCollectorPids,
 } from "./MeshCollector";
 export type {
   MeshChangeEvent,
@@ -42,6 +43,7 @@ export type {
 export { extractStyleMaterialMaps } from "./plugin/style-appearance-shared";
 export type {
   HighlightAppearance,
+  HighlightByPidsOptions,
   HighlightCondition,
   HighlightMaterial,
   HighlightOptions,

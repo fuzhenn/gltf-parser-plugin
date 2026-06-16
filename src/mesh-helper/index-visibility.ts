@@ -2,8 +2,10 @@ import { BufferAttribute, Mesh, Object3D } from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
 import {
   forEachLoadedFeatureMesh,
+  resolveFeatureChannelOnMesh,
   resolveHideUsesLooseMode,
   triangleMatchesFeatureIdSet,
+  type PartIdChannel,
 } from "./mesh";
 
 /** 与 split / 高亮一致：仅改 meshFeatures.geometry（若无则用 mesh.geometry） */
@@ -15,17 +17,18 @@ function getVisibilityGeometry(mesh: Mesh): import("three").BufferGeometry | nul
   return g ?? null;
 }
 
-/** 从 mesh 的 idMap 和 hiddenOids 构建需要隐藏的 feature ID 集合 */
-function getHiddenFeatureIds(
+function getHiddenFeatureIdsForChannel(
   mesh: Mesh,
-  hiddenOids: Set<number>,
+  hiddenIds: Set<number>,
+  channel: PartIdChannel,
 ): Set<number> {
-  const idMap = mesh.userData?.idMap as Record<number, number> | undefined;
+  const mapKey = channel === "oid" ? "idMap" : "pidMap";
+  const idMap = mesh.userData?.[mapKey] as Record<number, number> | undefined;
   if (!idMap) return new Set();
 
   const hidden = new Set<number>();
-  for (const oid of hiddenOids) {
-    const fid = idMap[oid];
+  for (const partId of hiddenIds) {
+    const fid = idMap[partId];
     if (fid !== undefined) hidden.add(fid);
   }
   return hidden;
@@ -47,6 +50,42 @@ function setGeometryIndexFromArray(
   geometry.index!.needsUpdate = true;
 }
 
+function triangleShouldHide(
+  fa: number,
+  fb: number,
+  fc: number,
+  hiddenOids: Set<number>,
+  hiddenPids: Set<number>,
+  oidFeatureAttr: { getX(index: number): number } | null,
+  pidFeatureAttr: { getX(index: number): number } | null,
+  hiddenOidFids: Set<number>,
+  hiddenPidFids: Set<number>,
+  oidStrict: boolean,
+  pidStrict: boolean,
+): boolean {
+  if (hiddenOids.size > 0 && oidFeatureAttr) {
+    const oa = oidFeatureAttr.getX(fa);
+    const ob = oidFeatureAttr.getX(fb);
+    const oc = oidFeatureAttr.getX(fc);
+    if (
+      triangleMatchesFeatureIdSet(oa, ob, oc, hiddenOidFids, oidStrict)
+    ) {
+      return true;
+    }
+  }
+
+  if (hiddenPids.size > 0 && pidFeatureAttr) {
+    const pa = pidFeatureAttr.getX(fa);
+    const pb = pidFeatureAttr.getX(fb);
+    const pc = pidFeatureAttr.getX(fc);
+    if (triangleMatchesFeatureIdSet(pa, pb, pc, hiddenPidFids, pidStrict)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * 对当前已加载的所有瓦片 feature mesh 应用显隐（按 mesh.uuid 去重）。
  * 同时遍历 tiles.group 与各 tile.engineData.scene。
@@ -54,15 +93,16 @@ function setGeometryIndexFromArray(
 export function applyVisibilityToAllLoadedMeshes(
   tiles: TilesRenderer,
   hiddenOids: Set<number>,
+  hiddenPids: Set<number> = new Set(),
 ): void {
-  if (hiddenOids.size === 0) {
+  if (hiddenOids.size === 0 && hiddenPids.size === 0) {
     forEachLoadedFeatureMesh(tiles, (mesh) => restoreMeshIndex(mesh));
     return;
   }
 
   forEachLoadedFeatureMesh(tiles, (mesh) => {
     if (isTileFeatureSourceMesh(mesh)) {
-      applyVisibilityToMesh(mesh, hiddenOids);
+      applyVisibilityToMesh(mesh, hiddenOids, hiddenPids);
     }
   });
 }
@@ -71,6 +111,7 @@ export function applyVisibilityToAllLoadedMeshes(
 export function applyVisibilityToMesh(
   mesh: Mesh,
   hiddenOids: Set<number>,
+  hiddenPids: Set<number> = new Set(),
 ): void {
   const { meshFeatures } = mesh.userData;
   if (!meshFeatures?.featureIds?.length) return;
@@ -78,58 +119,89 @@ export function applyVisibilityToMesh(
   const geometry = getVisibilityGeometry(mesh);
   if (!geometry) return;
 
-  const featureId = meshFeatures.featureIds[0];
-  const featureIdAttr = geometry.getAttribute(
-    `_feature_id_${featureId.attribute}`,
-  );
+  const oidResolved =
+    hiddenOids.size > 0 ? resolveFeatureChannelOnMesh(mesh, "oid") : null;
+  const pidResolved =
+    hiddenPids.size > 0 ? resolveFeatureChannelOnMesh(mesh, "pid") : null;
+
+  const oidFeatureAttr = oidResolved?.featureIdAttr ?? null;
+  const pidFeatureAttr = pidResolved?.featureIdAttr ?? null;
+
   const index = geometry.index;
 
-  if (!index || !featureIdAttr) return;
+  if (!index) return;
+  if (hiddenOids.size > 0 && !oidFeatureAttr) return;
+  if (hiddenPids.size > 0 && !pidFeatureAttr) return;
 
-  const hiddenFeatureIds = getHiddenFeatureIds(mesh, hiddenOids);
+  const hiddenOidFids = getHiddenFeatureIdsForChannel(mesh, hiddenOids, "oid");
+  const hiddenPidFids = getHiddenFeatureIdsForChannel(mesh, hiddenPids, "pid");
 
-  // 当前隐藏列表里没有本 mesh 需要处理的 OID → 恢复完整 index（若曾被 hide 过）。
-  // 不能只等 hiddenOids 全局为空：例如先高亮 OID1 再高亮 OID2 时，列表变为 {2}，
-  // OID1 所在 mesh 必须在此处 restore，否则 LRU 瓦片再次可见时仍会带着旧的过滤 index。
-  if (hiddenFeatureIds.size === 0) {
+  const needsOidHide =
+    hiddenOids.size > 0 && hiddenOidFids.size > 0 && oidFeatureAttr;
+  const needsPidHide =
+    hiddenPids.size > 0 && hiddenPidFids.size > 0 && pidFeatureAttr;
+
+  if (!needsOidHide && !needsPidHide) {
     restoreMeshIndex(mesh);
     return;
   }
 
-  if (!(mesh.userData as any)._originalIndex) {
+  if (!(mesh.userData as { _originalIndex?: ArrayLike<number> })._originalIndex) {
     const src = index.array;
-    (mesh.userData as any)._originalIndex =
+    (mesh.userData as { _originalIndex?: ArrayLike<number> })._originalIndex =
       src instanceof Uint32Array
         ? new Uint32Array(src)
         : src instanceof Uint16Array
           ? new Uint16Array(src)
           : new Uint32Array(Array.from(src));
   }
-  const originalArray = (mesh.userData as any)._originalIndex as
-    | Uint16Array
-    | Uint32Array;
+  const originalArray = (mesh.userData as { _originalIndex: Uint16Array | Uint32Array })
+    ._originalIndex;
 
   const isUint32 = originalArray instanceof Uint32Array;
   const filtered = isUint32
     ? new Uint32Array(originalArray.length)
     : new Uint16Array(originalArray.length);
 
-  const useLoose = resolveHideUsesLooseMode(
-    originalArray,
-    featureIdAttr,
-    hiddenFeatureIds,
-  );
-  const strict = !useLoose;
+  const oidLoose =
+    needsOidHide &&
+    resolveHideUsesLooseMode(
+      originalArray,
+      oidFeatureAttr!,
+      hiddenOidFids,
+    );
+  const oidStrict = !oidLoose;
+
+  const pidLoose =
+    needsPidHide &&
+    resolveHideUsesLooseMode(
+      originalArray,
+      pidFeatureAttr!,
+      hiddenPidFids,
+    );
+  const pidStrict = !pidLoose;
 
   let writeOffset = 0;
   for (let i = 0; i < originalArray.length; i += 3) {
     const a = originalArray[i]!;
     const b = originalArray[i + 1]!;
     const c = originalArray[i + 2]!;
-    const fa = featureIdAttr.getX(a);
-    const fb = featureIdAttr.getX(b);
-    const fc = featureIdAttr.getX(c);
-    if (triangleMatchesFeatureIdSet(fa, fb, fc, hiddenFeatureIds, strict)) {
+
+    if (
+      triangleShouldHide(
+        a,
+        b,
+        c,
+        hiddenOids,
+        hiddenPids,
+        needsOidHide ? oidFeatureAttr : null,
+        needsPidHide ? pidFeatureAttr : null,
+        hiddenOidFids,
+        hiddenPidFids,
+        oidStrict,
+        pidStrict,
+      )
+    ) {
       continue;
     }
 
@@ -144,7 +216,8 @@ export function applyVisibilityToMesh(
 
 /** 恢复 mesh 的原始 index */
 export function restoreMeshIndex(mesh: Mesh): void {
-  const original = (mesh.userData as any)?._originalIndex;
+  const original = (mesh.userData as { _originalIndex?: Uint16Array | Uint32Array })
+    ?._originalIndex;
   if (!original) return;
 
   const geometry = getVisibilityGeometry(mesh);
@@ -158,8 +231,9 @@ export function restoreMeshIndex(mesh: Mesh): void {
 export function applyVisibilityToScene(
   scene: Object3D,
   hiddenOids: Set<number>,
+  hiddenPids: Set<number> = new Set(),
 ): void {
-  if (hiddenOids.size === 0) {
+  if (hiddenOids.size === 0 && hiddenPids.size === 0) {
     scene.traverse((obj) => {
       const mesh = obj as Mesh;
       if (mesh.userData?.meshFeatures && !mesh.userData?.isSplit) {
@@ -172,7 +246,7 @@ export function applyVisibilityToScene(
   scene.traverse((obj) => {
     const mesh = obj as Mesh;
     if (isTileFeatureSourceMesh(mesh)) {
-      applyVisibilityToMesh(mesh, hiddenOids);
+      applyVisibilityToMesh(mesh, hiddenOids, hiddenPids);
     }
   });
 }

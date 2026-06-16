@@ -8,6 +8,8 @@ export interface PartEffectHost {
   getTiles(): TilesRenderer | null;
   hidePartsByOids(oids: number[]): void;
   showPartsByOids(oids: number[]): void;
+  hidePartsByPids(pids: number[]): void;
+  showPartsByPids(pids: number[]): void;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   /** 与 getMeshCollectorByCondition 成对：不再使用该收集器时从插件注销并 dispose（样式/高亮内部会调用） */
   releaseMeshCollector(collector: MeshCollector): void;

@@ -10,6 +10,89 @@ import {
 
 import { TilesRenderer } from "3d-tiles-renderer";
 
+/** OID 对应 `_FEATURE_ID_0`，PID 对应 `_FEATURE_ID_1` */
+export type PartIdChannel = "oid" | "pid";
+
+const PART_ID_CHANNEL_CONFIG = {
+  oid: {
+    featureIndex: 0,
+    mapKey: "idMap",
+    idKey: "oid",
+    collectorKey: "collectorOids",
+    namePrefix: "merged_features",
+  },
+  pid: {
+    featureIndex: 1,
+    mapKey: "pidMap",
+    idKey: "pid",
+    collectorKey: "collectorPids",
+    namePrefix: "merged_pids",
+  },
+} as const;
+
+export interface ResolvedFeatureChannel {
+  geometry: BufferGeometry;
+  featureIdAttr: BufferAttribute;
+  featureIdConfig: {
+    attribute?: number;
+    propertyTable?: number;
+  } | null;
+}
+
+/**
+ * 解析 OID/PID 通道对应的 feature id 顶点属性。
+ * PID 在 meshFeatures.featureIds[1] 未声明时，回退读取 geometry 上的 `_feature_id_1`。
+ */
+export function resolveFeatureChannelOnMesh(
+  mesh: Mesh,
+  channel: PartIdChannel,
+): ResolvedFeatureChannel | null {
+  const { meshFeatures } = mesh.userData;
+  if (!meshFeatures) return null;
+
+  const geometry =
+    (meshFeatures.geometry as BufferGeometry | undefined) ??
+    (mesh.geometry as BufferGeometry | undefined);
+  if (!geometry) return null;
+
+  const cfg = PART_ID_CHANNEL_CONFIG[channel];
+  const featureIds = meshFeatures.featureIds ?? [];
+  const featureIdConfig = featureIds[cfg.featureIndex];
+
+  if (featureIdConfig != null) {
+    const attr = geometry.getAttribute(
+      `_feature_id_${featureIdConfig.attribute}`,
+    ) as BufferAttribute | undefined;
+    if (attr) {
+      return { geometry, featureIdAttr: attr, featureIdConfig };
+    }
+  }
+
+  if (channel === "pid") {
+    const attr = geometry.getAttribute("_feature_id_1") as
+      | BufferAttribute
+      | undefined;
+    if (attr) {
+      return {
+        geometry,
+        featureIdAttr: attr,
+        featureIdConfig: featureIds[1] ?? null,
+      };
+    }
+  }
+
+  return null;
+}
+
+function getPartIdMap(
+  mesh: Mesh,
+  channel: PartIdChannel,
+): Record<number, number> | undefined {
+  return mesh.userData?.[PART_ID_CHANNEL_CONFIG[channel].mapKey] as
+    | Record<number, number>
+    | undefined;
+}
+
 /**
  * split 必须从「隐藏原片前」的完整 index 抽取三角形。
  * `hidePartsByOids` 会改写 `geometry.index`；若用当前 index，被高亮 OID 的三角已被删掉 → split 为空。
@@ -121,32 +204,24 @@ function createGeometryForFeatureIdSet(
 /**
  * 仅构建合并后的 split 几何（与瓦片共享顶点属性 + 独立 index），供多路 Mesh 复用。
  */
-export function buildMergedSplitGeometryForTileMesh(
+function buildMergedSplitGeometryForTileMeshByChannel(
   originalMesh: Mesh,
-  oidSet: ReadonlySet<number>,
+  idSet: ReadonlySet<number>,
+  channel: PartIdChannel,
 ): BufferGeometry | null {
-  if (oidSet.size === 0) return null;
+  if (idSet.size === 0) return null;
 
-  const idMap = originalMesh.userData?.idMap as
-    | Record<number, number>
-    | undefined;
+  const idMap = getPartIdMap(originalMesh, channel);
   if (!idMap) return null;
 
-  const { meshFeatures } = originalMesh.userData;
-  const { geometry, featureIds } = meshFeatures;
-  const featureId = featureIds[0];
-  const featureIdAttr = geometry.getAttribute(
-    `_feature_id_${featureId.attribute}`,
-  );
+  const resolved = resolveFeatureChannelOnMesh(originalMesh, channel);
+  if (!resolved) return null;
 
-  if (!featureIdAttr) {
-    console.warn("No feature ID attribute found");
-    return null;
-  }
+  const { geometry, featureIdAttr } = resolved;
 
   const targetFids = new Set<number>();
-  for (const oid of oidSet) {
-    const fid = idMap[oid];
+  for (const partId of idSet) {
+    const fid = idMap[partId];
     if (fid !== undefined) {
       targetFids.add(fid);
     }
@@ -175,6 +250,29 @@ export function buildMergedSplitGeometryForTileMesh(
   }
 
   return newGeometry;
+}
+
+export function buildMergedSplitGeometryForTileMesh(
+  originalMesh: Mesh,
+  oidSet: ReadonlySet<number>,
+): BufferGeometry | null {
+  return buildMergedSplitGeometryForTileMeshByChannel(
+    originalMesh,
+    oidSet,
+    "oid",
+  );
+}
+
+/** 按 PID 集合从瓦片 mesh 构建合并 split 几何（使用 `_FEATURE_ID_1`） */
+export function buildMergedSplitGeometryForTileMeshByPids(
+  originalMesh: Mesh,
+  pidSet: ReadonlySet<number>,
+): BufferGeometry | null {
+  return buildMergedSplitGeometryForTileMeshByChannel(
+    originalMesh,
+    pidSet,
+    "pid",
+  );
 }
 
 function splitBBoxVolume(box: Box3): number {
@@ -216,9 +314,13 @@ function worldSplitBBox(tileMesh: Mesh, localBBox: Box3): Box3 {
 
 function measureSplitGeometryForTile(
   tileMesh: Mesh,
-  oidSet: ReadonlySet<number>,
+  idSet: ReadonlySet<number>,
+  channel: PartIdChannel,
 ): { triCount: number; bbox: Box3 } | null {
-  const probe = buildMergedSplitGeometryForTileMesh(tileMesh, oidSet);
+  const probe =
+    channel === "oid"
+      ? buildMergedSplitGeometryForTileMesh(tileMesh, idSet)
+      : buildMergedSplitGeometryForTileMeshByPids(tileMesh, idSet);
   if (!probe) return null;
   const triCount = probe.index?.count ?? 0;
   if (triCount === 0) {
@@ -236,37 +338,36 @@ function measureSplitGeometryForTile(
  * - IoU 高 / bbox 包含 → 视为 LOD 重叠，只保留三角更多的瓦片（避免重复高亮与错位叠加）。
  * - IoU 低 → 视为互补分片（如各带一半轮胎），全部保留。
  */
-export function selectDominantTileMeshesForOidSet(
+function selectDominantTileMeshesForIdSet(
   candidateTiles: Iterable<Mesh>,
-  oidSet: ReadonlySet<number>,
+  idSet: ReadonlySet<number>,
+  channel: PartIdChannel,
 ): Mesh[] {
   type TileEntry = {
     mesh: Mesh;
     triCount: number;
-    oids: Set<number>;
+    ids: Set<number>;
     bbox: Box3;
   };
   const entries: TileEntry[] = [];
 
   for (const tileMesh of candidateTiles) {
-    const idMap = tileMesh.userData?.idMap as
-      | Record<number, number>
-      | undefined;
+    const idMap = getPartIdMap(tileMesh, channel);
     if (!idMap) continue;
 
-    const oidsOnMesh = new Set<number>();
-    for (const oid of oidSet) {
-      if (idMap[oid] !== undefined) oidsOnMesh.add(oid);
+    const idsOnMesh = new Set<number>();
+    for (const partId of idSet) {
+      if (idMap[partId] !== undefined) idsOnMesh.add(partId);
     }
-    if (oidsOnMesh.size === 0) continue;
+    if (idsOnMesh.size === 0) continue;
 
-    const measured = measureSplitGeometryForTile(tileMesh, oidSet);
+    const measured = measureSplitGeometryForTile(tileMesh, idSet, channel);
     if (!measured) continue;
 
     entries.push({
       mesh: tileMesh,
       triCount: measured.triCount,
-      oids: oidsOnMesh,
+      ids: idsOnMesh,
       bbox: measured.bbox,
     });
   }
@@ -278,8 +379,8 @@ export function selectDominantTileMeshesForOidSet(
     let dominated = false;
     for (let i = selected.length - 1; i >= 0; i--) {
       const kept = selected[i]!;
-      const sharesOid = [...entry.oids].some((oid) => kept.oids.has(oid));
-      if (!sharesOid) continue;
+      const sharesId = [...entry.ids].some((id) => kept.ids.has(id));
+      if (!sharesId) continue;
       if (!tilesShareLodOverlap(kept.bbox, entry.bbox)) continue;
 
       if (entry.triCount > kept.triCount) {
@@ -294,35 +395,48 @@ export function selectDominantTileMeshesForOidSet(
   return selected.map((e) => e.mesh);
 }
 
+export function selectDominantTileMeshesForOidSet(
+  candidateTiles: Iterable<Mesh>,
+  oidSet: ReadonlySet<number>,
+): Mesh[] {
+  return selectDominantTileMeshesForIdSet(candidateTiles, oidSet, "oid");
+}
+
+export function selectDominantTileMeshesForPidSet(
+  candidateTiles: Iterable<Mesh>,
+  pidSet: ReadonlySet<number>,
+): Mesh[] {
+  return selectDominantTileMeshesForIdSet(candidateTiles, pidSet, "pid");
+}
+
 /**
  * 由已构建的 split 几何创建 Mesh（独立材质）；可选标记由全局几何缓存托管，dispose 时不释放几何缓冲。
  */
-export function createMergedSplitMeshFromGeometry(
+function createMergedSplitMeshFromGeometryByChannel(
   originalMesh: Mesh,
   newGeometry: BufferGeometry,
-  oidSet: ReadonlySet<number>,
+  idSet: ReadonlySet<number>,
+  channel: PartIdChannel,
   options?: { splitGeometryManagedByCache?: boolean },
 ): Mesh | null {
-  if (oidSet.size === 0) return null;
+  if (idSet.size === 0) return null;
 
-  const idMap = originalMesh.userData?.idMap as
-    | Record<number, number>
-    | undefined;
+  const cfg = PART_ID_CHANNEL_CONFIG[channel];
+  const idMap = getPartIdMap(originalMesh, channel);
   if (!idMap) return null;
 
-  const { meshFeatures, structuralMetadata } = originalMesh.userData;
-  const { featureIds } = meshFeatures;
-  const featureId = featureIds[0];
+  const resolved = resolveFeatureChannelOnMesh(originalMesh, channel);
+  if (!resolved) return null;
 
-  const oidsOnMesh: number[] = [];
-  for (const oid of oidSet) {
-    if (idMap[oid] !== undefined) {
-      oidsOnMesh.push(oid);
+  const idsOnMesh: number[] = [];
+  for (const partId of idSet) {
+    if (idMap[partId] !== undefined) {
+      idsOnMesh.push(partId);
     }
   }
-  oidsOnMesh.sort((a, b) => a - b);
-  if (oidsOnMesh.length === 0) return null;
-  const primaryOid = oidsOnMesh[0]!;
+  idsOnMesh.sort((a, b) => a - b);
+  if (idsOnMesh.length === 0) return null;
+  const primaryId = idsOnMesh[0]!;
 
   const newMaterial = (originalMesh.material as Material).clone();
   const newMesh = new Mesh(newGeometry, newMaterial);
@@ -331,12 +445,19 @@ export function createMergedSplitMeshFromGeometry(
   newMesh.rotation.copy(originalMesh.rotation);
   newMesh.scale.copy(originalMesh.scale);
 
+  const { structuralMetadata } = originalMesh.userData;
+  const propertyTableIndex = resolved.featureIdConfig?.propertyTable;
+
   let propertyData: unknown = null;
-  if (structuralMetadata && idMap[primaryOid] !== undefined) {
+  if (
+    structuralMetadata &&
+    propertyTableIndex !== undefined &&
+    idMap[primaryId] !== undefined
+  ) {
     try {
       propertyData = structuralMetadata.getPropertyTableData(
-        featureId.propertyTable,
-        idMap[primaryOid]!,
+        propertyTableIndex,
+        idMap[primaryId]!,
       );
     } catch {
       // ignore
@@ -345,21 +466,52 @@ export function createMergedSplitMeshFromGeometry(
 
   const userData: Record<string, unknown> = {
     ...originalMesh.userData,
-    featureId: idMap[primaryOid],
-    oid: primaryOid,
-    collectorOids: oidsOnMesh,
+    featureId: idMap[primaryId],
+    [cfg.idKey]: primaryId,
+    [cfg.collectorKey]: idsOnMesh,
     originalMesh: originalMesh,
     propertyData,
     isSplit: true,
     isMergedSplit: true,
+    partIdChannel: channel,
   };
   if (options?.splitGeometryManagedByCache) {
     userData.splitGeometryManagedByCache = true;
   }
   newMesh.userData = userData;
 
-  newMesh.name = `merged_features_${oidsOnMesh.length}_${primaryOid}`;
+  newMesh.name = `${cfg.namePrefix}_${idsOnMesh.length}_${primaryId}`;
   return newMesh;
+}
+
+export function createMergedSplitMeshFromGeometry(
+  originalMesh: Mesh,
+  newGeometry: BufferGeometry,
+  oidSet: ReadonlySet<number>,
+  options?: { splitGeometryManagedByCache?: boolean },
+): Mesh | null {
+  return createMergedSplitMeshFromGeometryByChannel(
+    originalMesh,
+    newGeometry,
+    oidSet,
+    "oid",
+    options,
+  );
+}
+
+export function createMergedSplitMeshFromGeometryByPids(
+  originalMesh: Mesh,
+  newGeometry: BufferGeometry,
+  pidSet: ReadonlySet<number>,
+  options?: { splitGeometryManagedByCache?: boolean },
+): Mesh | null {
+  return createMergedSplitMeshFromGeometryByChannel(
+    originalMesh,
+    newGeometry,
+    pidSet,
+    "pid",
+    options,
+  );
 }
 
 /**
@@ -372,6 +524,16 @@ export function splitMeshByOidsMerged(
   const geom = buildMergedSplitGeometryForTileMesh(originalMesh, oidSet);
   if (!geom) return null;
   return createMergedSplitMeshFromGeometry(originalMesh, geom, oidSet);
+}
+
+/** 将同一瓦片 mesh 内、属于给定 PID 集合的所有 feature 合并为单个 Mesh */
+export function splitMeshByPidsMerged(
+  originalMesh: Mesh,
+  pidSet: ReadonlySet<number>,
+): Mesh | null {
+  const geom = buildMergedSplitGeometryForTileMeshByPids(originalMesh, pidSet);
+  if (!geom) return null;
+  return createMergedSplitMeshFromGeometryByPids(originalMesh, geom, pidSet);
 }
 
 /** 与贴图/环境等相关的材质字段（与瓦片共用同一引用时不能 dispose 材质） */
@@ -632,6 +794,23 @@ export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
 }
 
 /**
+ * 从瓦片中获取所有 PID（featureIds[1]）
+ */
+export function getAllPidsFromTiles(tiles: TilesRenderer): number[] {
+  const pidSet = new Set<number>();
+
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
+    const pidMap = getPartIdMap(mesh, "pid");
+    if (!pidMap) return;
+    for (const pid of Object.keys(pidMap).map(Number)) {
+      pidSet.add(pid);
+    }
+  });
+
+  return Array.from(pidSet);
+}
+
+/**
  * 根据 OID 获取属性数据（从瓦片 structuralMetadata）
  */
 export function getPropertyDataByOid(
@@ -722,12 +901,111 @@ export function getTileMeshesByOid(tiles: TilesRenderer, oid: number): Mesh[] {
   return tileMeshes;
 }
 
+/**
+ * 根据 PID 获取包含该 PID 的瓦片 mesh
+ */
+export function getTileMeshesByPid(tiles: TilesRenderer, pid: number): Mesh[] {
+  const tileMeshes: Mesh[] = [];
+
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
+    if (checkMeshContainsPid(mesh, pid)) {
+      tileMeshes.push(mesh);
+    }
+  });
+
+  return tileMeshes;
+}
+
+/**
+ * 根据 PID 获取属性数据（从瓦片 structuralMetadata，featureIds[1]）
+ */
+export function getPropertyDataByPid(
+  tiles: TilesRenderer,
+  pid: number,
+): Record<string, unknown> | null {
+  let result: Record<string, unknown> | null = null;
+
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
+    if (result) return;
+
+    const pidMap = getPartIdMap(mesh, "pid");
+    if (!pidMap || pidMap[pid] === undefined) return;
+
+    const { meshFeatures, structuralMetadata } = mesh.userData;
+    const featureId = meshFeatures.featureIds[1];
+    if (!featureId || featureId.propertyTable === undefined) return;
+
+    const fid = pidMap[pid];
+
+    try {
+      result = structuralMetadata.getPropertyTableData(
+        featureId.propertyTable,
+        fid,
+      ) as Record<string, unknown>;
+    } catch {
+      // ignore
+    }
+  });
+
+  return result;
+}
+
+/**
+ * 单次遍历场景构建 PID → 属性表数据
+ */
+export function getPropertyDataMapFromTilesByPid(
+  tiles: TilesRenderer,
+): Map<number, Record<string, unknown> | null> {
+  const map = new Map<number, Record<string, unknown> | null>();
+
+  forEachLoadedFeatureMesh(tiles, (mesh) => {
+    const pidMap = getPartIdMap(mesh, "pid");
+    if (!pidMap) return;
+
+    const { meshFeatures, structuralMetadata } = mesh.userData;
+    const featureId = meshFeatures.featureIds[1];
+    if (!featureId || featureId.propertyTable === undefined) return;
+
+    const propertyTable = featureId.propertyTable;
+
+    for (const pid of Object.keys(pidMap).map(Number)) {
+      const fid = pidMap[pid];
+      if (fid === undefined) continue;
+
+      const existing = map.get(pid);
+      if (existing != null) continue;
+
+      try {
+        const data = structuralMetadata.getPropertyTableData(
+          propertyTable,
+          fid,
+        ) as Record<string, unknown>;
+        map.set(pid, data);
+      } catch {
+        if (!map.has(pid)) {
+          map.set(pid, null);
+        }
+      }
+    }
+  });
+
+  return map;
+}
+
+function checkMeshContainsPartId(
+  mesh: Mesh,
+  partId: number,
+  channel: PartIdChannel,
+): boolean {
+  const idMap = getPartIdMap(mesh, channel);
+  if (!idMap) return false;
+  return idMap[partId] !== undefined;
+}
+
 function checkMeshContainsOid(mesh: Mesh, oid: number): boolean {
-  const idMap = mesh.userData.idMap;
+  return checkMeshContainsPartId(mesh, oid, "oid");
+}
 
-  if (!idMap) {
-    return false;
-  }
-
-  return idMap[oid] !== undefined;
+function checkMeshContainsPid(mesh: Mesh, pid: number): boolean {
+  return checkMeshContainsPartId(mesh, pid, "pid");
 }

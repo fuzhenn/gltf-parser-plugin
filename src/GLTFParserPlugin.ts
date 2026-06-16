@@ -20,6 +20,7 @@ import {
   MeshCollector,
   MeshSplitResolver,
   normalizeMeshCollectorOids,
+  normalizeMeshCollectorPids,
   type MeshCollectorQuery,
 } from "./MeshCollector";
 import {
@@ -31,6 +32,7 @@ import type { PartEffectHost } from "./plugin/part-effect-host";
 import { StyleHelper, type StyleConfig } from "./plugin/StyleHelper";
 import {
   PartHighlightHelper,
+  type HighlightByPidsOptions,
   type HighlightOptions,
 } from "./plugin/PartHighlightHelper";
 import { InteractionFilter } from "./plugin/InteractionFilter";
@@ -201,6 +203,8 @@ export class GLTFParserPlugin {
       getTiles: () => this.tiles ?? null,
       hidePartsByOids: (oids) => this.partVisibility.hidePartsByOids(oids),
       showPartsByOids: (oids) => this.partVisibility.showPartsByOids(oids),
+      hidePartsByPids: (pids) => this.partVisibility.hidePartsByPids(pids),
+      showPartsByPids: (pids) => this.partVisibility.showPartsByPids(pids),
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       releaseMeshCollector: (c) => this.releaseMeshCollector(c),
       getRootGroup: () => this.tiles?.group ?? null,
@@ -544,6 +548,7 @@ export class GLTFParserPlugin {
   private _runTileVisibilityFollowUp(): void {
     this._styleHelper?.refreshHiddenOidsOnly();
     this._partHighlightHelper?.refreshHiddenOidsOnly();
+    this._partHighlightHelper?.refreshHiddenPidsOnly();
 
     for (const collector of this.collectors) {
       collector._updateMeshes();
@@ -743,12 +748,17 @@ export class GLTFParserPlugin {
    */
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector {
     const oids = query.oids ?? [];
+    const pids = query.pids ?? [];
     const hasOids = normalizeMeshCollectorOids(oids).length > 0;
+    const hasPids = normalizeMeshCollectorPids(pids).length > 0;
     const hasCond = Boolean(query.condition?.trim());
-    if (!hasOids && !hasCond) {
+    if (!hasOids && !hasPids && !hasCond) {
       throw new Error(
-        "getMeshCollectorByCondition requires non-empty oids and/or a condition string",
+        "getMeshCollectorByCondition requires non-empty oids/pids and/or a condition string",
       );
+    }
+    if (hasOids && hasPids) {
+      throw new Error("getMeshCollectorByCondition cannot specify both oids and pids");
     }
 
     const collector = new MeshCollector(query);
@@ -799,6 +809,21 @@ export class GLTFParserPlugin {
   }
 
   /**
+   * 按 PID 高亮构件（使用 `_FEATURE_ID_1` / `pidMap`）
+   * @param options 高亮配置，pids 为 PID 数组
+   */
+  highlightByPids(options: HighlightByPidsOptions): void {
+    this._partHighlightHelper?.highlightByPids(options);
+  }
+
+  /**
+   * 按名称获取最近一次 highlightByPids 传入的配置
+   */
+  getHighlightByPidName(name: string): HighlightByPidsOptions | undefined {
+    return this._partHighlightHelper?.getHighlightByPidName(name);
+  }
+
+  /**
    * 按名称获取最近一次 highlight 传入的配置（取消高亮后返回 undefined）
    */
   getHighlightByName(name: string): HighlightOptions | undefined {
@@ -821,10 +846,24 @@ export class GLTFParserPlugin {
   }
 
   /**
+   * 取消指定名称的 PID 高亮
+   */
+  cancelHighlightByPid(name: string): void {
+    this._partHighlightHelper?.cancelHighlightByPid(name);
+  }
+
+  /**
    * 取消所有高亮
    */
   cancelAllHighlight(): void {
     this._partHighlightHelper?.cancelAllHighlight();
+  }
+
+  /**
+   * 取消所有 PID 高亮
+   */
+  cancelAllHighlightByPid(): void {
+    this._partHighlightHelper?.cancelAllHighlightByPid();
   }
 
   _registerMeshCollector(collector: MeshCollector): void {
