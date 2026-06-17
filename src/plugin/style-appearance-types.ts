@@ -70,11 +70,26 @@ export interface StyleAppearance {
   origin?: StyleVec3Input;
 }
 
+/**
+ * 条件 / 可见性表达式描述：通过 `featureIdAttribute` 指定顶点属性通道（默认 0 即 `_FEATURE_ID_0`）。
+ */
+export interface StyleConditionDescriptor {
+  content: string;
+  /** 顶点属性索引，0 → `_FEATURE_ID_0`，1 → `_FEATURE_ID_1`，以此类推 */
+  featureIdAttribute?: number;
+}
+
+/** 条件第一项：字符串（默认 `_FEATURE_ID_0`）、布尔或带通道的对象 */
+export type StyleConditionInput = string | boolean | StyleConditionDescriptor;
+
 /** 条件项：[条件表达式或 true, 外观对象] */
-export type StyleCondition = [string | boolean, StyleAppearance];
+export type StyleCondition = [StyleConditionInput, StyleAppearance];
+
+/** show 表达式：字符串（默认 `_FEATURE_ID_0`）或带通道的对象 */
+export type StyleShowInput = string | StyleConditionDescriptor;
 
 /** 样式配置 */
 export interface StyleConfig {
-  show?: string;
+  show?: StyleShowInput;
   conditions?: StyleCondition[];
 }

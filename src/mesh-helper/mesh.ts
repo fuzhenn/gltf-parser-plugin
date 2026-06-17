@@ -964,9 +964,7 @@ export function getPropertyDataMapFromTilesByPid(
 
     const { meshFeatures, structuralMetadata } = mesh.userData;
     const featureId = meshFeatures.featureIds[1];
-    if (!featureId || featureId.propertyTable === undefined) return;
-
-    const propertyTable = featureId.propertyTable;
+    const propertyTable = featureId?.propertyTable;
 
     for (const pid of Object.keys(pidMap).map(Number)) {
       const fid = pidMap[pid];
@@ -974,6 +972,11 @@ export function getPropertyDataMapFromTilesByPid(
 
       const existing = map.get(pid);
       if (existing != null) continue;
+
+      if (propertyTable === undefined) {
+        map.set(pid, { _pid: pid, pid });
+        continue;
+      }
 
       try {
         const data = structuralMetadata.getPropertyTableData(
@@ -1008,4 +1011,54 @@ function checkMeshContainsOid(mesh: Mesh, oid: number): boolean {
 
 function checkMeshContainsPid(mesh: Mesh, pid: number): boolean {
   return checkMeshContainsPartId(mesh, pid, "pid");
+}
+
+/** `_FEATURE_ID_N` 索引 → 内部 PartIdChannel（当前仅 0/1 有完整管线） */
+export function featureIdAttributeToChannel(
+  featureIdAttribute: number,
+): PartIdChannel {
+  return featureIdAttribute === 1 ? "pid" : "oid";
+}
+
+export function getAllFeatureIdsFromTiles(
+  tiles: TilesRenderer,
+  featureIdAttribute: number,
+): number[] {
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  return channel === "pid"
+    ? getAllPidsFromTiles(tiles)
+    : getAllOidsFromTiles(tiles);
+}
+
+export function getPropertyDataMapFromTilesByFeatureAttribute(
+  tiles: TilesRenderer,
+  featureIdAttribute: number,
+  internalData?: InternalData,
+): Map<number, Record<string, unknown> | null> {
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  if (channel === "pid") return getPropertyDataMapFromTilesByPid(tiles);
+  return getPropertyDataMapFromTiles(tiles, internalData);
+}
+
+export function getPropertyDataByFeatureAttribute(
+  tiles: TilesRenderer,
+  featureId: number,
+  featureIdAttribute: number,
+  internalData?: InternalData,
+): Record<string, unknown> | null {
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  return channel === "pid"
+    ? getPropertyDataByPid(tiles, featureId)
+    : getPropertyDataByOid(tiles, featureId, internalData);
+}
+
+export function getTileMeshesByFeatureAttribute(
+  tiles: TilesRenderer,
+  featureId: number,
+  featureIdAttribute: number,
+): Mesh[] {
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  return channel === "pid"
+    ? getTileMeshesByPid(tiles, featureId)
+    : getTileMeshesByOid(tiles, featureId);
 }

@@ -10,12 +10,18 @@ import {
   Vector3,
 } from "three";
 import { evaluateStyleCondition } from "./style-condition-eval";
+import {
+  resolveShowFeatureIdAttribute,
+  resolveStyleConditionFeatureIdAttribute,
+} from "./style-condition-input";
 import { toColor, type ColorInput } from "../utils/color-input";
 import type {
   StyleAppearance,
   StyleCondition,
+  StyleConditionInput,
   StyleEulerInput,
   StyleMaterialMaps,
+  StyleShowInput,
   StyleVec3Input,
 } from "./style-appearance-types";
 
@@ -338,15 +344,22 @@ export function buildPivotStyleMatrix(
  * `PartHighlightHelper.buildAppearanceGroups` 的 all-match 实现，而非本函数。
  */
 export function resolveConditionsAppearance<T>(
-  conditions: [string | boolean, T][] | undefined,
+  conditions: [StyleConditionInput, T][] | undefined,
   propertyData: Record<string, unknown> | null,
   evaluators?: ReadonlyMap<
     string,
     import("./style-condition-eval").StyleConditionEvaluator
   >,
+  featureIdAttribute?: number,
 ): T | null {
   if (!conditions?.length) return null;
   for (const [cond, value] of conditions) {
+    if (
+      featureIdAttribute !== undefined &&
+      resolveStyleConditionFeatureIdAttribute(cond) !== featureIdAttribute
+    ) {
+      continue;
+    }
     if (evaluateStyleCondition(cond, propertyData, evaluators)) {
       return value;
     }
@@ -356,38 +369,38 @@ export function resolveConditionsAppearance<T>(
 
 
 /**
- * setStyle 的核心分组逻辑：把 `propertyByOid`（OID → 已注入派生字段的 propertyData）
+ * setStyle 的核心分组逻辑：把 feature id → propertyData
  * 经 `show` 过滤、conditions first-match 评估后，按 {@link appearanceGroupKey} 聚合。
- *
- * - `propertyData == null` 视为缺失，跳过（既不分组也不计入隐藏）；
- * - `show` 命中失败 → 该 OID 进入 `hiddenOidsList`，不参与外观分组；
- * - `show` 通过且某条 condition 命中 → 加入对应 group；全部未命中则不输出（保持原貌）。
- *
- * 返回的 group 由调用方喂给 MeshCollector 创建独立的 split mesh 集合。
  */
 export function buildAppearanceGroupsFromPropertyMap(
-  propertyByOid: Map<number, Record<string, unknown> | null>,
-  config: { show?: string; conditions: StyleCondition[] },
+  propertyMap: Map<number, Record<string, unknown> | null>,
+  config: { show?: StyleShowInput; conditions: StyleCondition[] },
   evaluators?: ReadonlyMap<
     string,
     import("./style-condition-eval").StyleConditionEvaluator
   >,
+  featureIdAttribute = 0,
 ): {
-  hiddenOidsList: number[];
-  groups: Map<string, { appearance: StyleAppearance; oids: number[] }>;
+  hiddenFeatureIdsList: number[];
+  groups: Map<string, { appearance: StyleAppearance; featureIds: number[] }>;
 } {
-  const hiddenOidsList: number[] = [];
+  const hiddenFeatureIdsList: number[] = [];
   const groups = new Map<
     string,
-    { appearance: StyleAppearance; oids: number[] }
+    { appearance: StyleAppearance; featureIds: number[] }
   >();
   const conditions = config.conditions ?? [];
+  const showForChannel =
+    config.show != null &&
+    resolveShowFeatureIdAttribute(config.show) === featureIdAttribute
+      ? config.show
+      : undefined;
 
-  for (const [oid, propertyData] of propertyByOid) {
+  for (const [featureId, propertyData] of propertyMap) {
     if (propertyData == null) continue;
-    if (config.show) {
-      if (!evaluateStyleCondition(config.show, propertyData, evaluators)) {
-        hiddenOidsList.push(oid);
+    if (showForChannel) {
+      if (!evaluateStyleCondition(showForChannel, propertyData, evaluators)) {
+        hiddenFeatureIdsList.push(featureId);
         continue;
       }
     }
@@ -396,19 +409,20 @@ export function buildAppearanceGroupsFromPropertyMap(
       conditions,
       propertyData,
       evaluators,
+      featureIdAttribute,
     );
     if (!appearance) continue;
 
     const gkey = appearanceGroupKey(appearance);
     let g = groups.get(gkey);
     if (!g) {
-      g = { appearance, oids: [] };
+      g = { appearance, featureIds: [] };
       groups.set(gkey, g);
     }
-    g.oids.push(oid);
+    g.featureIds.push(featureId);
   }
 
-  return { hiddenOidsList, groups };
+  return { hiddenFeatureIdsList, groups };
 }
 
 /** 当 `appearance.mesh` 工厂被使用时，把产物 Object3D 暂存到原 mesh 的 userData，便于还原时清理 */

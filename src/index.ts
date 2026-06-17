@@ -14,13 +14,16 @@ export {
   disposeTileMeshSplitGeometryCache,
   meshCollectorGroupKey,
   meshCollectorQueryCacheKey,
+  normalizeMeshCollectorFeatureIds,
   normalizeMeshCollectorOids,
   normalizeMeshCollectorPids,
+  resolveMeshCollectorQuery,
 } from "./MeshCollector";
 export type {
   MeshChangeEvent,
   MeshCollectorEventMap,
   MeshCollectorQuery,
+  ResolvedMeshCollectorQuery,
 } from "./MeshCollector";
 export {
   buildStyleConditionEvaluatorMap,
@@ -28,16 +31,27 @@ export {
   evaluateStyleCondition,
 } from "./plugin/style-condition-eval";
 export type { StyleConditionEvaluator } from "./plugin/style-condition-eval";
+export {
+  collectFeatureIdAttributesFromStyleConfig,
+  normalizeFeatureIdAttribute,
+  resolveShowContent,
+  resolveShowFeatureIdAttribute,
+  resolveStyleConditionContent,
+  resolveStyleConditionFeatureIdAttribute,
+} from "./plugin/style-condition-input";
 export type { FeatureInfo } from "./mesh-helper/intersection";
 export type { ColorInput } from "./utils/color-input";
 export type {
   StyleAppearance,
-  StyleConfig,
   StyleCondition,
+  StyleConditionDescriptor,
+  StyleConditionInput,
+  StyleConfig,
   StyleEulerInput,
   StyleMaterialMaps,
   StyleMaterialResolver,
   StyleMeshFactory,
+  StyleShowInput,
   StyleVec3Input,
 } from "./plugin/style-appearance-types";
 export { extractStyleMaterialMaps } from "./plugin/style-appearance-shared";
@@ -47,6 +61,7 @@ export type {
   HighlightCondition,
   HighlightMaterial,
   HighlightOptions,
+  ResolvedHighlightOptions,
 } from "./plugin/PartHighlightHelper";
 export { PartVisibilityHelper } from "./plugin/part-visibility-helper";
 export {

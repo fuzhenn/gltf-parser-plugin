@@ -7,7 +7,14 @@
  * 将返回的 Map 传入 `evaluateStyleCondition`，避免在 OID 循环中重复编译。
  */
 
-import type { StyleCondition } from "./style-appearance-types";
+import type {
+  StyleCondition,
+  StyleShowInput,
+} from "./style-appearance-types";
+import {
+  resolveShowContent,
+  resolveStyleConditionContent,
+} from "./style-condition-input";
 
 export type StyleConditionEvaluator = (
   data: Record<string, unknown>,
@@ -36,13 +43,15 @@ with (d) { return Boolean(${trimmed}); }`,
  * 遍历 style 的 show 与 conditions，对每个出现过的字符串表达式只编译一次
  */
 export function buildStyleConditionEvaluatorMap(config: {
-  show?: string;
+  show?: StyleShowInput;
   conditions?: StyleCondition[];
 }): Map<string, StyleConditionEvaluator> {
   const strings = new Set<string>();
-  if (config.show?.trim()) strings.add(config.show.trim());
+  const showContent = resolveShowContent(config.show);
+  if (showContent?.trim()) strings.add(showContent.trim());
   for (const [cond] of config.conditions ?? []) {
-    if (typeof cond === "string" && cond.trim()) strings.add(cond.trim());
+    const content = resolveStyleConditionContent(cond);
+    if (typeof content === "string" && content.trim()) strings.add(content.trim());
   }
   const map = new Map<string, StyleConditionEvaluator>();
   for (const s of strings) {
@@ -53,15 +62,16 @@ export function buildStyleConditionEvaluatorMap(config: {
 }
 
 export function evaluateStyleCondition(
-  expr: string | boolean,
+  expr: import("./style-appearance-types").StyleConditionInput,
   propertyData: Record<string, unknown> | null,
   evaluators?: ReadonlyMap<string, StyleConditionEvaluator>,
 ): boolean {
-  if (expr === true) return true;
-  if (expr === false) return false;
-  if (typeof expr !== "string" || !expr.trim()) return true;
+  const resolved = resolveStyleConditionContent(expr);
+  if (resolved === true) return true;
+  if (resolved === false) return false;
+  if (typeof resolved !== "string" || !resolved.trim()) return true;
 
-  const trimmed = expr.trim();
+  const trimmed = resolved.trim();
   const data = propertyData ?? {};
 
   const fromMap = evaluators?.get(trimmed);

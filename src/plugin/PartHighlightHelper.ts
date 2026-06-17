@@ -1,18 +1,24 @@
 import {
   MESH_CACHE_NAMESPACE_HIGHLIGHT,
-  normalizeMeshCollectorOids,
-  normalizeMeshCollectorPids,
+  normalizeMeshCollectorFeatureIds,
   type MeshCollector,
 } from "../MeshCollector";
-import {
-  getPropertyDataMapFromTiles,
-  getPropertyDataMapFromTilesByPid,
-} from "../mesh-helper/mesh";
-import type { StyleCondition } from "./style-appearance-types";
+import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/mesh";
+import type {
+  StyleCondition,
+  StyleConditionInput,
+  StyleShowInput,
+} from "./style-appearance-types";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
 } from "./style-condition-eval";
+import {
+  collectFeatureIdAttributesFromStyleConfig,
+  normalizeFeatureIdAttribute,
+  resolveShowFeatureIdAttribute,
+  resolveStyleConditionFeatureIdAttribute,
+} from "./style-condition-input";
 import type { PartEffectHost } from "./part-effect-host";
 import type { ColorInput } from "../utils/color-input";
 import {
@@ -49,7 +55,6 @@ export type HighlightMaterial = Material | StyleMaterialResolver;
 export interface HighlightAppearance {
   material?: HighlightMaterial;
   color?: ColorInput;
-  /** 0–1，与 `material` 同级 */
   opacity?: number;
   mesh?: StyleMeshFactory;
   translation?: StyleVec3Input;
@@ -58,45 +63,115 @@ export interface HighlightAppearance {
   origin?: StyleVec3Input;
 }
 
-export type HighlightCondition = [string | boolean, HighlightAppearance];
+export type HighlightCondition = [StyleConditionInput, HighlightAppearance];
 
 /**
  * 高亮配置：语义与 setStyle 相似，多一个 name 用于命名分组
  *
  * 与 setStyle 的关键差异：`conditions` 中**所有**命中的条目都会各自生效，
- * 分别创建独立的 MeshCollector 与 split mesh 实例，视觉上叠加；
- * 典型用途如"填充 + 线框"同时存在（见 `src/plugin/demo.html`）。
+ * 分别创建独立的 MeshCollector 与 split mesh 实例，视觉上叠加。
  */
 export interface HighlightOptions {
-  /** 高亮组名称，用于 cancelHighlight(name) 取消 */
   name: string;
-  /** 可见性表达式，仅满足条件的构件参与高亮，如 'foo === bar' */
-  show?: string;
-  /** 条件外观数组；所有命中的条目都会各自生效并叠加渲染；`[true, appearance]` 为默认 */
+  show?: StyleShowInput;
   conditions?: HighlightCondition[];
-  /** 若指定，仅在这些 OID 与属性数据的交集中应用（与 conditions 组合） */
+  /** 若指定，仅在这些 feature id 与属性数据的交集中应用 */
+  featureIds?: number[];
+  /** 顶点属性索引，0 → `_FEATURE_ID_0`，1 → `_FEATURE_ID_1`；默认 0 */
+  featureIdAttribute?: number;
+  /** @deprecated 请使用 featureIds + featureIdAttribute: 0 */
   oids?: number[];
-}
-
-/**
- * 按 PID 高亮配置（使用 `_FEATURE_ID_1` / `pidMap`）
- */
-export interface HighlightByPidsOptions {
-  /** 高亮组名称，用于 cancelHighlightByPid(name) 取消 */
-  name: string;
-  /** 可见性表达式，仅满足条件的构件参与高亮 */
-  show?: string;
-  /** 条件外观数组 */
-  conditions?: HighlightCondition[];
-  /** 若指定，仅在这些 PID 与属性数据的交集中应用 */
+  /** @deprecated 请使用 featureIds + featureIdAttribute: 1 */
   pids?: number[];
 }
+
+/** @deprecated 请使用 HighlightOptions */
+export type HighlightByPidsOptions = HighlightOptions;
 
 interface HighlightGroupConfig {
-  show?: string;
+  show?: StyleShowInput;
   conditions?: HighlightCondition[];
-  oids?: number[];
-  pids?: number[];
+  featureIds?: number[];
+  featureIdAttribute: number;
+}
+
+export interface ResolvedHighlightOptions {
+  name: string;
+  show?: StyleShowInput;
+  conditions?: HighlightCondition[];
+  featureIds: number[];
+  featureIdAttribute: number;
+}
+
+function resolveHighlightOptions(
+  options: HighlightOptions,
+): ResolvedHighlightOptions {
+  const hasFeatureIds =
+    normalizeMeshCollectorFeatureIds(options.featureIds ?? []).length > 0;
+  const hasOids = normalizeMeshCollectorFeatureIds(options.oids ?? []).length > 0;
+  const hasPids = normalizeMeshCollectorFeatureIds(options.pids ?? []).length > 0;
+  const legacyCount = [hasFeatureIds, hasOids, hasPids].filter(Boolean).length;
+  if (legacyCount > 1) {
+    throw new Error(
+      "HighlightOptions cannot specify more than one of featureIds, oids, and pids",
+    );
+  }
+
+  let featureIds: number[] = [];
+  let featureIdAttribute = normalizeFeatureIdAttribute(
+    options.featureIdAttribute,
+  );
+
+  if (hasFeatureIds) {
+    featureIds = normalizeMeshCollectorFeatureIds(options.featureIds!);
+  } else if (hasOids) {
+    featureIds = normalizeMeshCollectorFeatureIds(options.oids!);
+    featureIdAttribute = 0;
+  } else if (hasPids) {
+    featureIds = normalizeMeshCollectorFeatureIds(options.pids!);
+    featureIdAttribute = 1;
+  }
+
+  if (legacyCount === 0 && options.featureIdAttribute === undefined) {
+    const attrs = collectFeatureIdAttributesFromStyleConfig({
+      show: options.show,
+      conditions: options.conditions,
+    });
+    if (attrs.length === 1) {
+      featureIdAttribute = attrs[0]!;
+    }
+  }
+
+  return {
+    name: options.name,
+    show: options.show,
+    conditions: options.conditions,
+    featureIds,
+    featureIdAttribute,
+  };
+}
+
+function highlightGroupAppliesToAttribute(
+  hl: HighlightGroupConfig,
+  featureIdAttribute: number,
+): boolean {
+  if (hl.featureIds?.length) {
+    return hl.featureIdAttribute === featureIdAttribute;
+  }
+  if (
+    hl.show != null &&
+    resolveShowFeatureIdAttribute(hl.show) === featureIdAttribute
+  ) {
+    return true;
+  }
+  for (const [cond] of hl.conditions ?? []) {
+    if (
+      resolveStyleConditionFeatureIdAttribute(cond) === featureIdAttribute
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
@@ -113,28 +188,24 @@ function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
   return appearance;
 }
 
-function cloneHighlightByPidsOptions(
-  options: HighlightByPidsOptions,
-): HighlightByPidsOptions {
-  return {
-    name: options.name,
-    show: options.show,
-    conditions: options.conditions?.map(
-      ([c, h]): HighlightCondition => [c, { ...h }],
-    ),
-    pids: options.pids?.slice(),
-  };
-}
-
 function cloneHighlightOptions(options: HighlightOptions): HighlightOptions {
-  return {
-    name: options.name,
-    show: options.show,
+  const resolved = resolveHighlightOptions(options);
+  const cloned: HighlightOptions = {
+    name: resolved.name,
+    show: resolved.show,
+    featureIdAttribute: resolved.featureIdAttribute,
+    featureIds: resolved.featureIds.slice(),
     conditions: options.conditions?.map(
       ([c, h]): HighlightCondition => [c, { ...h }],
     ),
-    oids: options.oids?.slice(),
   };
+  if (resolved.featureIdAttribute === 0 && resolved.featureIds.length > 0) {
+    cloned.oids = resolved.featureIds.slice();
+  }
+  if (resolved.featureIdAttribute === 1 && resolved.featureIds.length > 0) {
+    cloned.pids = resolved.featureIds.slice();
+  }
+  return cloned;
 }
 
 function highlightAppearanceNeedsTransform(ha: HighlightAppearance): boolean {
@@ -149,9 +220,6 @@ function highlightAppearanceTransformKey(ha: HighlightAppearance): string {
   return `${vec3Key(ha.translation)}|${vec3Key(ha.scale)}|${eulerKey(ha.rotation)}|${vec3Key(ha.origin)}`;
 }
 
-/**
- * 与 {@link applyStyleAppearanceToMesh} 一致：基准为单位变换时，仅由 TRS 与 origin 枢轴得到的局部矩阵，列主序 16 个数（Three.js `Matrix4.elements` 顺序）。
- */
 function localMatrix16FromHighlightAppearance(
   ha: HighlightAppearance,
 ): number[] | undefined {
@@ -208,20 +276,15 @@ function localMatrix16FromHighlightAppearance(
 
 /**
  * 构件高亮辅助器
- * 与 setStyle 相同的 show / conditions / 位姿语义，多组命名高亮；底层通过 hidePartsByOids + split mesh 实现
+ * 与 setStyle 相同的 show / conditions / 位姿语义，多组命名高亮
  */
 export class PartHighlightHelper {
   private highlightGroups = new Map<string, HighlightGroupConfig>();
-  private highlightPidGroups = new Map<string, HighlightGroupConfig>();
-  /** 最近一次 highlight(name, …) 传入的完整参数，供 getHighlightByName 读取 */
   private highlightConfigByName = new Map<string, HighlightOptions>();
-  private highlightByPidConfigByName = new Map<string, HighlightByPidsOptions>();
-
   private originalMaterialByMesh = new Map<string, Material>();
   private originalTransformByMesh = new Map<string, StoredTransform>();
   private meshChangeHandlers = new Map<string, () => void>();
   private highlightCollectors: MeshCollector[] = [];
-  private highlightPidCollectors: MeshCollector[] = [];
 
   constructor(private context: PartEffectHost) {}
 
@@ -232,18 +295,11 @@ export class PartHighlightHelper {
     };
   }
 
-  /**
-   * 聚合所有命名 highlight 组产出的外观分组，并返回涉及的 OID 集合（用于隐藏原片）。
-   *
-   * `conditions` 中所有命中的条目都会各自进入对应 `appearanceGroupKey` 分组，
-   * 每个分组独立创建 MeshCollector / split mesh，实现多外观叠加（如填充 + 线框）。
-   */
-  private buildAppearanceGroupsFromPropertyMap(
+  private buildAppearanceGroupsForAttribute(
     propertyMap: Map<number, Record<string, unknown> | null>,
-    groupsSource: Map<string, HighlightGroupConfig>,
-    idKey: "oids" | "pids",
+    featureIdAttribute: number,
   ): {
-    groups: Map<string, { appearance: StyleAppearance; ids: number[] }>;
+    groups: Map<string, { appearance: StyleAppearance; featureIds: number[] }>;
     styledIds: Set<number>;
   } {
     const groupsByKey = new Map<
@@ -252,29 +308,43 @@ export class PartHighlightHelper {
     >();
     const styledIds = new Set<number>();
 
-    for (const [, hl] of groupsSource) {
+    for (const [, hl] of this.highlightGroups) {
+      if (!highlightGroupAppliesToAttribute(hl, featureIdAttribute)) continue;
+
       const evaluators = buildStyleConditionEvaluatorMap({
         show: hl.show,
         conditions: (hl.conditions ?? []) as StyleCondition[],
       });
-      const conditions = (hl.conditions ?? []).map(
-        ([c, h]): [string | boolean, StyleAppearance] => [
-          c,
-          toStyleAppearance(h),
-        ],
-      );
-      const explicitIds = hl[idKey];
-      const idsSet = explicitIds ? new Set(explicitIds) : null;
+      const conditions = (hl.conditions ?? [])
+        .filter(
+          ([cond]) =>
+            resolveStyleConditionFeatureIdAttribute(cond) ===
+            featureIdAttribute,
+        )
+        .map(
+          ([c, h]): [StyleConditionInput, StyleAppearance] => [
+            c,
+            toStyleAppearance(h),
+          ],
+        );
+      const showForChannel =
+        hl.show != null &&
+        resolveShowFeatureIdAttribute(hl.show) === featureIdAttribute
+          ? hl.show
+          : undefined;
+      const explicitIds = hl.featureIds;
+      const idsSet = explicitIds?.length ? new Set(explicitIds) : null;
       const candidateIds = idsSet ? [...idsSet] : [...propertyMap.keys()];
 
       for (const partId of candidateIds) {
         const propertyData = propertyMap.get(partId) ?? null;
         if (propertyData == null && !idsSet) continue;
         if (
-          hl.show &&
-          !evaluateStyleCondition(hl.show, propertyData, evaluators)
-        )
+          showForChannel &&
+          !evaluateStyleCondition(showForChannel, propertyData, evaluators)
+        ) {
           continue;
+        }
 
         for (const [cond, appearance] of conditions) {
           if (!evaluateStyleCondition(cond, propertyData, evaluators)) continue;
@@ -292,36 +362,41 @@ export class PartHighlightHelper {
 
     const groups = new Map<
       string,
-      { appearance: StyleAppearance; ids: number[] }
+      { appearance: StyleAppearance; featureIds: number[] }
     >();
     for (const [gkey, g] of groupsByKey) {
-      groups.set(gkey, { appearance: g.appearance, ids: [...g.ids] });
+      groups.set(gkey, { appearance: g.appearance, featureIds: [...g.ids] });
     }
 
     return { groups, styledIds };
   }
 
-  private collectUnionShowHideFromPropertyMap(
+  private collectUnionShowHideForAttribute(
     propertyMap: Map<number, Record<string, unknown> | null>,
-    groupsSource: Map<string, HighlightGroupConfig>,
-    idKey: "oids" | "pids",
+    featureIdAttribute: number,
   ): Set<number> {
     const unionHide = new Set<number>();
-    for (const [, hl] of groupsSource) {
+    for (const [, hl] of this.highlightGroups) {
+      if (!highlightGroupAppliesToAttribute(hl, featureIdAttribute)) continue;
+
       const evaluators = buildStyleConditionEvaluatorMap({
         show: hl.show,
         conditions: (hl.conditions ?? []) as StyleCondition[],
       });
-      const explicitIds = hl[idKey];
-      const idsSet = explicitIds ? new Set(explicitIds) : null;
+      const showForChannel =
+        hl.show != null &&
+        resolveShowFeatureIdAttribute(hl.show) === featureIdAttribute
+          ? hl.show
+          : undefined;
+      if (!showForChannel) continue;
+
+      const explicitIds = hl.featureIds;
+      const idsSet = explicitIds?.length ? new Set(explicitIds) : null;
       const candidateIds = idsSet ? [...idsSet] : [...propertyMap.keys()];
       for (const partId of candidateIds) {
         const propertyData = propertyMap.get(partId) ?? null;
         if (propertyData == null && !idsSet) continue;
-        if (
-          hl.show &&
-          !evaluateStyleCondition(hl.show, propertyData, evaluators)
-        ) {
+        if (!evaluateStyleCondition(showForChannel, propertyData, evaluators)) {
           unionHide.add(partId);
         }
       }
@@ -329,75 +404,26 @@ export class PartHighlightHelper {
     return unionHide;
   }
 
-  /**
-   * 聚合所有命名 highlight 组产出的外观分组，并返回涉及的 OID 集合（用于隐藏原片）。
-   */
-  private buildAppearanceGroups(
-    propertyByOid: Map<number, Record<string, unknown> | null>,
-  ): {
-    groups: Map<string, { appearance: StyleAppearance; oids: number[] }>;
-    styledOids: Set<number>;
-  } {
-    const { groups, styledIds } = this.buildAppearanceGroupsFromPropertyMap(
-      propertyByOid,
-      this.highlightGroups,
-      "oids",
-    );
-    const oidGroups = new Map<
-      string,
-      { appearance: StyleAppearance; oids: number[] }
-    >();
-    for (const [k, g] of groups) {
-      oidGroups.set(k, { appearance: g.appearance, oids: g.ids });
+  private collectUsedFeatureIdAttributes(): number[] {
+    const attrs = new Set<number>();
+    for (const [, hl] of this.highlightGroups) {
+      if (hl.featureIds?.length) {
+        attrs.add(hl.featureIdAttribute);
+      }
+      if (hl.show != null) {
+        attrs.add(resolveShowFeatureIdAttribute(hl.show));
+      }
+      for (const [cond] of hl.conditions ?? []) {
+        attrs.add(resolveStyleConditionFeatureIdAttribute(cond));
+      }
     }
-    return { groups: oidGroups, styledOids: styledIds };
+    if (attrs.size === 0) attrs.add(0);
+    return [...attrs].sort((a, b) => a - b);
   }
 
-  private buildAppearanceGroupsByPid(
-    propertyByPid: Map<number, Record<string, unknown> | null>,
-  ): {
-    groups: Map<string, { appearance: StyleAppearance; pids: number[] }>;
-    styledPids: Set<number>;
-  } {
-    const { groups, styledIds } = this.buildAppearanceGroupsFromPropertyMap(
-      propertyByPid,
-      this.highlightPidGroups,
-      "pids",
-    );
-    const pidGroups = new Map<
-      string,
-      { appearance: StyleAppearance; pids: number[] }
-    >();
-    for (const [k, g] of groups) {
-      pidGroups.set(k, { appearance: g.appearance, pids: g.ids });
-    }
-    return { groups: pidGroups, styledPids: styledIds };
-  }
-
-  /** 各组 show 失败需隐藏的 OID（与 setStyle 一致：show 不满足则隐藏原片） */
-  private collectUnionShowHide(
-    propertyByOid: Map<number, Record<string, unknown> | null>,
-  ): Set<number> {
-    return this.collectUnionShowHideFromPropertyMap(
-      propertyByOid,
-      this.highlightGroups,
-      "oids",
-    );
-  }
-
-  private collectUnionShowHideByPid(
-    propertyByPid: Map<number, Record<string, unknown> | null>,
-  ): Set<number> {
-    return this.collectUnionShowHideFromPropertyMap(
-      propertyByPid,
-      this.highlightPidGroups,
-      "pids",
-    );
-  }
-
-  private clearCollectorsAndRestoreMeshes(collectors: MeshCollector[]): void {
+  private clearCollectorsAndRestoreMeshes(): void {
     const maps = this.getMaps();
-    for (const collector of collectors) {
+    for (const collector of this.highlightCollectors) {
       collector.meshes.forEach((mesh) => {
         restoreMeshAppearanceMaps(mesh, maps);
         detachStyledMeshFromScene(mesh);
@@ -410,25 +436,15 @@ export class PartHighlightHelper {
       }
       this.context.releaseMeshCollector(collector);
     }
-  }
-
-  private clearOidCollectorsAndRestoreMeshes(): void {
-    this.clearCollectorsAndRestoreMeshes(this.highlightCollectors);
     this.highlightCollectors = [];
   }
 
-  private clearPidCollectorsAndRestoreMeshes(): void {
-    this.clearCollectorsAndRestoreMeshes(this.highlightPidCollectors);
-    this.highlightPidCollectors = [];
-  }
-
-  private reapplyOidHighlights(): void {
-    this.clearOidCollectorsAndRestoreMeshes();
+  private reapplyAll(): void {
+    this.clearCollectorsAndRestoreMeshes();
 
     if (this.highlightGroups.size === 0) {
-      if (this.highlightPidGroups.size === 0) {
-        this.context.hidePartsByOids([]);
-      }
+      this.context.hidePartsByFeatureAttribute([], 0);
+      this.context.hidePartsByFeatureAttribute([], 1);
       return;
     }
 
@@ -436,117 +452,94 @@ export class PartHighlightHelper {
     const scene = this.context.getRootGroup();
     if (!tiles || !scene) return;
 
-    const propertyByOid = getPropertyDataMapFromTiles(
-      tiles,
-      this.context.getInternalData?.(),
-    );
-    const { groups, styledOids } = this.buildAppearanceGroups(propertyByOid);
-    const unionHide = this.collectUnionShowHide(propertyByOid);
-
-    const oidsToHide = [...new Set([...styledOids, ...unionHide])];
     const maps = this.getMaps();
+    const attributes = this.collectUsedFeatureIdAttributes();
 
-    for (const { appearance, oids } of groups.values()) {
-      const sortedOids = normalizeMeshCollectorOids(oids);
-      const collector = this.context.getMeshCollectorByCondition({
-        oids: sortedOids,
-        meshCacheNamespace: MESH_CACHE_NAMESPACE_HIGHLIGHT,
-      });
-      this.highlightCollectors.push(collector);
+    for (const featureIdAttribute of attributes) {
+      const propertyMap = getPropertyDataMapFromTilesByFeatureAttribute(
+        tiles,
+        featureIdAttribute,
+        this.context.getInternalData?.(),
+      );
+      const { groups, styledIds } = this.buildAppearanceGroupsForAttribute(
+        propertyMap,
+        featureIdAttribute,
+      );
+      const unionHide = this.collectUnionShowHideForAttribute(
+        propertyMap,
+        featureIdAttribute,
+      );
+      const idsToHide = [...new Set([...styledIds, ...unionHide])];
 
-      const groupKey = collector.getInteractionGroupKey();
-      const handler = () => {
-        const s = this.context.getRootGroup();
-        if (!s) return;
-        collector.meshes.forEach((mesh) => {
-          applyStyleAppearanceToMesh(mesh, appearance, s, maps);
+      for (const { appearance, featureIds } of groups.values()) {
+        const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
+        const collector = this.context.getMeshCollectorByCondition({
+          featureIds: sortedIds,
+          featureIdAttribute,
+          meshCacheNamespace: MESH_CACHE_NAMESPACE_HIGHLIGHT,
         });
-      };
-      this.meshChangeHandlers.set(groupKey, handler);
-      collector.addEventListener("mesh-change", handler);
-      handler();
-    }
+        this.highlightCollectors.push(collector);
 
-    this.context.hidePartsByOids(oidsToHide);
-  }
-
-  private reapplyPidHighlights(): void {
-    this.clearPidCollectorsAndRestoreMeshes();
-
-    if (this.highlightPidGroups.size === 0) {
-      if (this.highlightGroups.size === 0) {
-        this.context.hidePartsByPids([]);
+        const groupKey = collector.getInteractionGroupKey();
+        const handler = () => {
+          const s = this.context.getRootGroup();
+          if (!s) return;
+          collector.meshes.forEach((mesh) => {
+            applyStyleAppearanceToMesh(mesh, appearance, s, maps);
+          });
+        };
+        this.meshChangeHandlers.set(groupKey, handler);
+        collector.addEventListener("mesh-change", handler);
+        handler();
       }
-      return;
+
+      this.context.hidePartsByFeatureAttribute(idsToHide, featureIdAttribute);
     }
-
-    const tiles = this.context.getTiles();
-    const scene = this.context.getRootGroup();
-    if (!tiles || !scene) return;
-
-    const propertyByPid = getPropertyDataMapFromTilesByPid(tiles);
-    const { groups, styledPids } = this.buildAppearanceGroupsByPid(propertyByPid);
-    const unionHide = this.collectUnionShowHideByPid(propertyByPid);
-
-    const pidsToHide = [...new Set([...styledPids, ...unionHide])];
-    const maps = this.getMaps();
-
-    for (const { appearance, pids } of groups.values()) {
-      const sortedPids = normalizeMeshCollectorPids(pids);
-      const collector = this.context.getMeshCollectorByCondition({
-        pids: sortedPids,
-        meshCacheNamespace: MESH_CACHE_NAMESPACE_HIGHLIGHT,
-      });
-      this.highlightPidCollectors.push(collector);
-
-      const groupKey = collector.getInteractionGroupKey();
-      const handler = () => {
-        const s = this.context.getRootGroup();
-        if (!s) return;
-        collector.meshes.forEach((mesh) => {
-          applyStyleAppearanceToMesh(mesh, appearance, s, maps);
-        });
-      };
-      this.meshChangeHandlers.set(groupKey, handler);
-      collector.addEventListener("mesh-change", handler);
-      handler();
-    }
-
-    this.context.hidePartsByPids(pidsToHide);
   }
 
-  private reapplyAll(): void {
-    this.reapplyOidHighlights();
-    this.reapplyPidHighlights();
-  }
-
-  /**
-   * 高亮指定构件（语义与 setStyle 一致，多 name 参数）
-   */
   highlight(options: HighlightOptions): void {
-    const { name, show, conditions, oids } = options;
-    if (!show && (!conditions || conditions.length === 0)) {
-      this.cancelHighlight(name);
+    const resolved = resolveHighlightOptions(options);
+    if (
+      !resolved.show &&
+      (!resolved.conditions || resolved.conditions.length === 0) &&
+      resolved.featureIds.length === 0
+    ) {
+      this.cancelHighlight(resolved.name);
       return;
     }
 
-    this.highlightGroups.set(name, { show, conditions, oids });
-    this.highlightConfigByName.set(name, cloneHighlightOptions(options));
+    this.highlightGroups.set(resolved.name, {
+      show: resolved.show,
+      conditions: resolved.conditions,
+      featureIds: resolved.featureIds.length
+        ? resolved.featureIds
+        : undefined,
+      featureIdAttribute: resolved.featureIdAttribute,
+    });
+    this.highlightConfigByName.set(resolved.name, cloneHighlightOptions(options));
     this.reapplyAll();
   }
 
-  /**
-   * 按名称获取最近一次 highlight 传入的配置（取消高亮后不再可用）
-   */
+  /** @deprecated 请使用 highlight({ ...options, featureIdAttribute: 1 }) */
+  highlightByPids(options: HighlightByPidsOptions): void {
+    this.highlight({
+      ...options,
+      featureIdAttribute: options.featureIdAttribute ?? 1,
+      featureIds: options.featureIds ?? options.pids,
+      pids: options.pids,
+    });
+  }
+
   getHighlightByName(name: string): HighlightOptions | undefined {
     const saved = this.highlightConfigByName.get(name);
     return saved ? cloneHighlightOptions(saved) : undefined;
   }
 
-  /**
-   * 按名称从已保存的 highlight 配置中取出位姿矩阵（列主序 16 个数，同 Three.js Matrix4）。
-   * 仅当 `conditions` 里所有「含 translation / scale / rotation」的外观其 TRS+origin 完全一致时返回；否则返回 undefined。
-   */
+  /** @deprecated 请使用 getHighlightByName */
+  getHighlightByPidName(name: string): HighlightOptions | undefined {
+    return this.getHighlightByName(name);
+  }
+
   getHighlightMatrixByName(name: string): number[] | undefined {
     const saved = this.highlightConfigByName.get(name);
     if (!saved?.conditions?.length) return undefined;
@@ -570,42 +563,6 @@ export class PartHighlightHelper {
     return matrix ? matrix.slice() : undefined;
   }
 
-  /**
-   * 按 PID 高亮构件（使用 `_FEATURE_ID_1`）
-   */
-  highlightByPids(options: HighlightByPidsOptions): void {
-    const { name, show, conditions, pids } = options;
-    if (!show && (!conditions || conditions.length === 0) && !pids?.length) {
-      this.cancelHighlightByPid(name);
-      return;
-    }
-
-    this.highlightPidGroups.set(name, { show, conditions, pids });
-    this.highlightByPidConfigByName.set(name, cloneHighlightByPidsOptions(options));
-    this.reapplyAll();
-  }
-
-  getHighlightByPidName(name: string): HighlightByPidsOptions | undefined {
-    const saved = this.highlightByPidConfigByName.get(name);
-    return saved ? cloneHighlightByPidsOptions(saved) : undefined;
-  }
-
-  cancelHighlightByPid(name: string): void {
-    this.highlightByPidConfigByName.delete(name);
-    if (!this.highlightPidGroups.has(name)) return;
-    this.highlightPidGroups.delete(name);
-    this.reapplyAll();
-  }
-
-  cancelAllHighlightByPid(): void {
-    this.highlightPidGroups.clear();
-    this.highlightByPidConfigByName.clear();
-    this.reapplyAll();
-  }
-
-  /**
-   * 取消指定名称的高亮
-   */
   cancelHighlight(name: string): void {
     this.highlightConfigByName.delete(name);
     if (!this.highlightGroups.has(name)) return;
@@ -613,59 +570,58 @@ export class PartHighlightHelper {
     this.reapplyAll();
   }
 
-  /**
-   * 取消所有高亮
-   */
+  /** @deprecated 请使用 cancelHighlight */
+  cancelHighlightByPid(name: string): void {
+    this.cancelHighlight(name);
+  }
+
   cancelAllHighlight(): void {
     this.highlightGroups.clear();
     this.highlightConfigByName.clear();
     this.reapplyAll();
   }
 
-  /**
-   * 仅刷新 hidePartsByOids 列表（新瓦片 OID），不 teardown 高亮收集器。
-   */
-  refreshHiddenOidsOnly(): void {
+  /** @deprecated 请使用 cancelAllHighlight */
+  cancelAllHighlightByPid(): void {
+    this.cancelAllHighlight();
+  }
+
+  refreshHiddenIdsOnly(): void {
     if (this.highlightGroups.size === 0) return;
 
     const tiles = this.context.getTiles();
     if (!tiles) return;
 
-    const propertyByOid = getPropertyDataMapFromTiles(
-      tiles,
-      this.context.getInternalData?.(),
-    );
-    const { styledOids } = this.buildAppearanceGroups(propertyByOid);
-    const unionHide = this.collectUnionShowHide(propertyByOid);
-    const oidsToHide = [...new Set([...styledOids, ...unionHide])];
-    this.context.hidePartsByOids(oidsToHide);
-  }
-
-  refreshHiddenPidsOnly(): void {
-    if (this.highlightPidGroups.size === 0) return;
-
-    const tiles = this.context.getTiles();
-    if (!tiles) return;
-
-    const propertyByPid = getPropertyDataMapFromTilesByPid(tiles);
-    const { styledPids } = this.buildAppearanceGroupsByPid(propertyByPid);
-    const unionHide = this.collectUnionShowHideByPid(propertyByPid);
-    const pidsToHide = [...new Set([...styledPids, ...unionHide])];
-    this.context.hidePartsByPids(pidsToHide);
-  }
-
-  /**
-   * 瓦片加载完成后重新应用高亮（由插件调用）
-   */
-  onTilesLoadEnd(): void {
-    if (this.highlightGroups.size === 0 && this.highlightPidGroups.size === 0) {
-      return;
+    for (const featureIdAttribute of this.collectUsedFeatureIdAttributes()) {
+      const propertyMap = getPropertyDataMapFromTilesByFeatureAttribute(
+        tiles,
+        featureIdAttribute,
+        this.context.getInternalData?.(),
+      );
+      const { styledIds } = this.buildAppearanceGroupsForAttribute(
+        propertyMap,
+        featureIdAttribute,
+      );
+      const unionHide = this.collectUnionShowHideForAttribute(
+        propertyMap,
+        featureIdAttribute,
+      );
+      const idsToHide = [...new Set([...styledIds, ...unionHide])];
+      this.context.hidePartsByFeatureAttribute(idsToHide, featureIdAttribute);
     }
+  }
+
+  /** @deprecated 请使用 refreshHiddenIdsOnly */
+  refreshHiddenPidsOnly(): void {
+    this.refreshHiddenIdsOnly();
+  }
+
+  onTilesLoadEnd(): void {
+    if (this.highlightGroups.size === 0) return;
     this.reapplyAll();
   }
 
   dispose(): void {
     this.cancelAllHighlight();
-    this.cancelAllHighlightByPid();
   }
 }

@@ -19,8 +19,7 @@ import type { InternalData } from "./mesh-helper/mesh";
 import {
   MeshCollector,
   MeshSplitResolver,
-  normalizeMeshCollectorOids,
-  normalizeMeshCollectorPids,
+  resolveMeshCollectorQuery,
   type MeshCollectorQuery,
 } from "./MeshCollector";
 import {
@@ -157,8 +156,10 @@ export class GLTFParserPlugin {
     const partFx = this._createPartEffectHost();
     this._styleHelper = new StyleHelper({
       getTiles: () => this.tiles,
-      hidePartsByOids: partFx.hidePartsByOids,
-      showPartsByOids: partFx.showPartsByOids,
+      hidePartsByFeatureAttribute: (ids, attr) =>
+        this.partVisibility.hidePartsByFeatureAttribute(ids, attr),
+      showPartsByFeatureAttribute: (ids, attr) =>
+        this.partVisibility.showPartsByFeatureAttribute(ids, attr),
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
       releaseMeshCollector: partFx.releaseMeshCollector,
       getRootGroup: partFx.getRootGroup,
@@ -201,10 +202,18 @@ export class GLTFParserPlugin {
   private _createPartEffectHost(): PartEffectHost {
     return {
       getTiles: () => this.tiles ?? null,
-      hidePartsByOids: (oids) => this.partVisibility.hidePartsByOids(oids),
-      showPartsByOids: (oids) => this.partVisibility.showPartsByOids(oids),
-      hidePartsByPids: (pids) => this.partVisibility.hidePartsByPids(pids),
-      showPartsByPids: (pids) => this.partVisibility.showPartsByPids(pids),
+      hidePartsByFeatureAttribute: (ids, attr) =>
+        this.partVisibility.hidePartsByFeatureAttribute(ids, attr),
+      showPartsByFeatureAttribute: (ids, attr) =>
+        this.partVisibility.showPartsByFeatureAttribute(ids, attr),
+      hidePartsByOids: (oids) =>
+        this.partVisibility.hidePartsByFeatureAttribute(oids, 0),
+      showPartsByOids: (oids) =>
+        this.partVisibility.showPartsByFeatureAttribute(oids, 0),
+      hidePartsByPids: (pids) =>
+        this.partVisibility.hidePartsByFeatureAttribute(pids, 1),
+      showPartsByPids: (pids) =>
+        this.partVisibility.showPartsByFeatureAttribute(pids, 1),
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       releaseMeshCollector: (c) => this.releaseMeshCollector(c),
       getRootGroup: () => this.tiles?.group ?? null,
@@ -546,9 +555,8 @@ export class GLTFParserPlugin {
 
   /** 防抖后：只刷新隐藏 OID 列表 + 收集器 mesh，不 teardown 样式/高亮收集器 */
   private _runTileVisibilityFollowUp(): void {
-    this._styleHelper?.refreshHiddenOidsOnly();
-    this._partHighlightHelper?.refreshHiddenOidsOnly();
-    this._partHighlightHelper?.refreshHiddenPidsOnly();
+    this._styleHelper?.refreshHiddenIdsOnly();
+    this._partHighlightHelper?.refreshHiddenIdsOnly();
 
     for (const collector of this.collectors) {
       collector._updateMeshes();
@@ -743,22 +751,15 @@ export class GLTFParserPlugin {
   }
 
   /**
-   * 根据查询创建新的 MeshCollector（oids + 可选 condition）。
-   * 每次调用都会新建实例；相同 condition / oids 多次调用会得到多个独立收集器，可同时存在。
+   * 根据查询创建新的 MeshCollector（featureIds + 可选 condition）。
+   * 每次调用都会新建实例；相同 condition / featureIds 多次调用会得到多个独立收集器，可同时存在。
    */
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector {
-    const oids = query.oids ?? [];
-    const pids = query.pids ?? [];
-    const hasOids = normalizeMeshCollectorOids(oids).length > 0;
-    const hasPids = normalizeMeshCollectorPids(pids).length > 0;
-    const hasCond = Boolean(query.condition?.trim());
-    if (!hasOids && !hasPids && !hasCond) {
+    const resolved = resolveMeshCollectorQuery(query);
+    if (resolved.featureIds.length === 0 && !resolved.condition) {
       throw new Error(
-        "getMeshCollectorByCondition requires non-empty oids/pids and/or a condition string",
+        "getMeshCollectorByCondition requires non-empty featureIds and/or a condition",
       );
-    }
-    if (hasOids && hasPids) {
-      throw new Error("getMeshCollectorByCondition cannot specify both oids and pids");
     }
 
     const collector = new MeshCollector(query);
@@ -801,23 +802,22 @@ export class GLTFParserPlugin {
   }
 
   /**
-   * 高亮指定构件（语义与 setStyle 一致：show、conditions、可选 oids，另需 name 标识分组）
-   * @param options 高亮配置
+   * 高亮指定构件（语义与 setStyle 一致：show、conditions、可选 featureIds，另需 name 标识分组）
+   * @param options 高亮配置；PID 通道请设 `featureIdAttribute: 1` 或使用 conditions 对象形式
    */
   highlight(options: HighlightOptions): void {
     this._partHighlightHelper?.highlight(options);
   }
 
   /**
-   * 按 PID 高亮构件（使用 `_FEATURE_ID_1` / `pidMap`）
-   * @param options 高亮配置，pids 为 PID 数组
+   * @deprecated 请使用 highlight({ ...options, featureIdAttribute: 1 })
    */
   highlightByPids(options: HighlightByPidsOptions): void {
     this._partHighlightHelper?.highlightByPids(options);
   }
 
   /**
-   * 按名称获取最近一次 highlightByPids 传入的配置
+   * @deprecated 请使用 getHighlightByName
    */
   getHighlightByPidName(name: string): HighlightByPidsOptions | undefined {
     return this._partHighlightHelper?.getHighlightByPidName(name);
