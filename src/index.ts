@@ -1,4 +1,5 @@
 export { GLTFParserPlugin } from "./GLTFParserPlugin";
+export * from "./PMI";
 export type {
   GLTFParserPluginOptions,
   StructureNode,
