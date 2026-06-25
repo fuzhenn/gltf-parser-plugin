@@ -205,9 +205,8 @@ export function applyVisibilityToMesh(
       continue;
     }
 
-    filtered[writeOffset++] = originalArray[i];
-    filtered[writeOffset++] = originalArray[i + 1];
-    filtered[writeOffset++] = originalArray[i + 2];
+    filtered.set(originalArray.subarray(i, i + 3), writeOffset);
+    writeOffset += 3;
   }
 
   const filteredArray = filtered.subarray(0, writeOffset);
