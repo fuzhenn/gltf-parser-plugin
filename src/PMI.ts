@@ -19,10 +19,9 @@ export interface PmiModel {
   rootNodes: PmiNode[];
 }
 
-const globalNodeIds = new WeakMap<String, number>();
+const globalNodeIds = new Map<string, number>();
 
-export async function loadPmiModel(url: string, tilesRenderer: TilesRenderer): Promise<PmiModel> {
-  const loader = new GLTFLoader(tilesRenderer.manager);
+export async function loadPmiModel(url: string, loader: GLTFLoader, tilesRenderer: TilesRenderer): Promise<PmiModel> {
   const result = await loader.loadAsync(url);
 
   globalNodeIds.set(url, 0);
@@ -48,13 +47,14 @@ export async function loadPmiModel(url: string, tilesRenderer: TilesRenderer): P
       name: sourceNode.name || (isRoot ? "Root" : undefined),
       mesh: mapNodeObject3D.get(nodeIndex),
       featureIds: sourceNode.extras?.featureIds,
-      children: [],
     };
 
-    const childIndices = sourceNode.children || [];
-    for (const childIndex of childIndices) {
-      const childPmiNode = buildPmiNode(gltf, childIndex, false);
-      pmiNode.children!.push(childPmiNode);
+    if (sourceNode.children && sourceNode.children.length > 0) {
+      pmiNode.children = [];
+      for (const childIndex of sourceNode.children) {
+        const childPmiNode = buildPmiNode(gltf, childIndex, false);
+        pmiNode.children!.push(childPmiNode);
+      }
     }
 
     return pmiNode;
