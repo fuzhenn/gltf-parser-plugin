@@ -120,21 +120,9 @@ export function snapshotOriginalIndexForMesh(
   return new Uint32Array(Array.from(src));
 }
 
-export function triangleMatchesFeatureIdSet(
-  fa: number,
-  fb: number,
-  fc: number,
-  targetFids: Set<number>,
-  strict: boolean,
-): boolean {
-  return strict
-    ? fa === fb && fa === fc && targetFids.has(fa)
-    : targetFids.has(fa) || targetFids.has(fb) || targetFids.has(fc);
-}
-
 type FeatureIdIndexEntry = { offset: number; length: number };
 
-type StrictFeatureIdIndexCache = {
+type FeatureIdIndexCache = {
   sourceIndex: ArrayLike<number>;
   featureIdAttr: BufferAttribute;
   featureIdIndexMap: Map<number, FeatureIdIndexEntry>;
@@ -150,41 +138,23 @@ function createMatchingIndexArray(
   return new Uint32Array(length);
 }
 
-function copyIndexTriangle(
-  sourceIndex: ArrayLike<number>,
-  sourceOffset: number,
-  dest: Uint16Array | Uint32Array,
-  destOffset: number,
-): void {
-  if (sourceIndex instanceof Uint16Array || sourceIndex instanceof Uint32Array) {
-    dest.set(sourceIndex.subarray(sourceOffset, sourceOffset + 3), destOffset);
-    return;
-  }
-  dest[destOffset] = sourceIndex[sourceOffset]!;
-  dest[destOffset + 1] = sourceIndex[sourceOffset + 1]!;
-  dest[destOffset + 2] = sourceIndex[sourceOffset + 2]!;
-}
-
-/** strict 模式下按 fid 分组 index，供 `.set()` 批量拷贝 */
-function buildStrictFeatureIdIndexMap(
+/** 按 fid 分组 index，供 `.set()` 批量拷贝 */
+function buildFeatureIdIndexMap(
   sourceIndex: ArrayLike<number>,
   featureIdAttr: BufferAttribute,
-): Pick<StrictFeatureIdIndexCache, "featureIdIndexMap" | "buffer"> {
+): Pick<FeatureIdIndexCache, "featureIdIndexMap" | "buffer"> {
   const fidChunks = new Map<number, number[]>();
 
   for (let i = 0; i < sourceIndex.length; i += 3) {
     const a = sourceIndex[i]!;
     const b = sourceIndex[i + 1]!;
     const c = sourceIndex[i + 2]!;
-    const fa = featureIdAttr.getX(a);
-    const fb = featureIdAttr.getX(b);
-    const fc = featureIdAttr.getX(c);
-    if (fa !== fb || fa !== fc) continue;
+    const fid = featureIdAttr.getX(a);
 
-    let chunk = fidChunks.get(fa);
+    let chunk = fidChunks.get(fid);
     if (!chunk) {
       chunk = [];
-      fidChunks.set(fa, chunk);
+      fidChunks.set(fid, chunk);
     }
     chunk.push(a, b, c);
   }
@@ -206,15 +176,15 @@ function buildStrictFeatureIdIndexMap(
   return { featureIdIndexMap, buffer };
 }
 
-function getStrictFeatureIdIndexCache(
+function getFeatureIdIndexCache(
   mesh: Mesh,
   sourceIndex: ArrayLike<number>,
   featureIdAttr: BufferAttribute,
-): Pick<StrictFeatureIdIndexCache, "featureIdIndexMap" | "buffer"> {
+): Pick<FeatureIdIndexCache, "featureIdIndexMap" | "buffer"> {
   const userData = mesh.userData as {
-    _strictFeatureIdIndexCache?: StrictFeatureIdIndexCache;
+    _featureIdIndexCache?: FeatureIdIndexCache;
   };
-  const cached = userData._strictFeatureIdIndexCache;
+  const cached = userData._featureIdIndexCache;
   if (
     cached &&
     cached.sourceIndex === sourceIndex &&
@@ -223,51 +193,54 @@ function getStrictFeatureIdIndexCache(
     return cached;
   }
 
-  const built = buildStrictFeatureIdIndexMap(sourceIndex, featureIdAttr);
-  userData._strictFeatureIdIndexCache = {
+  const built = buildFeatureIdIndexMap(sourceIndex, featureIdAttr);
+  userData._featureIdIndexCache = {
     sourceIndex,
     featureIdAttr,
     ...built,
   };
-  return userData._strictFeatureIdIndexCache;
+  return userData._featureIdIndexCache;
 }
 
-/**
- * split / hide 共用：存在「loose 命中但 strict 不命中」的三角时须用 loose，
- * 否则 strict 只抽一部分而 hide 会删掉更多 → 高亮缺块。
- */
-export function resolveHideUsesLooseMode(
+/** 排除 hiddenFids 后，按 fid 索引表拼接可见 index */
+export function buildVisibleIndexExcludingHiddenFids(
+  mesh: Mesh,
   sourceIndex: ArrayLike<number>,
-  featureIdAttr: { getX(index: number): number },
-  targetFids: Set<number>,
-): boolean {
-  for (let i = 0; i < sourceIndex.length; i += 3) {
-    const a = sourceIndex[i]!;
-    const b = sourceIndex[i + 1]!;
-    const c = sourceIndex[i + 2]!;
-    const fa = featureIdAttr.getX(a);
-    const fb = featureIdAttr.getX(b);
-    const fc = featureIdAttr.getX(c);
-    if (
-      triangleMatchesFeatureIdSet(fa, fb, fc, targetFids, false) &&
-      !triangleMatchesFeatureIdSet(fa, fb, fc, targetFids, true)
-    ) {
-      return true;
+  featureIdAttr: BufferAttribute,
+  hiddenFids: Set<number>,
+): Uint16Array | Uint32Array {
+  const { featureIdIndexMap, buffer } = getFeatureIdIndexCache(
+    mesh,
+    sourceIndex,
+    featureIdAttr,
+  );
+
+  let totalLength = 0;
+  for (const [fid, entry] of featureIdIndexMap) {
+    if (!hiddenFids.has(fid)) {
+      totalLength += entry.length;
     }
   }
-  return false;
+
+  const result = createMatchingIndexArray(sourceIndex, totalLength);
+  let writeOffset = 0;
+  for (const [fid, entry] of featureIdIndexMap) {
+    if (hiddenFids.has(fid)) continue;
+    result.set(
+      buffer.subarray(entry.offset, entry.offset + entry.length),
+      writeOffset,
+    );
+    writeOffset += entry.length;
+  }
+  return result;
 }
 
-/**
- * 合并多个 feature 的三角形为单一 BufferGeometry（共享顶点属性，index 为并集）
- * @param strict true：三顶点 feature id 相同；false：任一顶点命中（细化 LOD 回退）
- */
+/** 合并多个 feature 的三角形为单一 BufferGeometry（共享顶点属性，index 为并集） */
 function createGeometryForFeatureIdSet(
   originalGeometry: BufferGeometry,
   featureIdAttr: BufferAttribute,
   targetFids: Set<number>,
   sourceIndex: ArrayLike<number>,
-  strict: boolean,
   mesh?: Mesh,
 ): BufferGeometry | null {
   if (targetFids.size === 0 || sourceIndex.length === 0) {
@@ -280,51 +253,29 @@ function createGeometryForFeatureIdSet(
     newGeometry.setAttribute(attributeName, attributes[attributeName]);
   }
 
-  if (strict) {
-    const { featureIdIndexMap, buffer } = mesh
-      ? getStrictFeatureIdIndexCache(mesh, sourceIndex, featureIdAttr)
-      : buildStrictFeatureIdIndexMap(sourceIndex, featureIdAttr);
+  const { featureIdIndexMap, buffer } = mesh
+    ? getFeatureIdIndexCache(mesh, sourceIndex, featureIdAttr)
+    : buildFeatureIdIndexMap(sourceIndex, featureIdAttr);
 
-    let totalLength = 0;
-    for (const fid of targetFids) {
-      const entry = featureIdIndexMap.get(fid);
-      if (entry) totalLength += entry.length;
-    }
-    if (totalLength === 0) return null;
-
-    const newIndices = createMatchingIndexArray(sourceIndex, totalLength);
-    let writeOffset = 0;
-    for (const fid of targetFids) {
-      const entry = featureIdIndexMap.get(fid);
-      if (!entry) continue;
-      newIndices.set(
-        buffer.subarray(entry.offset, entry.offset + entry.length),
-        writeOffset,
-      );
-      writeOffset += entry.length;
-    }
-    newGeometry.setIndex(new BufferAttribute(newIndices, 1));
-    return newGeometry;
+  let totalLength = 0;
+  for (const fid of targetFids) {
+    const entry = featureIdIndexMap.get(fid);
+    if (entry) totalLength += entry.length;
   }
+  if (totalLength === 0) return null;
 
-  const newIndices = createMatchingIndexArray(sourceIndex, sourceIndex.length);
+  const newIndices = createMatchingIndexArray(sourceIndex, totalLength);
   let writeOffset = 0;
-  for (let i = 0; i < sourceIndex.length; i += 3) {
-    const a = sourceIndex[i]!;
-    const b = sourceIndex[i + 1]!;
-    const c = sourceIndex[i + 2]!;
-    const fa = featureIdAttr.getX(a);
-    const fb = featureIdAttr.getX(b);
-    const fc = featureIdAttr.getX(c);
-    if (triangleMatchesFeatureIdSet(fa, fb, fc, targetFids, false)) {
-      copyIndexTriangle(sourceIndex, i, newIndices, writeOffset);
-      writeOffset += 3;
-    }
+  for (const fid of targetFids) {
+    const entry = featureIdIndexMap.get(fid);
+    if (!entry) continue;
+    newIndices.set(
+      buffer.subarray(entry.offset, entry.offset + entry.length),
+      writeOffset,
+    );
+    writeOffset += entry.length;
   }
-
-  if (writeOffset === 0) return null;
-
-  newGeometry.setIndex(new BufferAttribute(newIndices.subarray(0, writeOffset), 1));
+  newGeometry.setIndex(new BufferAttribute(newIndices, 1));
   return newGeometry;
 }
 
@@ -359,17 +310,11 @@ function buildMergedSplitGeometryForTileMeshByChannel(
   const sourceIndex = getFeatureSplitSourceIndex(originalMesh, geometry);
   if (!sourceIndex) return null;
 
-  const useLoose = resolveHideUsesLooseMode(
-    sourceIndex,
-    featureIdAttr,
-    targetFids,
-  );
   const newGeometry = createGeometryForFeatureIdSet(
     geometry,
     featureIdAttr,
     targetFids,
     sourceIndex,
-    !useLoose,
     originalMesh,
   );
 

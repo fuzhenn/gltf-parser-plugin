@@ -1,10 +1,9 @@
 import { BufferAttribute, Mesh, Object3D } from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
 import {
+  buildVisibleIndexExcludingHiddenFids,
   forEachLoadedFeatureMesh,
   resolveFeatureChannelOnMesh,
-  resolveHideUsesLooseMode,
-  triangleMatchesFeatureIdSet,
   type PartIdChannel,
 } from "./mesh";
 
@@ -50,40 +49,36 @@ function setGeometryIndexFromArray(
   geometry.index!.needsUpdate = true;
 }
 
-function triangleShouldHide(
-  fa: number,
-  fb: number,
-  fc: number,
-  hiddenOids: Set<number>,
-  hiddenPids: Set<number>,
-  oidFeatureAttr: { getX(index: number): number } | null,
-  pidFeatureAttr: { getX(index: number): number } | null,
-  hiddenOidFids: Set<number>,
-  hiddenPidFids: Set<number>,
-  oidStrict: boolean,
-  pidStrict: boolean,
-): boolean {
-  if (hiddenOids.size > 0 && oidFeatureAttr) {
-    const oa = oidFeatureAttr.getX(fa);
-    const ob = oidFeatureAttr.getX(fb);
-    const oc = oidFeatureAttr.getX(fc);
-    if (
-      triangleMatchesFeatureIdSet(oa, ob, oc, hiddenOidFids, oidStrict)
-    ) {
-      return true;
+/** OID + PID 同时隐藏时，同一 oid fid 块内可能含不同 pid fid，需逐三角过滤 */
+function buildVisibleIndexExcludingMultiChannelHiddenFids(
+  sourceIndex: Uint16Array | Uint32Array,
+  checks: Array<{
+    featureIdAttr: { getX(index: number): number };
+    hiddenFids: Set<number>;
+  }>,
+): Uint16Array | Uint32Array {
+  const filtered =
+    sourceIndex instanceof Uint32Array
+      ? new Uint32Array(sourceIndex.length)
+      : new Uint16Array(sourceIndex.length);
+
+  let writeOffset = 0;
+  for (let i = 0; i < sourceIndex.length; i += 3) {
+    const vertexIndex = sourceIndex[i]!;
+    let hide = false;
+    for (const { featureIdAttr, hiddenFids } of checks) {
+      if (hiddenFids.has(featureIdAttr.getX(vertexIndex))) {
+        hide = true;
+        break;
+      }
     }
+    if (hide) continue;
+
+    filtered.set(sourceIndex.subarray(i, i + 3), writeOffset);
+    writeOffset += 3;
   }
 
-  if (hiddenPids.size > 0 && pidFeatureAttr) {
-    const pa = pidFeatureAttr.getX(fa);
-    const pb = pidFeatureAttr.getX(fb);
-    const pc = pidFeatureAttr.getX(fc);
-    if (triangleMatchesFeatureIdSet(pa, pb, pc, hiddenPidFids, pidStrict)) {
-      return true;
-    }
-  }
-
-  return false;
+  return filtered.subarray(0, writeOffset);
 }
 
 /**
@@ -158,58 +153,31 @@ export function applyVisibilityToMesh(
   const originalArray = (mesh.userData as { _originalIndex: Uint16Array | Uint32Array })
     ._originalIndex;
 
-  const isUint32 = originalArray instanceof Uint32Array;
-  const filtered = isUint32
-    ? new Uint32Array(originalArray.length)
-    : new Uint16Array(originalArray.length);
-
-  const oidLoose =
-    needsOidHide &&
-    resolveHideUsesLooseMode(
+  let filteredArray: Uint16Array | Uint32Array;
+  if (needsOidHide && needsPidHide) {
+    filteredArray = buildVisibleIndexExcludingMultiChannelHiddenFids(
+      originalArray,
+      [
+        { featureIdAttr: oidFeatureAttr!, hiddenFids: hiddenOidFids },
+        { featureIdAttr: pidFeatureAttr!, hiddenFids: hiddenPidFids },
+      ],
+    );
+  } else if (needsOidHide) {
+    filteredArray = buildVisibleIndexExcludingHiddenFids(
+      mesh,
       originalArray,
       oidFeatureAttr!,
       hiddenOidFids,
     );
-  const oidStrict = !oidLoose;
-
-  const pidLoose =
-    needsPidHide &&
-    resolveHideUsesLooseMode(
+  } else {
+    filteredArray = buildVisibleIndexExcludingHiddenFids(
+      mesh,
       originalArray,
       pidFeatureAttr!,
       hiddenPidFids,
     );
-  const pidStrict = !pidLoose;
-
-  let writeOffset = 0;
-  for (let i = 0; i < originalArray.length; i += 3) {
-    const a = originalArray[i]!;
-    const b = originalArray[i + 1]!;
-    const c = originalArray[i + 2]!;
-
-    if (
-      triangleShouldHide(
-        a,
-        b,
-        c,
-        hiddenOids,
-        hiddenPids,
-        needsOidHide ? oidFeatureAttr : null,
-        needsPidHide ? pidFeatureAttr : null,
-        hiddenOidFids,
-        hiddenPidFids,
-        oidStrict,
-        pidStrict,
-      )
-    ) {
-      continue;
-    }
-
-    filtered.set(originalArray.subarray(i, i + 3), writeOffset);
-    writeOffset += 3;
   }
 
-  const filteredArray = filtered.subarray(0, writeOffset);
   setGeometryIndexFromArray(geometry, filteredArray);
 }
 
