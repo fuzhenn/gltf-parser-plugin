@@ -10,6 +10,13 @@ import {
 
 import { TilesRenderer } from "3d-tiles-renderer";
 
+import {
+  buildFeatureIdIndexMap,
+  createMatchingIndexArray,
+  getRegisteredFeatureIdIndex,
+  type FeatureIdIndexData,
+} from "./feature-id-index";
+
 /** OID 对应 `_FEATURE_ID_0`，PID 对应 `_FEATURE_ID_1` */
 export type PartIdChannel = "oid" | "pid";
 
@@ -120,86 +127,47 @@ export function snapshotOriginalIndexForMesh(
   return new Uint32Array(Array.from(src));
 }
 
-type FeatureIdIndexEntry = { offset: number; length: number };
-
-type FeatureIdIndexCache = {
+type FeatureIdIndexCache = FeatureIdIndexData & {
   sourceIndex: ArrayLike<number>;
   featureIdAttr: BufferAttribute;
-  featureIdIndexMap: Map<number, FeatureIdIndexEntry>;
-  buffer: Uint16Array | Uint32Array;
 };
 
-function createMatchingIndexArray(
-  sourceIndex: ArrayLike<number>,
-  length: number,
-): Uint16Array | Uint32Array {
-  if (sourceIndex instanceof Uint32Array) return new Uint32Array(length);
-  if (sourceIndex instanceof Uint16Array) return new Uint16Array(length);
-  return new Uint32Array(length);
-}
-
-/** 按 fid 分组 index，供 `.set()` 批量拷贝 */
-function buildFeatureIdIndexMap(
-  sourceIndex: ArrayLike<number>,
-  featureIdAttr: BufferAttribute,
-): Pick<FeatureIdIndexCache, "featureIdIndexMap" | "buffer"> {
-  const fidChunks = new Map<number, number[]>();
-
-  for (let i = 0; i < sourceIndex.length; i += 3) {
-    const a = sourceIndex[i]!;
-    const b = sourceIndex[i + 1]!;
-    const c = sourceIndex[i + 2]!;
-    const fid = featureIdAttr.getX(a);
-
-    let chunk = fidChunks.get(fid);
-    if (!chunk) {
-      chunk = [];
-      fidChunks.set(fid, chunk);
-    }
-    chunk.push(a, b, c);
-  }
-
-  let totalLength = 0;
-  for (const chunk of fidChunks.values()) {
-    totalLength += chunk.length;
-  }
-
-  const buffer = createMatchingIndexArray(sourceIndex, totalLength);
-  const featureIdIndexMap = new Map<number, FeatureIdIndexEntry>();
-  let offset = 0;
-  for (const [fid, chunk] of fidChunks) {
-    buffer.set(chunk, offset);
-    featureIdIndexMap.set(fid, { offset, length: chunk.length });
-    offset += chunk.length;
-  }
-
-  return { featureIdIndexMap, buffer };
-}
-
+/**
+ * 取按 fid 分组的 index：
+ * 1. 优先用 worker 解析时预构建、并按 BufferAttribute 注册的结果（主线程零遍历）；
+ * 2. 仅当某几何未携带预构建数据时，才回退到主线程现场构建（按 mesh.userData 缓存）。
+ */
 function getFeatureIdIndexCache(
-  mesh: Mesh,
+  mesh: Mesh | undefined,
   sourceIndex: ArrayLike<number>,
   featureIdAttr: BufferAttribute,
-): Pick<FeatureIdIndexCache, "featureIdIndexMap" | "buffer"> {
-  const userData = mesh.userData as {
-    _featureIdIndexCache?: FeatureIdIndexCache;
-  };
-  const cached = userData._featureIdIndexCache;
-  if (
-    cached &&
-    cached.sourceIndex === sourceIndex &&
-    cached.featureIdAttr === featureIdAttr
-  ) {
-    return cached;
+): FeatureIdIndexData {
+  const precomputed = getRegisteredFeatureIdIndex(featureIdAttr);
+  if (precomputed) return precomputed;
+
+  if (mesh) {
+    const userData = mesh.userData as {
+      _featureIdIndexCache?: FeatureIdIndexCache;
+    };
+    const cached = userData._featureIdIndexCache;
+    if (
+      cached &&
+      cached.sourceIndex === sourceIndex &&
+      cached.featureIdAttr === featureIdAttr
+    ) {
+      return cached;
+    }
+
+    const built = buildFeatureIdIndexMap(sourceIndex, featureIdAttr);
+    userData._featureIdIndexCache = {
+      sourceIndex,
+      featureIdAttr,
+      ...built,
+    };
+    return userData._featureIdIndexCache;
   }
 
-  const built = buildFeatureIdIndexMap(sourceIndex, featureIdAttr);
-  userData._featureIdIndexCache = {
-    sourceIndex,
-    featureIdAttr,
-    ...built,
-  };
-  return userData._featureIdIndexCache;
+  return buildFeatureIdIndexMap(sourceIndex, featureIdAttr);
 }
 
 /** 排除 hiddenFids 后，按 fid 索引表拼接可见 index */
@@ -216,16 +184,17 @@ export function buildVisibleIndexExcludingHiddenFids(
   );
 
   let totalLength = 0;
-  for (const [fid, entry] of featureIdIndexMap) {
-    if (!hiddenFids.has(fid)) {
-      totalLength += entry.length;
+  for (const fidKey in featureIdIndexMap) {
+    if (!hiddenFids.has(Number(fidKey))) {
+      totalLength += featureIdIndexMap[fidKey]!.length;
     }
   }
 
   const result = createMatchingIndexArray(sourceIndex, totalLength);
   let writeOffset = 0;
-  for (const [fid, entry] of featureIdIndexMap) {
-    if (hiddenFids.has(fid)) continue;
+  for (const fidKey in featureIdIndexMap) {
+    if (hiddenFids.has(Number(fidKey))) continue;
+    const entry = featureIdIndexMap[fidKey]!;
     result.set(
       buffer.subarray(entry.offset, entry.offset + entry.length),
       writeOffset,
@@ -253,13 +222,15 @@ function createGeometryForFeatureIdSet(
     newGeometry.setAttribute(attributeName, attributes[attributeName]);
   }
 
-  const { featureIdIndexMap, buffer } = mesh
-    ? getFeatureIdIndexCache(mesh, sourceIndex, featureIdAttr)
-    : buildFeatureIdIndexMap(sourceIndex, featureIdAttr);
+  const { featureIdIndexMap, buffer } = getFeatureIdIndexCache(
+    mesh,
+    sourceIndex,
+    featureIdAttr,
+  );
 
   let totalLength = 0;
   for (const fid of targetFids) {
-    const entry = featureIdIndexMap.get(fid);
+    const entry = featureIdIndexMap[fid];
     if (entry) totalLength += entry.length;
   }
   if (totalLength === 0) return null;
@@ -267,7 +238,7 @@ function createGeometryForFeatureIdSet(
   const newIndices = createMatchingIndexArray(sourceIndex, totalLength);
   let writeOffset = 0;
   for (const fid of targetFids) {
-    const entry = featureIdIndexMap.get(fid);
+    const entry = featureIdIndexMap[fid];
     if (!entry) continue;
     newIndices.set(
       buffer.subarray(entry.offset, entry.offset + entry.length),

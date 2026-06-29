@@ -2,6 +2,67 @@ import { dequantizeAttribute } from "./dequantize";
 import type { AttributeData } from "./types";
 import { decodeTangent } from "./tangent";
 
+type FeatureIdIndexEntry = { offset: number; length: number };
+
+type FeatureIdIndexData = {
+  buffer: Uint16Array | Uint32Array;
+  map: Record<number, FeatureIdIndexEntry>;
+};
+
+/**
+ * 在 worker 内、传回主线程之前，按 `_FEATURE_ID_*` 顶点属性把 index 按 featureId 分组。
+ * 分组规则与主线程保持一致：以三角形首个顶点的 feature id 归属整片三角形。
+ * 产出的 buffer 为新建 typed array，调用方需将其加入 transferables 零拷贝回传。
+ */
+function buildFeatureIdIndices(
+  indexArray: Uint16Array | Uint32Array | number[],
+  attributes: Record<string, any>,
+  addTransferable: (arr: any) => void,
+): Record<string, FeatureIdIndexData> | undefined {
+  let result: Record<string, FeatureIdIndexData> | undefined;
+
+  for (const attrName in attributes) {
+    if (!attrName.startsWith("_FEATURE_ID_")) continue;
+    const fidArray = attributes[attrName]?.array;
+    if (!fidArray) continue;
+
+    const fidChunks = new Map<number, number[]>();
+    for (let i = 0; i < indexArray.length; i += 3) {
+      const a = indexArray[i]!;
+      const b = indexArray[i + 1]!;
+      const c = indexArray[i + 2]!;
+      const fid = fidArray[a];
+
+      let chunk = fidChunks.get(fid);
+      if (!chunk) {
+        chunk = [];
+        fidChunks.set(fid, chunk);
+      }
+      chunk.push(a, b, c);
+    }
+
+    let total = 0;
+    for (const chunk of fidChunks.values()) total += chunk.length;
+
+    const buffer =
+      indexArray instanceof Uint16Array
+        ? new Uint16Array(total)
+        : new Uint32Array(total);
+    const map: Record<number, FeatureIdIndexEntry> = {};
+    let offset = 0;
+    for (const [fid, chunk] of fidChunks) {
+      buffer.set(chunk, offset);
+      map[fid] = { offset, length: chunk.length };
+      offset += chunk.length;
+    }
+
+    addTransferable(buffer);
+    (result ||= {})[attrName.toLowerCase()] = { buffer, map };
+  }
+
+  return result;
+}
+
 /**
  * Process and dequantize GLTF data
  * @param data - Raw GLTF data from loader
@@ -66,9 +127,24 @@ export function processGLTFData(data: any): {
         processAttribute("TANGENT", 4, attributes, decodeTangent);
 
         // Process Feature ID attributes (for EXT_mesh_features)
+        let hasFeatureId = false;
         for (const attrName in attributes) {
           if (attrName.startsWith("_FEATURE_ID_")) {
             processAttribute(attrName, 1, attributes);
+            hasFeatureId = true;
+          }
+        }
+
+        // 解析完成后、回传主线程前，预构建按 fid 分组的 index
+        const indexArray = primitive.indices?.array;
+        if (hasFeatureId && indexArray && indexArray.length > 0) {
+          const featureIdIndices = buildFeatureIdIndices(
+            indexArray,
+            attributes,
+            addTransferable,
+          );
+          if (featureIdIndices) {
+            primitive.featureIdIndices = featureIdIndices;
           }
         }
       }

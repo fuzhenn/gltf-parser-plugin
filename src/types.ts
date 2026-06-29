@@ -170,6 +170,17 @@ export interface GLTFWorkerData {
         material?: number;
         // Preserve extensions for metadata
         extensions?: PrimitiveExtensions;
+        /**
+         * worker 解析后预构建的「按 featureId 分组的 index」，键为小写顶点属性名（如 `_feature_id_0`）。
+         * 主线程建几何时直接取用，避免在主线程遍历 sourceIndex。
+         */
+        featureIdIndices?: Record<
+          string,
+          {
+            buffer: Uint16Array | Uint32Array;
+            map: Record<number, { offset: number; length: number }>;
+          }
+        >;
       }>;
     }
   >;

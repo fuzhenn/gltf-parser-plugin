@@ -1,5 +1,6 @@
 import { BufferAttribute, BufferGeometry, Material, MeshStandardMaterial } from "three";
 import type { GLTFWorkerData, PrimitiveExtensions } from "../types";
+import { registerFeatureIdIndex } from "../mesh-helper/feature-id-index";
 
 export interface PrimitiveData {
   geometry: BufferGeometry;
@@ -7,6 +8,9 @@ export interface PrimitiveData {
   primitiveIndex: number;
   extensions?: PrimitiveExtensions;
 }
+
+type WorkerMeshData = NonNullable<GLTFWorkerData["meshes"]>[string];
+type WorkerPrimitiveData = WorkerMeshData["primitives"][number];
 
 /**
  * Build Mesh Primitives from GLTF data
@@ -23,7 +27,7 @@ export function buildMeshPrimitives(
   }
 
   for (const meshIndex in data.meshes) {
-    const meshData = data.meshes[meshIndex];
+    const meshData: WorkerMeshData = data.meshes[meshIndex];
     const primitiveDataList: PrimitiveData[] = [];
     const primitives = meshData.primitives;
 
@@ -32,7 +36,7 @@ export function buildMeshPrimitives(
       primitiveIndex < primitives.length;
       primitiveIndex++
     ) {
-      const primitive = primitives[primitiveIndex];
+      const primitive: WorkerPrimitiveData = primitives[primitiveIndex];
       const geometry = new BufferGeometry();
 
       // Handle vertex attributes
@@ -87,16 +91,21 @@ export function buildMeshPrimitives(
           if (attrName.startsWith("_FEATURE_ID_")) {
             const featureIdData = primitive.attributes[attrName];
             if (featureIdData && featureIdData.array) {
-              const normalizedName = attrName
-                .toLowerCase()
-                .replace("_feature_id_", "_feature_id_");
-              geometry.setAttribute(
-                normalizedName,
-                new BufferAttribute(
-                  featureIdData.array,
-                  featureIdData.itemSize || 1,
-                ),
+              const normalizedName = attrName.toLowerCase();
+              const featureIdAttr = new BufferAttribute(
+                featureIdData.array,
+                featureIdData.itemSize || 1,
               );
+              geometry.setAttribute(normalizedName, featureIdAttr);
+
+              // 直接复用 worker 预构建好的分组 index（以该属性为 key 注册）
+              const precomputed = primitive.featureIdIndices?.[normalizedName];
+              if (precomputed) {
+                registerFeatureIdIndex(featureIdAttr, {
+                  featureIdIndexMap: precomputed.map,
+                  buffer: precomputed.buffer,
+                });
+              }
             }
           }
         }
