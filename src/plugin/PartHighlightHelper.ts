@@ -284,6 +284,7 @@ export class PartHighlightHelper {
   private originalMaterialByMesh = new Map<string, Material>();
   private originalTransformByMesh = new Map<string, StoredTransform>();
   private meshChangeHandlers = new Map<string, () => void>();
+  private collectorAppearanceByKey = new Map<string, StyleAppearance>();
   private highlightCollectors: MeshCollector[] = [];
 
   constructor(private context: PartEffectHost) {}
@@ -437,10 +438,39 @@ export class PartHighlightHelper {
       this.context.releaseMeshCollector(collector);
     }
     this.highlightCollectors = [];
+    this.collectorAppearanceByKey.clear();
+  }
+
+  /**
+   * 单瓦片可见时增量应用高亮 split mesh（仅遍历该 scene，不全局扫描）。
+   */
+  applyHighlightToTileScene(scene: Object3D): void {
+    if (this.highlightCollectors.length === 0) return;
+
+    const rootGroup = this.context.getRootGroup();
+    if (!rootGroup) return;
+
+    const maps = this.getMaps();
+    for (const collector of this.highlightCollectors) {
+      const groupKey = collector.getInteractionGroupKey();
+      const appearance = this.collectorAppearanceByKey.get(groupKey);
+      if (!appearance) continue;
+
+      const added = collector.appendMeshesForTileScene(scene);
+      for (const mesh of added) {
+        applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps);
+      }
+    }
+  }
+
+  /** 高亮收集器列表（供插件区分托管/自建收集器） */
+  getHighlightCollectors(): readonly MeshCollector[] {
+    return this.highlightCollectors;
   }
 
   private reapplyAll(): void {
     this.clearCollectorsAndRestoreMeshes();
+    this.collectorAppearanceByKey.clear();
 
     if (this.highlightGroups.size === 0) {
       this.context.hidePartsByFeatureAttribute([], 0);
@@ -481,6 +511,7 @@ export class PartHighlightHelper {
         this.highlightCollectors.push(collector);
 
         const groupKey = collector.getInteractionGroupKey();
+        this.collectorAppearanceByKey.set(groupKey, appearance);
         const handler = () => {
           const s = this.context.getRootGroup();
           if (!s) return;
@@ -584,41 +615,6 @@ export class PartHighlightHelper {
   /** @deprecated 请使用 cancelAllHighlight */
   cancelAllHighlightByPid(): void {
     this.cancelAllHighlight();
-  }
-
-  refreshHiddenIdsOnly(): void {
-    if (this.highlightGroups.size === 0) return;
-
-    const tiles = this.context.getTiles();
-    if (!tiles) return;
-
-    for (const featureIdAttribute of this.collectUsedFeatureIdAttributes()) {
-      const propertyMap = getPropertyDataMapFromTilesByFeatureAttribute(
-        tiles,
-        featureIdAttribute,
-        this.context.getInternalData?.(),
-      );
-      const { styledIds } = this.buildAppearanceGroupsForAttribute(
-        propertyMap,
-        featureIdAttribute,
-      );
-      const unionHide = this.collectUnionShowHideForAttribute(
-        propertyMap,
-        featureIdAttribute,
-      );
-      const idsToHide = [...new Set([...styledIds, ...unionHide])];
-      this.context.hidePartsByFeatureAttribute(idsToHide, featureIdAttribute);
-    }
-  }
-
-  /** @deprecated 请使用 refreshHiddenIdsOnly */
-  refreshHiddenPidsOnly(): void {
-    this.refreshHiddenIdsOnly();
-  }
-
-  onTilesLoadEnd(): void {
-    if (this.highlightGroups.size === 0) return;
-    this.reapplyAll();
   }
 
   dispose(): void {

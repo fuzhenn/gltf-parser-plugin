@@ -779,7 +779,7 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
 }
 
 /** 瓦片内原始 feature mesh（非 split 子网格） */
-function isFeatureSourceMesh(mesh: Mesh): boolean {
+export function isFeatureSourceMesh(mesh: Mesh): boolean {
   const u = mesh.userData;
   return Boolean(u?.meshFeatures && u?.structuralMetadata && !u?.isSplit);
 }

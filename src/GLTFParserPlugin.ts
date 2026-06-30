@@ -120,9 +120,6 @@ export class GLTFParserPlugin {
     () => this._internalData,
   );
   private collectors: Set<MeshCollector> = new Set();
-  /** 合并缩放时高频的 tile-visibility-change，避免每帧全量 applyStyle/reapplyAll */
-  private _tileVisibilityFollowUpTimer: ReturnType<typeof setTimeout> | null =
-    null;
 
   /**
    * Create a GLTFParserPlugin instance
@@ -176,7 +173,6 @@ export class GLTFParserPlugin {
 
     tiles.addEventListener("load-model", this._onLoadModelCB);
     tiles.addEventListener("dispose-model", this._onDisposeModelCB);
-    tiles.addEventListener("tiles-load-end", this._onTilesLoadEndCB);
     tiles.addEventListener(
       "tile-visibility-change",
       this._onTileVisibilityChangeCB,
@@ -192,8 +188,7 @@ export class GLTFParserPlugin {
       return true;
     }, null);
 
-    // 同步收集器；再应用构造选项里的初始样式（需在场景已有 mesh 后，属性表与 setStyle 才可靠）
-    this._notifyCollectors();
+    // 构造选项里的初始样式（需在场景已有 mesh 后，属性表与 setStyle 才可靠）
     if (this._options.style !== undefined) {
       this._styleHelper?.setStyle(this._options.style ?? null);
     }
@@ -529,44 +524,33 @@ export class GLTFParserPlugin {
    */
   private _onLoadModelCB = ({ scene }: { scene: Object3D }) => {
     this._onLoadModel(scene);
-    this._notifyCollectors();
   };
 
   /**
    * LRU 瓦片再次显示时不会走 load-model。
-   * 仅对本 scene 做轻量显隐；样式/高亮全量重算合并到防抖回调（缩放时会高频触发）。
+   * 对本 scene 做 idMap + 显隐，并增量应用样式/高亮 split mesh（不全局遍历）。
    */
   private _onTileVisibilityChangeCB = (event: TileVisibilityChangeEvent) => {
     if (!event.visible || !event.scene) return;
     buildOidToFeatureIdMap(event.scene);
     this.partVisibility.applyVisibilityToScene(event.scene);
-    this._scheduleTileVisibilityFollowUp();
+    this._styleHelper?.applyStyleToTileScene(event.scene);
+    this._partHighlightHelper?.applyHighlightToTileScene(event.scene);
+    this._appendOtherCollectorsForTileScene(event.scene);
   };
 
-  private _scheduleTileVisibilityFollowUp(): void {
-    if (this._tileVisibilityFollowUpTimer != null) {
-      clearTimeout(this._tileVisibilityFollowUpTimer);
+  private _appendOtherCollectorsForTileScene(scene: Object3D): void {
+    const managed = new Set<MeshCollector>();
+    for (const c of this._styleHelper?.getStyleCollectors() ?? []) {
+      managed.add(c);
     }
-    this._tileVisibilityFollowUpTimer = setTimeout(() => {
-      this._tileVisibilityFollowUpTimer = null;
-      this._runTileVisibilityFollowUp();
-    }, 250);
-  }
-
-  /** 防抖后：只刷新隐藏 OID 列表 + 收集器 mesh，不 teardown 样式/高亮收集器 */
-  private _runTileVisibilityFollowUp(): void {
-    this._styleHelper?.refreshHiddenIdsOnly();
-    this._partHighlightHelper?.refreshHiddenIdsOnly();
+    for (const c of this._partHighlightHelper?.getHighlightCollectors() ?? []) {
+      managed.add(c);
+    }
 
     for (const collector of this.collectors) {
-      collector._updateMeshes();
-    }
-  }
-
-  private _clearTileVisibilityFollowUpTimer(): void {
-    if (this._tileVisibilityFollowUpTimer != null) {
-      clearTimeout(this._tileVisibilityFollowUpTimer);
-      this._tileVisibilityFollowUpTimer = null;
+      if (managed.has(collector)) continue;
+      collector.appendMeshesForTileScene(scene);
     }
   }
 
@@ -585,13 +569,6 @@ export class GLTFParserPlugin {
     });
   };
 
-  /**
-   * Tiles load end callback
-   */
-  private _onTilesLoadEndCB = () => {
-    this._notifyCollectors();
-  };
-
   private _onLoadModel(scene: Object3D) {
     scene.traverse((obj) => {
       if (obj instanceof Mesh) {
@@ -602,18 +579,6 @@ export class GLTFParserPlugin {
     buildOidToFeatureIdMap(scene);
 
     this.partVisibility.applyVisibilityToScene(scene);
-  }
-
-  private _notifyCollectors(): void {
-    // 先 teardown 样式/高亮（从场景摘掉 split），再 _updateMeshes；否则  geometry=null 的 mesh 仍参与渲染会崩
-    this._styleHelper?.onTilesLoadEnd();
-    this._partHighlightHelper?.onTilesLoadEnd();
-
-    for (const collector of this.collectors) {
-      collector._updateMeshes();
-    }
-
-    this.partVisibility.reapplyHidden();
   }
 
   /**
@@ -882,13 +847,10 @@ export class GLTFParserPlugin {
    * Plugin disposal
    */
   dispose() {
-    this._clearTileVisibilityFollowUpTimer();
-
     if (this.tiles) {
       this.tiles.manager.removeHandler(this._gltfRegex);
       this.tiles.removeEventListener("load-model", this._onLoadModelCB);
       this.tiles.removeEventListener("dispose-model", this._onDisposeModelCB);
-      this.tiles.removeEventListener("tiles-load-end", this._onTilesLoadEndCB);
       this.tiles.removeEventListener(
         "tile-visibility-change",
         this._onTileVisibilityChangeCB,

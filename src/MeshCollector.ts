@@ -11,6 +11,7 @@ import {
   getAllFeatureIdsFromTiles,
   getPropertyDataByFeatureAttribute,
   getTileMeshesByFeatureAttribute,
+  isFeatureSourceMesh,
   selectDominantTileMeshesForOidSet,
   selectDominantTileMeshesForPidSet,
   type InternalData,
@@ -54,6 +55,68 @@ export function disposeTileMeshSplitGeometryCache(tileMesh: Mesh): void {
 }
 
 /** 收集器查询：feature id 范围 + 可选属性条件（语义同 setStyle 的 show / conditions） */
+/** 在单个瓦片 scene 内查找包含给定 part id 的 feature source mesh */
+function collectCandidateTileMeshesInScene(
+  scene: Object3D,
+  idSet: Set<number>,
+  channel: PartIdChannel,
+): Set<Mesh> {
+  const mapKey = channel === "pid" ? "pidMap" : "idMap";
+  const candidateTiles = new Set<Mesh>();
+  scene.traverse((child) => {
+    const mesh = child as Mesh;
+    if (!isFeatureSourceMesh(mesh)) return;
+    const idMap = mesh.userData?.[mapKey] as Record<number, number> | undefined;
+    if (!idMap) return;
+    for (const partId of idSet) {
+      if (idMap[partId] !== undefined) {
+        candidateTiles.add(mesh);
+        break;
+      }
+    }
+  });
+  return candidateTiles;
+}
+
+function buildSplitMeshesForTileMeshes(
+  tileMeshes: Mesh[],
+  idSet: Set<number>,
+  featureIdAttribute: number,
+): Mesh[] {
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  const sortedKey =
+    `f${featureIdAttribute}:` + [...idSet].sort((a, b) => a - b).join(",");
+  const result: Mesh[] = [];
+
+  for (const tileMesh of tileMeshes) {
+    const perTile = getTileSplitGeometryCache(tileMesh);
+    let geometry: BufferGeometry | undefined = perTile.get(sortedKey);
+    if (!geometry) {
+      const built =
+        channel === "pid"
+          ? buildMergedSplitGeometryForTileMeshByPids(tileMesh, idSet)
+          : buildMergedSplitGeometryForTileMesh(tileMesh, idSet);
+      if (built) {
+        geometry = built;
+        perTile.set(sortedKey, geometry);
+      }
+    }
+
+    if (!geometry) continue;
+
+    const m =
+      channel === "pid"
+        ? createMergedSplitMeshFromGeometryByPids(tileMesh, geometry, idSet, {
+            splitGeometryManagedByCache: true,
+          })
+        : createMergedSplitMeshFromGeometry(tileMesh, geometry, idSet, {
+            splitGeometryManagedByCache: true,
+          });
+    if (m) result.push(m);
+  }
+  return result;
+}
+
 export interface MeshCollectorQuery {
   /**
    * 限定在这些 feature id 内收集；不传或空数组时，若提供 condition 则从全场景对应通道中筛选
@@ -234,36 +297,6 @@ export class MeshSplitResolver {
   }
 
   /**
-   * 解析结果 + 涉及瓦片 UUID 的稳定签名，供 MeshCollector 在「解析结果未变」时跳过重复 new Mesh。
-   */
-  getMeshesForCollectorQuerySignature(
-    params: ResolvedMeshCollectorQuery,
-  ): string {
-    const targetIds = this.resolveTargetIdsForCollectorQuery(params);
-    const tiles = this.getTiles();
-    const attr = params.featureIdAttribute;
-    if (!tiles) {
-      return `f${attr}:${targetIds.join(",")}`;
-    }
-    const idSet = new Set(targetIds);
-    const candidateTiles = new Set<Mesh>();
-    for (const partId of idSet) {
-      for (const tm of getTileMeshesByFeatureAttribute(
-        tiles,
-        partId,
-        attr,
-      )) {
-        candidateTiles.add(tm);
-      }
-    }
-    const uuids = [...candidateTiles]
-      .map((m) => m.uuid)
-      .sort()
-      .join(",");
-    return `f${attr}:${targetIds.join(",")}|${uuids}`;
-  }
-
-  /**
    * 按查询收集 mesh：可只传 featureIds、只传 condition（全场景对应通道上筛选）、或两者组合
    */
   getMeshesForCollectorQuery(params: ResolvedMeshCollectorQuery): Mesh[] {
@@ -272,6 +305,30 @@ export class MeshSplitResolver {
       new Set(targetIds),
       params.featureIdAttribute,
     );
+  }
+
+  /**
+   * 仅在给定瓦片 scene 内为 idSet 构建 split mesh（不全局遍历）。
+   */
+  getMergedSplitMeshesForIdSetInScene(
+    idSet: Set<number>,
+    featureIdAttribute: number,
+    scene: Object3D,
+  ): Mesh[] {
+    if (idSet.size === 0) return [];
+
+    const channel = featureIdAttributeToChannel(featureIdAttribute);
+    const candidateTiles = collectCandidateTileMeshesInScene(
+      scene,
+      idSet,
+      channel,
+    );
+    const tileMeshes =
+      channel === "pid"
+        ? selectDominantTileMeshesForPidSet(candidateTiles, idSet)
+        : selectDominantTileMeshesForOidSet(candidateTiles, idSet);
+
+    return buildSplitMeshesForTileMeshes(tileMeshes, idSet, featureIdAttribute);
   }
 
   private resolveTargetIdsForCollectorQuery(
@@ -320,10 +377,6 @@ export class MeshSplitResolver {
     if (!tiles || idSet.size === 0) return [];
 
     const channel = featureIdAttributeToChannel(featureIdAttribute);
-    const sortedKey =
-      `f${featureIdAttribute}:` +
-      [...idSet].sort((a, b) => a - b).join(",");
-    const result: Mesh[] = [];
     const candidateTiles = new Set<Mesh>();
 
     for (const partId of idSet) {
@@ -341,36 +394,7 @@ export class MeshSplitResolver {
         ? selectDominantTileMeshesForPidSet(candidateTiles, idSet)
         : selectDominantTileMeshesForOidSet(candidateTiles, idSet);
 
-    for (const tileMesh of tileMeshes) {
-      const perTile = getTileSplitGeometryCache(tileMesh);
-      let geometry: BufferGeometry | undefined = perTile.get(sortedKey);
-      if (!geometry) {
-        const built =
-          channel === "pid"
-            ? buildMergedSplitGeometryForTileMeshByPids(tileMesh, idSet)
-            : buildMergedSplitGeometryForTileMesh(tileMesh, idSet);
-        if (built) {
-          geometry = built;
-          perTile.set(sortedKey, geometry);
-        }
-      }
-
-      if (!geometry) {
-        continue;
-      }
-      const m =
-        channel === "pid"
-          ? createMergedSplitMeshFromGeometryByPids(tileMesh, geometry, idSet, {
-              splitGeometryManagedByCache: true,
-            })
-          : createMergedSplitMeshFromGeometry(tileMesh, geometry, idSet, {
-              splitGeometryManagedByCache: true,
-            });
-      if (m) {
-        result.push(m);
-      }
-    }
-    return result;
+    return buildSplitMeshesForTileMeshes(tileMeshes, idSet, featureIdAttribute);
   }
 
   /**
@@ -402,8 +426,6 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   private readonly _interactionGroupKey: string;
   private meshSplit: MeshSplitResolver | null = null;
   private _meshes: Mesh[] = [];
-  /** 解析 ID + 瓦片集合 + 本收集器 id，未变则不再 new Mesh */
-  private _lastMeshSignature: string | null = null;
   private _disposed: boolean = false;
 
   constructor(query: MeshCollectorQuery) {
@@ -478,15 +500,12 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     return this.resolvedQuery.condition;
   }
 
+  /**
+   * 全量重建 split mesh（仅在样式/高亮整体更新或收集器首次注册时调用）。
+   */
   _updateMeshes(): void {
     if (this._disposed) return;
     if (!this.meshSplit) return;
-
-    const sig = `${this._interactionGroupKey}|${this.meshSplit.getMeshesForCollectorQuerySignature(this.resolvedQuery)}`;
-
-    if (sig === this._lastMeshSignature) {
-      return;
-    }
 
     const newMeshes = this.meshSplit.getMeshesForCollectorQuery(
       this.resolvedQuery,
@@ -497,9 +516,41 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
       disposeMergedSplitMeshResources(mesh);
     }
     this._meshes = newMeshes;
-    this._lastMeshSignature = sig;
 
     this.dispatchEvent({ type: "mesh-change", meshes: this._meshes });
+  }
+
+  /**
+   * 为单个瓦片 scene 增量追加 split mesh（tile-visibility-change 路径，不全局遍历）。
+   * @returns 本次新创建的 split mesh
+   */
+  appendMeshesForTileScene(scene: Object3D): Mesh[] {
+    if (this._disposed) return [];
+    if (!this.meshSplit) return [];
+    if (this.resolvedQuery.featureIds.length === 0) return [];
+
+    const idSet = new Set(this.resolvedQuery.featureIds);
+    const newMeshes = this.meshSplit.getMergedSplitMeshesForIdSetInScene(
+      idSet,
+      this.resolvedQuery.featureIdAttribute,
+      scene,
+    );
+    if (newMeshes.length === 0) return [];
+
+    const existingOrigins = new Set(
+      this._meshes
+        .map((m) => (m.userData?.originalMesh as Mesh | undefined)?.uuid)
+        .filter(Boolean),
+    );
+    const toAdd = newMeshes.filter((m) => {
+      const orig = m.userData?.originalMesh as Mesh | undefined;
+      return orig && !existingOrigins.has(orig.uuid);
+    });
+    if (toAdd.length === 0) return [];
+
+    this._meshes.push(...toAdd);
+    this.dispatchEvent({ type: "mesh-change", meshes: this._meshes });
+    return toAdd;
   }
 
   /**
@@ -529,7 +580,6 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
 
     if (kept.length !== this._meshes.length) {
       this._meshes = kept;
-      this._lastMeshSignature = null;
       this.dispatchEvent({ type: "mesh-change", meshes: this._meshes });
     }
   }
@@ -546,6 +596,5 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     }
 
     this._meshes = [];
-    this._lastMeshSignature = null;
   }
 }

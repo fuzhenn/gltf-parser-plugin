@@ -8,7 +8,7 @@ import type { TilesRenderer } from "3d-tiles-renderer";
 import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/mesh";
 import { Object3D } from "three";
 import type { Material } from "three";
-import type { StyleConfig } from "./style-appearance-types";
+import type { StyleConfig, StyleAppearance } from "./style-appearance-types";
 import { buildStyleConditionEvaluatorMap } from "./style-condition-eval";
 import { collectFeatureIdAttributesFromStyleConfig } from "./style-condition-input";
 import {
@@ -64,6 +64,8 @@ export class StyleHelper {
   private originalTransformByMesh = new Map<string, StoredTransform>();
   /** 按收集器实例（interactionGroupKey）挂接 mesh-change */
   private meshChangeHandlers = new Map<string, () => void>();
+  /** 收集器 → 外观，供单瓦片增量应用 */
+  private collectorAppearanceByKey = new Map<string, StyleAppearance>();
   /** 当前样式占用的收集器（用于 clearStyle / 下次 applyStyle 前卸载监听） */
   private styleCollectors: MeshCollector[] = [];
 
@@ -117,6 +119,7 @@ export class StyleHelper {
       this.context.releaseMeshCollector(collector);
     }
     this.meshChangeHandlers.clear();
+    this.collectorAppearanceByKey.clear();
     this.styleCollectors = [];
 
     this.style = null;
@@ -125,15 +128,34 @@ export class StyleHelper {
   }
 
   /**
-   * 仅重算并应用 hide，不重建收集器。
-   * 由插件在 tile-visibility-change 防抖后调用。
+   * 单瓦片可见时增量应用样式 split mesh（仅遍历该 scene，不全局扫描）。
    */
-  refreshHiddenIdsOnly(): void {
-    const resolved = this.resolveStyleFromTiles();
-    if (!resolved) return;
-    for (const [attr, ids] of resolved.idsToHideByAttribute) {
-      this.context.hidePartsByFeatureAttribute(ids, attr);
+  applyStyleToTileScene(scene: Object3D): void {
+    if (!this.style || this.styleCollectors.length === 0) return;
+
+    const rootGroup = this.context.getRootGroup();
+    if (!rootGroup) return;
+
+    const maps: MeshAppearanceMaps = {
+      originalMaterialByMesh: this.originalMaterialByMesh,
+      originalTransformByMesh: this.originalTransformByMesh,
+    };
+
+    for (const collector of this.styleCollectors) {
+      const groupKey = collector.getInteractionGroupKey();
+      const appearance = this.collectorAppearanceByKey.get(groupKey);
+      if (!appearance) continue;
+
+      const added = collector.appendMeshesForTileScene(scene);
+      for (const mesh of added) {
+        applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps);
+      }
     }
+  }
+
+  /** 样式收集器列表（供插件区分托管/自建收集器） */
+  getStyleCollectors(): readonly MeshCollector[] {
+    return this.styleCollectors;
   }
 
   private resolveStyleFromTiles(): {
@@ -218,6 +240,7 @@ export class StyleHelper {
     }
     this.styleCollectors = [];
     this.meshChangeHandlers.clear();
+    this.collectorAppearanceByKey.clear();
 
     const resolved = this.resolveStyleFromTiles();
     if (!resolved) return;
@@ -238,6 +261,7 @@ export class StyleHelper {
         this.styleCollectors.push(collector);
 
         const groupKey = collector.getInteractionGroupKey();
+        this.collectorAppearanceByKey.set(groupKey, appearance);
         const handler = () => {
           if (!rootGroup) return;
           collector.meshes.forEach((mesh) => {
@@ -252,15 +276,6 @@ export class StyleHelper {
 
     for (const [attr, ids] of resolved.idsToHideByAttribute) {
       this.context.hidePartsByFeatureAttribute(ids, attr);
-    }
-  }
-
-  /**
-   * 瓦片加载完成后重新应用样式（由插件调用）
-   */
-  onTilesLoadEnd(): void {
-    if (this.style) {
-      this.applyStyle();
     }
   }
 
