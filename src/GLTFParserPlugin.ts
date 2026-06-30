@@ -520,6 +520,23 @@ export class GLTFParserPlugin {
   // =============================================
 
   /**
+   * 3d-tiles-renderer 插件钩子：瓦片 parse 完成、scene 加入 `tiles.group` 之前被 `await`。
+   *
+   * 在此提前构建 idMap/pidMap 并按当前样式/高亮隐藏列表过滤 `geometry.index`，
+   * 使被照料的构件从首帧起即为隐藏状态，避免多级瓦片加载时原始 mesh「先出现后消失」。
+   *
+   * 时序上早于 `needs-update` / `load-model`，可消除「update 先把 scene 挂进 group、
+   * 随后 load-model 才 hide」的竞态。
+   */
+  processTileModel(scene: Object3D, _tile: unknown): void {
+    buildOidToFeatureIdMap(scene);
+    this.partVisibility.applyVisibilityToScene(scene);
+    (
+      scene.userData as { _gltfParserPreVisibilityApplied?: boolean }
+    )._gltfParserPreVisibilityApplied = true;
+  }
+
+  /**
    * Load model callback
    */
   private _onLoadModelCB = ({ scene }: { scene: Object3D }) => {
@@ -576,8 +593,13 @@ export class GLTFParserPlugin {
       }
     });
 
-    buildOidToFeatureIdMap(scene);
+    const ud = scene.userData as { _gltfParserPreVisibilityApplied?: boolean };
+    if (ud._gltfParserPreVisibilityApplied) {
+      delete ud._gltfParserPreVisibilityApplied;
+      return;
+    }
 
+    buildOidToFeatureIdMap(scene);
     this.partVisibility.applyVisibilityToScene(scene);
   }
 

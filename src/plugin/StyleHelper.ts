@@ -250,6 +250,11 @@ export class StyleHelper {
       originalTransformByMesh: this.originalTransformByMesh,
     };
 
+    // 先隐藏原始构件，再创建并挂载 split mesh，避免短暂双重显示
+    for (const [attr, ids] of resolved.idsToHideByAttribute) {
+      this.context.hidePartsByFeatureAttribute(ids, attr);
+    }
+
     for (const { featureIdAttribute, groups } of resolved.channelGroups) {
       for (const { appearance, featureIds } of groups.values()) {
         const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
@@ -272,10 +277,6 @@ export class StyleHelper {
         collector.addEventListener("mesh-change", handler);
         handler();
       }
-    }
-
-    for (const [attr, ids] of resolved.idsToHideByAttribute) {
-      this.context.hidePartsByFeatureAttribute(ids, attr);
     }
   }
 

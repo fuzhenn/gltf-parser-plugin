@@ -501,6 +501,8 @@ export class PartHighlightHelper {
       );
       const idsToHide = [...new Set([...styledIds, ...unionHide])];
 
+      this.context.hidePartsByFeatureAttribute(idsToHide, featureIdAttribute);
+
       for (const { appearance, featureIds } of groups.values()) {
         const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
         const collector = this.context.getMeshCollectorByCondition({
@@ -523,8 +525,6 @@ export class PartHighlightHelper {
         collector.addEventListener("mesh-change", handler);
         handler();
       }
-
-      this.context.hidePartsByFeatureAttribute(idsToHide, featureIdAttribute);
     }
   }
 
