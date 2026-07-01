@@ -86,8 +86,6 @@ export class GLTFParserPlugin {
   private _oidNodeMap: Map<number, StructureNode> = new Map();
   /** OID → 从根到该节点的斜杠分隔路径，如 "/1/5/7/"；用于 condition 里按层级匹配后代 */
   private _oidPathMap: Map<number, string> = new Map();
-  /** rootTileset 已存在且已尝试过内嵌解析后仍为 null，则不再重复 gunzip */
-  private _structureEmbedResolved = false;
 
   /**
    * 内部数据：在原始属性表数据上注入层级 `_path`（`"/1/5/7/"` 形式）。
@@ -345,42 +343,36 @@ export class GLTFParserPlugin {
     this._structureData = null;
     this._oidNodeMap.clear();
     this._oidPathMap.clear();
-    this._structureEmbedResolved = false;
     this._syncStructureFromTileset();
   };
 
   /**
-   * 从已加载根 tileset 的内嵌 structure（优先 asset.extras.maptalks.structureUri）同步解压并建索引。
-   * rootTileset 尚未就绪时返回 null，可稍后再次调用；已成功或已判定无内嵌数据后见 _structureEmbedResolved。
+   * 从已加载根 tileset 的内嵌 structure（`asset.extras.maptalks.structureUri`）同步解压并建索引。
+   * rootTileset 尚未就绪时返回 null，可稍后再次调用。
    */
   private _syncStructureFromTileset(): StructureData | null {
     if (this._structureData) {
       return this._structureData;
     }
-    if (this._structureEmbedResolved) {
-      return null;
-    }
     if (!this.tiles?.rootTileset) {
       return null;
     }
 
-    const embedded = parseEmbeddedStructureDataFromTilesSync(this.tiles);
-    this._structureEmbedResolved = true;
-
-    if (!embedded) {
+    const structureData = parseEmbeddedStructureDataFromTilesSync(this.tiles);
+    if (!structureData) {
       return null;
     }
 
-    this._structureData = embedded;
+    this._structureData = structureData;
     this._oidNodeMap.clear();
     this._oidPathMap.clear();
-    if (embedded.trees) {
-      for (const tree of embedded.trees) {
+    if (structureData.trees) {
+      for (const tree of structureData.trees) {
         this._buildOidNodeMap(tree, this._oidNodeMap);
         this._buildOidPathMap(tree, "/", this._oidPathMap);
       }
     }
-    return embedded;
+    return structureData;
   }
 
   /**
@@ -905,7 +897,6 @@ export class GLTFParserPlugin {
     this._structureData = null;
     this._oidNodeMap.clear();
     this._oidPathMap.clear();
-    this._structureEmbedResolved = false;
 
     // Clear model info data
     this._modelInfo = null;
