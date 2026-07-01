@@ -14,7 +14,7 @@ import {
   evaluateStyleCondition,
 } from "./style-condition-eval";
 import {
-  collectFeatureIdAttributesFromStyleConfig,
+  getFeatureIdAttributesFromStyleConfig,
   normalizeFeatureIdAttribute,
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
@@ -133,7 +133,7 @@ function resolveHighlightOptions(
   }
 
   if (legacyCount === 0 && options.featureIdAttribute === undefined) {
-    const attrs = collectFeatureIdAttributesFromStyleConfig({
+    const attrs = getFeatureIdAttributesFromStyleConfig({
       show: options.show,
       conditions: options.conditions,
     });

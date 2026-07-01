@@ -1,5 +1,29 @@
+/**
+ * 样式/高亮系统的输入规范化层。
+ *
+ * 把用户在 JSON 里写的多种写法（字符串、布尔、带 `featureIdAttribute` 的对象）
+ * 统一解析为：
+ * - 表达式内容（`content`）
+ * - feature id 通道索引（0 → `_FEATURE_ID_0` / OID，1 → `_FEATURE_ID_1` / PID）
+ *
+ * 供 style-condition-eval（求值）、StyleHelper、PartHighlightHelper 使用。
+ *
+ * @example
+ * ```json
+ * {
+ *   "show": "type === 'wall'",
+ *   "conditions": [
+ *     ["floor === 1", { "color": "#ff0000" }],
+ *     [
+ *       { "content": "pid > 100", "featureIdAttribute": 1 },
+ *       { "color": "#00ff00" }
+ *     ]
+ *   ]
+ * }
+ * ```
+ */
+
 import type {
-  StyleConditionDescriptor,
   StyleConditionInput,
   StyleShowInput,
 } from "./style-appearance-types";
@@ -41,19 +65,8 @@ export function resolveShowFeatureIdAttribute(show?: StyleShowInput): number {
   return normalizeFeatureIdAttribute(show.featureIdAttribute);
 }
 
-export function isStyleConditionDescriptor(
-  value: unknown,
-): value is StyleConditionDescriptor {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "content" in value &&
-    typeof (value as StyleConditionDescriptor).content === "string"
-  );
-}
-
-/** 从 style / highlight 配置中收集用到的 featureIdAttribute（去重、升序） */
-export function collectFeatureIdAttributesFromStyleConfig(config: {
+/** 从 style / highlight 参数中获取用到的 featureIdAttribute（去重、升序） */
+export function getFeatureIdAttributesFromStyleConfig(config: {
   show?: StyleShowInput;
   conditions?: readonly [StyleConditionInput, unknown][];
 }): number[] {

@@ -10,7 +10,7 @@ import { Object3D } from "three";
 import type { Material } from "three";
 import type { StyleConfig, StyleAppearance } from "./style-appearance-types";
 import { buildStyleConditionEvaluatorMap } from "./style-condition-eval";
-import { collectFeatureIdAttributesFromStyleConfig } from "./style-condition-input";
+import { getFeatureIdAttributesFromStyleConfig } from "./style-condition-input";
 import {
   applyStyleAppearanceToMesh,
   buildAppearanceGroupsFromPropertyMap,
@@ -178,7 +178,7 @@ export class StyleHelper {
       conditions: style.conditions ?? [],
     });
 
-    const attributes = collectFeatureIdAttributesFromStyleConfig(style);
+    const attributes = getFeatureIdAttributesFromStyleConfig(style);
     const channelGroups: Array<{
       featureIdAttribute: number;
       groups: ReturnType<

@@ -31,14 +31,6 @@ export {
   evaluateStyleCondition,
 } from "./plugin/style-condition-eval";
 export type { StyleConditionEvaluator } from "./plugin/style-condition-eval";
-export {
-  collectFeatureIdAttributesFromStyleConfig,
-  normalizeFeatureIdAttribute,
-  resolveShowContent,
-  resolveShowFeatureIdAttribute,
-  resolveStyleConditionContent,
-  resolveStyleConditionFeatureIdAttribute,
-} from "./plugin/style-condition-input";
 export type { FeatureInfo } from "./mesh-helper/intersection";
 export type { ColorInput } from "./utils/color-input";
 export type {
