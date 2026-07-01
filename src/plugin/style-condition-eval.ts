@@ -7,10 +7,7 @@
  * 将返回的 Map 传入 `evaluateStyleCondition`，避免在 OID 循环中重复编译。
  */
 
-import type {
-  StyleCondition,
-  StyleShowInput,
-} from "./style-appearance-types";
+import type { StyleCondition, StyleShowInput } from "./style-appearance-types";
 import {
   resolveShowContent,
   resolveStyleConditionContent,
@@ -21,7 +18,7 @@ export type StyleConditionEvaluator = (
 ) => boolean;
 
 /**
- * 编译单个表达式；失败返回 null（无模块级缓存）
+ * 编译单个表达式；失败返回 null
  */
 export function compileStyleCondition(
   expr: string,
@@ -51,7 +48,8 @@ export function buildStyleConditionEvaluatorMap(config: {
   if (showContent?.trim()) strings.add(showContent.trim());
   for (const [cond] of config.conditions ?? []) {
     const content = resolveStyleConditionContent(cond);
-    if (typeof content === "string" && content.trim()) strings.add(content.trim());
+    if (typeof content === "string" && content.trim())
+      strings.add(content.trim());
   }
   const map = new Map<string, StyleConditionEvaluator>();
   for (const s of strings) {
@@ -83,7 +81,6 @@ export function evaluateStyleCondition(
     }
   }
 
-  // 未传入预编译 map 时按次编译（热路径请先用 buildStyleConditionEvaluatorMap）
   const fn = compileStyleCondition(trimmed);
   if (!fn) return false;
   try {
