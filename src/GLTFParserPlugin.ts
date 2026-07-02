@@ -107,7 +107,10 @@ export class GLTFParserPlugin {
 
   // --- Mesh helper properties ---
   /** 构件显隐（原 `hidePartsByOids` / `showPartsByOids` 逻辑） */
-  readonly partVisibility = new PartVisibilityHelper(() => this.tiles);
+  readonly partVisibility = new PartVisibilityHelper(
+    () => this.tiles,
+    () => this._internalData,
+  );
   /** WebGLRenderer 实例，用于 mesh helper 等扩展 */
   get renderer(): WebGLRenderer | null {
     return this._renderer;
@@ -151,10 +154,10 @@ export class GLTFParserPlugin {
     const partFx = this._createPartEffectHost();
     this._styleHelper = new StyleHelper({
       getTiles: () => this.tiles,
-      hidePartsByFeatureAttribute: (ids, attr) =>
-        this.partVisibility.hidePartsByFeatureAttribute(ids, attr),
-      showPartsByFeatureAttribute: (ids, attr) =>
-        this.partVisibility.showPartsByFeatureAttribute(ids, attr),
+      setPartVisibilityConfigLayer: (layerId, attr, configs) =>
+        this.partVisibility.setPartVisibilityConfigLayer(layerId, attr, configs),
+      removePartVisibilityConfigLayer: (layerId, attr) =>
+        this.partVisibility.removePartVisibilityConfigLayer(layerId, attr),
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
       releaseMeshCollector: partFx.releaseMeshCollector,
       getRootGroup: partFx.getRootGroup,
@@ -195,6 +198,14 @@ export class GLTFParserPlugin {
   private _createPartEffectHost(): PartEffectHost {
     return {
       getTiles: () => this.tiles ?? null,
+      setPartVisibilityConfigLayer: (layerId, attr, configs) =>
+        this.partVisibility.setPartVisibilityConfigLayer(
+          layerId,
+          attr,
+          configs,
+        ),
+      removePartVisibilityConfigLayer: (layerId, attr) =>
+        this.partVisibility.removePartVisibilityConfigLayer(layerId, attr),
       hidePartsByFeatureAttribute: (ids, attr) =>
         this.partVisibility.hidePartsByFeatureAttribute(ids, attr),
       showPartsByFeatureAttribute: (ids, attr) =>

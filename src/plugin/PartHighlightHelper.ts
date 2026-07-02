@@ -3,7 +3,10 @@ import {
   normalizeMeshCollectorFeatureIds,
   type MeshCollector,
 } from "../MeshCollector";
-import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/mesh";
+import {
+  getPropertyDataMapFromTilesByFeatureAttribute,
+} from "../mesh-helper/mesh";
+import type { MeshPartVisibilityConfig } from "../mesh-helper";
 import type {
   StyleCondition,
   StyleConditionInput,
@@ -274,6 +277,8 @@ function localMatrix16FromHighlightAppearance(
   return Array.from(obj.matrix.elements);
 }
 
+const HIGHLIGHT_VISIBILITY_LAYER = "highlight";
+
 /**
  * 构件高亮辅助器
  * 与 setStyle 相同的 show / conditions / 位姿语义，多组命名高亮
@@ -372,39 +377,6 @@ export class PartHighlightHelper {
     return { groups, styledIds };
   }
 
-  private collectUnionShowHideForAttribute(
-    propertyMap: Map<number, Record<string, unknown> | null>,
-    featureIdAttribute: number,
-  ): Set<number> {
-    const unionHide = new Set<number>();
-    for (const [, hl] of this.highlightGroups) {
-      if (!highlightGroupAppliesToAttribute(hl, featureIdAttribute)) continue;
-
-      const evaluators = buildStyleConditionEvaluatorMap({
-        show: hl.show,
-        conditions: (hl.conditions ?? []) as StyleCondition[],
-      });
-      const showForChannel =
-        hl.show != null &&
-        resolveShowFeatureIdAttribute(hl.show) === featureIdAttribute
-          ? hl.show
-          : undefined;
-      if (!showForChannel) continue;
-
-      const explicitIds = hl.featureIds;
-      const idsSet = explicitIds?.length ? new Set(explicitIds) : null;
-      const candidateIds = idsSet ? [...idsSet] : [...propertyMap.keys()];
-      for (const partId of candidateIds) {
-        const propertyData = propertyMap.get(partId) ?? null;
-        if (propertyData == null && !idsSet) continue;
-        if (!evaluateStyleCondition(showForChannel, propertyData, evaluators)) {
-          unionHide.add(partId);
-        }
-      }
-    }
-    return unionHide;
-  }
-
   private collectUsedFeatureIdAttributes(): number[] {
     const attrs = new Set<number>();
     for (const [, hl] of this.highlightGroups) {
@@ -420,6 +392,46 @@ export class PartHighlightHelper {
     }
     if (attrs.size === 0) attrs.add(0);
     return [...attrs].sort((a, b) => a - b);
+  }
+
+  private buildVisibilityConfigsForAttribute(
+    featureIdAttribute: number,
+  ): MeshPartVisibilityConfig[] {
+    const configs: MeshPartVisibilityConfig[] = [];
+
+    for (const [, hl] of this.highlightGroups) {
+      if (!highlightGroupAppliesToAttribute(hl, featureIdAttribute)) continue;
+
+      const conditions = (hl.conditions ?? []).filter(
+        ([cond]) =>
+          resolveStyleConditionFeatureIdAttribute(cond) ===
+          featureIdAttribute,
+      ) as StyleCondition[];
+
+      configs.push({
+        show: hl.show,
+        conditions,
+      });
+    }
+
+    return configs;
+  }
+
+  private syncHighlightVisibilityConfigs(attributes: number[]): void {
+    for (const attribute of [0, 1]) {
+      if (attributes.includes(attribute)) {
+        this.context.setPartVisibilityConfigLayer(
+          HIGHLIGHT_VISIBILITY_LAYER,
+          attribute,
+          this.buildVisibilityConfigsForAttribute(attribute),
+        );
+      } else {
+        this.context.removePartVisibilityConfigLayer(
+          HIGHLIGHT_VISIBILITY_LAYER,
+          attribute,
+        );
+      }
+    }
   }
 
   private clearCollectorsAndRestoreMeshes(): void {
@@ -473,17 +485,18 @@ export class PartHighlightHelper {
     this.collectorAppearanceByKey.clear();
 
     if (this.highlightGroups.size === 0) {
-      this.context.hidePartsByFeatureAttribute([], 0);
-      this.context.hidePartsByFeatureAttribute([], 1);
+      this.context.removePartVisibilityConfigLayer(HIGHLIGHT_VISIBILITY_LAYER);
       return;
     }
+
+    const attributes = this.collectUsedFeatureIdAttributes();
+    this.syncHighlightVisibilityConfigs(attributes);
 
     const tiles = this.context.getTiles();
     const scene = this.context.getRootGroup();
     if (!tiles || !scene) return;
 
     const maps = this.getMaps();
-    const attributes = this.collectUsedFeatureIdAttributes();
 
     for (const featureIdAttribute of attributes) {
       const propertyMap = getPropertyDataMapFromTilesByFeatureAttribute(
@@ -491,17 +504,10 @@ export class PartHighlightHelper {
         featureIdAttribute,
         this.context.getInternalData?.(),
       );
-      const { groups, styledIds } = this.buildAppearanceGroupsForAttribute(
+      const { groups } = this.buildAppearanceGroupsForAttribute(
         propertyMap,
         featureIdAttribute,
       );
-      const unionHide = this.collectUnionShowHideForAttribute(
-        propertyMap,
-        featureIdAttribute,
-      );
-      const idsToHide = [...new Set([...styledIds, ...unionHide])];
-
-      this.context.hidePartsByFeatureAttribute(idsToHide, featureIdAttribute);
 
       for (const { appearance, featureIds } of groups.values()) {
         const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);

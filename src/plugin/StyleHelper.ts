@@ -9,6 +9,7 @@ import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/me
 import { Object3D } from "three";
 import type { Material } from "three";
 import type { StyleConfig, StyleAppearance } from "./style-appearance-types";
+import type { MeshPartVisibilityConfig } from "../mesh-helper";
 import { buildStyleConditionEvaluatorMap } from "./style-condition-eval";
 import { getFeatureIdAttributesFromStyleConfig } from "./style-condition-input";
 import {
@@ -34,16 +35,19 @@ export type {
   StyleVec3Input,
 } from "./style-appearance-types";
 
+const STYLE_VISIBILITY_LAYER = "style";
+
 /** 内部使用：插件需提供的接口 */
 interface StyleHelperContext {
   getTiles(): TilesRenderer | null;
-  hidePartsByFeatureAttribute(
-    featureIds: number[],
+  setPartVisibilityConfigLayer(
+    layerId: string,
     featureIdAttribute: number,
+    configs: MeshPartVisibilityConfig[],
   ): void;
-  showPartsByFeatureAttribute(
-    featureIds: number[],
-    featureIdAttribute: number,
+  removePartVisibilityConfigLayer(
+    layerId: string,
+    featureIdAttribute?: number,
   ): void;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   releaseMeshCollector(collector: MeshCollector): void;
@@ -58,8 +62,6 @@ interface StyleHelperContext {
 export class StyleHelper {
   /** 当前样式配置；在插件上可通过 `plugin.style` 读写（与 `setStyle` 等价） */
   style: StyleConfig | null = null;
-  private styledIdsByAttribute = new Map<number, Set<number>>();
-  private hiddenIdsByAttribute = new Map<number, Set<number>>();
   private originalMaterialByMesh = new Map<string, Material>();
   private originalTransformByMesh = new Map<string, StoredTransform>();
   /** 按收集器实例（interactionGroupKey）挂接 mesh-change */
@@ -93,12 +95,7 @@ export class StyleHelper {
    * 清除样式，恢复默认显示
    */
   clearStyle(): void {
-    for (const [attr, ids] of this.styledIdsByAttribute) {
-      this.context.showPartsByFeatureAttribute([...ids], attr);
-    }
-    for (const [attr, ids] of this.hiddenIdsByAttribute) {
-      this.context.showPartsByFeatureAttribute([...ids], attr);
-    }
+    this.context.removePartVisibilityConfigLayer(STYLE_VISIBILITY_LAYER);
 
     const maps: MeshAppearanceMaps = {
       originalMaterialByMesh: this.originalMaterialByMesh,
@@ -123,8 +120,6 @@ export class StyleHelper {
     this.styleCollectors = [];
 
     this.style = null;
-    this.styledIdsByAttribute.clear();
-    this.hiddenIdsByAttribute.clear();
   }
 
   /**
@@ -159,7 +154,6 @@ export class StyleHelper {
   }
 
   private resolveStyleFromTiles(): {
-    idsToHideByAttribute: Map<number, number[]>;
     channelGroups: Array<{
       featureIdAttribute: number;
       groups: ReturnType<
@@ -185,10 +179,6 @@ export class StyleHelper {
         typeof buildAppearanceGroupsFromPropertyMap
       >["groups"];
     }> = [];
-    const idsToHideByAttribute = new Map<number, number[]>();
-
-    this.styledIdsByAttribute.clear();
-    this.hiddenIdsByAttribute.clear();
 
     for (const featureIdAttribute of attributes) {
       const propertyMap = getPropertyDataMapFromTilesByFeatureAttribute(
@@ -196,32 +186,17 @@ export class StyleHelper {
         featureIdAttribute,
         this.context.getInternalData?.(),
       );
-      const { hiddenFeatureIdsList, groups } =
-        buildAppearanceGroupsFromPropertyMap(
-          propertyMap,
-          { show: style.show, conditions: style.conditions ?? [] },
-          evaluators,
-          featureIdAttribute,
-        );
+      const { groups } = buildAppearanceGroupsFromPropertyMap(
+        propertyMap,
+        { show: style.show, conditions: style.conditions ?? [] },
+        evaluators,
+        featureIdAttribute,
+      );
 
-      const styledIds = new Set<number>();
-      const hideSet = new Set(hiddenFeatureIdsList);
-      const idsToHide: number[] = [...hiddenFeatureIdsList];
-
-      for (const { featureIds } of groups.values()) {
-        for (const id of featureIds) {
-          styledIds.add(id);
-          idsToHide.push(id);
-        }
-      }
-
-      this.styledIdsByAttribute.set(featureIdAttribute, styledIds);
-      this.hiddenIdsByAttribute.set(featureIdAttribute, hideSet);
-      idsToHideByAttribute.set(featureIdAttribute, [...new Set(idsToHide)]);
       channelGroups.push({ featureIdAttribute, groups });
     }
 
-    return { idsToHideByAttribute, channelGroups };
+    return { channelGroups };
   }
 
   private applyStyle(): void {
@@ -245,15 +220,28 @@ export class StyleHelper {
     const resolved = this.resolveStyleFromTiles();
     if (!resolved) return;
 
+    const attributes = getFeatureIdAttributesFromStyleConfig(style);
+    for (const featureIdAttribute of attributes) {
+      this.context.setPartVisibilityConfigLayer(STYLE_VISIBILITY_LAYER, featureIdAttribute, [
+        {
+          show: style.show,
+          conditions: style.conditions ?? [],
+        },
+      ]);
+    }
+    for (const attribute of [0, 1]) {
+      if (!attributes.includes(attribute)) {
+        this.context.removePartVisibilityConfigLayer(
+          STYLE_VISIBILITY_LAYER,
+          attribute,
+        );
+      }
+    }
+
     const maps: MeshAppearanceMaps = {
       originalMaterialByMesh: this.originalMaterialByMesh,
       originalTransformByMesh: this.originalTransformByMesh,
     };
-
-    // 先隐藏原始构件，再创建并挂载 split mesh，避免短暂双重显示
-    for (const [attr, ids] of resolved.idsToHideByAttribute) {
-      this.context.hidePartsByFeatureAttribute(ids, attr);
-    }
 
     for (const { featureIdAttribute, groups } of resolved.channelGroups) {
       for (const { appearance, featureIds } of groups.values()) {

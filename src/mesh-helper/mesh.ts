@@ -1060,6 +1060,80 @@ export function featureIdAttributeToChannel(
   return featureIdAttribute === 1 ? "pid" : "oid";
 }
 
+/** 读取 mesh / userData 上 OID 或 PID → featureId 映射表 */
+export function getPartIdMapForFeatureAttribute(
+  source: Mesh | Record<string, unknown>,
+  featureIdAttribute: number,
+): Record<number, number> | undefined {
+  const userData =
+    source instanceof Mesh ? source.userData : (source as Record<string, unknown>);
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  return userData[PART_ID_CHANNEL_CONFIG[channel].mapKey] as
+    | Record<number, number>
+    | undefined;
+}
+
+/**
+ * 从单个 mesh（或其 userData）读取零件属性，仅用本 mesh 的 idMap/pidMap + structuralMetadata。
+ */
+export function getPropertyDataFromMeshUserData(
+  userData: Record<string, unknown>,
+  partId: number,
+  featureIdAttribute: number,
+  internalData?: InternalData,
+): Record<string, unknown> | null {
+  const meshFeatures = userData.meshFeatures as
+    | { geometry?: BufferGeometry }
+    | undefined;
+  const mesh = {
+    userData,
+    geometry: meshFeatures?.geometry,
+  } as Mesh;
+  return getPropertyDataOnMeshByPartId(
+    mesh,
+    partId,
+    featureIdAttribute,
+    internalData,
+  );
+}
+
+function getPropertyDataOnMeshByPartId(
+  mesh: Mesh,
+  partId: number,
+  featureIdAttribute: number,
+  internalData?: InternalData,
+): Record<string, unknown> | null {
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  const idMap = getPartIdMap(mesh, channel);
+  if (!idMap || idMap[partId] === undefined) return null;
+
+  const fid = idMap[partId]!;
+  const resolved = resolveFeatureChannelOnMesh(mesh, channel);
+  if (!resolved) return null;
+
+  const { structuralMetadata } = mesh.userData;
+  const propertyTableIndex = resolved.featureIdConfig?.propertyTable;
+
+  if (propertyTableIndex === undefined || !structuralMetadata) {
+    if (channel === "pid") {
+      return { _pid: partId, pid: partId };
+    }
+    return null;
+  }
+
+  try {
+    const data = structuralMetadata.getPropertyTableData(
+      propertyTableIndex,
+      fid,
+    ) as Record<string, unknown>;
+    return channel === "oid" && internalData
+      ? internalData(partId, data)
+      : data;
+  } catch {
+    return channel === "pid" ? { _pid: partId, pid: partId } : null;
+  }
+}
+
 export function getAllFeatureIdsFromTiles(
   tiles: TilesRenderer,
   featureIdAttribute: number,

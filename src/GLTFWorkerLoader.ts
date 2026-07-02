@@ -225,7 +225,7 @@ export class GLTFWorkerLoader extends Loader {
             instancedMesh.instanceMatrix.needsUpdate = true;
             instancedMesh.userData._gltfMeshIndex = nodeData.mesh;
             instancedMesh.userData._gltfPrimitiveIndex = primitiveIndex;
-            node.add(instancedMesh);
+            // node.add(instancedMesh);
           }
         } else {
           for (const {
