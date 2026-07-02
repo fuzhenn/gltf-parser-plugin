@@ -57,9 +57,7 @@ export function resolveFeatureChannelOnMesh(
   const { meshFeatures } = mesh.userData;
   if (!meshFeatures) return null;
 
-  const geometry =
-    (meshFeatures.geometry as BufferGeometry | undefined) ??
-    (mesh.geometry as BufferGeometry | undefined);
+  const geometry = meshFeatures.geometry ?? mesh.geometry;
   if (!geometry) return null;
 
   const cfg = PART_ID_CHANNEL_CONFIG[channel];
@@ -69,16 +67,14 @@ export function resolveFeatureChannelOnMesh(
   if (featureIdConfig != null) {
     const attr = geometry.getAttribute(
       `_feature_id_${featureIdConfig.attribute}`,
-    ) as BufferAttribute | undefined;
+    );
     if (attr) {
       return { geometry, featureIdAttr: attr, featureIdConfig };
     }
   }
 
   if (channel === "pid") {
-    const attr = geometry.getAttribute("_feature_id_1") as
-      | BufferAttribute
-      | undefined;
+    const attr = geometry.getAttribute("_feature_id_1");
     if (attr) {
       return {
         geometry,

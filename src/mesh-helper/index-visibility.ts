@@ -1,4 +1,4 @@
-import { BufferAttribute, Mesh, Object3D } from "three";
+import { BufferAttribute, BufferGeometry, Mesh, Object3D } from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
 import {
   buildVisibleIndexExcludingHiddenFids,
@@ -8,11 +8,9 @@ import {
 } from "./mesh";
 
 /** 与 split / 高亮一致：仅改 meshFeatures.geometry（若无则用 mesh.geometry） */
-function getVisibilityGeometry(mesh: Mesh): import("three").BufferGeometry | null {
+function getVisibilityGeometry(mesh: Mesh): BufferGeometry | null {
   const { meshFeatures } = mesh.userData;
-  const g =
-    (meshFeatures?.geometry as import("three").BufferGeometry | undefined) ??
-    (mesh.geometry as import("three").BufferGeometry | undefined);
+  const g = meshFeatures?.geometry ?? mesh.geometry;
   return g ?? null;
 }
 
@@ -36,13 +34,13 @@ function getHiddenFeatureIdsForChannel(
 function isTileFeatureSourceMesh(mesh: Mesh): boolean {
   return Boolean(
     mesh.userData?.meshFeatures &&
-      mesh.userData?.structuralMetadata &&
-      !mesh.userData?.isSplit,
+    mesh.userData?.structuralMetadata &&
+    !mesh.userData?.isSplit,
   );
 }
 
 function setGeometryIndexFromArray(
-  geometry: import("three").BufferGeometry,
+  geometry: BufferGeometry,
   indexArray: Uint16Array | Uint32Array,
 ): void {
   geometry.setIndex(new BufferAttribute(indexArray, 1));
@@ -141,17 +139,16 @@ export function applyVisibilityToMesh(
     return;
   }
 
-  if (!(mesh.userData as { _originalIndex?: ArrayLike<number> })._originalIndex) {
+  if (!mesh.userData._originalIndex) {
     const src = index.array;
-    (mesh.userData as { _originalIndex?: ArrayLike<number> })._originalIndex =
+    mesh.userData._originalIndex =
       src instanceof Uint32Array
         ? new Uint32Array(src)
         : src instanceof Uint16Array
           ? new Uint16Array(src)
           : new Uint32Array(Array.from(src));
   }
-  const originalArray = (mesh.userData as { _originalIndex: Uint16Array | Uint32Array })
-    ._originalIndex;
+  const originalArray = mesh.userData._originalIndex;
 
   let filteredArray: Uint16Array | Uint32Array;
   if (needsOidHide && needsPidHide) {
@@ -183,15 +180,14 @@ export function applyVisibilityToMesh(
 
 /** 恢复 mesh 的原始 index */
 export function restoreMeshIndex(mesh: Mesh): void {
-  const original = (mesh.userData as { _originalIndex?: Uint16Array | Uint32Array })
-    ?._originalIndex;
+  const original = mesh.userData?._originalIndex;
   if (!original) return;
 
   const geometry = getVisibilityGeometry(mesh);
   if (!geometry) return;
 
   setGeometryIndexFromArray(geometry, original);
-  delete (mesh.userData as { _originalIndex?: unknown })._originalIndex;
+  delete mesh.userData._originalIndex;
 }
 
 /** 遍历 scene 子树中所有 tile mesh，应用可见性过滤 */
