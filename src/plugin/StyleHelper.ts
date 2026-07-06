@@ -10,8 +10,8 @@ import { Object3D } from "three";
 import type { Material } from "three";
 import type { StyleConfig, StyleAppearance } from "./style-appearance-types";
 import type { MeshPartVisibilityConfig } from "../mesh-helper";
-import { buildStyleConditionEvaluatorMap } from "./style-condition-eval";
-import { getFeatureIdAttributesFromStyleConfig } from "./style-condition-input";
+import { buildStyleConditionEvaluatorMap } from "../appearance";
+import { getFeatureIdAttributesFromStyleConfig } from "../appearance";
 import {
   applyStyleAppearanceToMesh,
   buildAppearanceGroupsFromPropertyMap,
@@ -156,9 +156,7 @@ export class StyleHelper {
   private resolveStyleFromTiles(): {
     channelGroups: Array<{
       featureIdAttribute: number;
-      groups: ReturnType<
-        typeof buildAppearanceGroupsFromPropertyMap
-      >["groups"];
+      groups: ReturnType<typeof buildAppearanceGroupsFromPropertyMap>["groups"];
     }>;
   } | null {
     const style = this.style;
@@ -175,9 +173,7 @@ export class StyleHelper {
     const attributes = getFeatureIdAttributesFromStyleConfig(style);
     const channelGroups: Array<{
       featureIdAttribute: number;
-      groups: ReturnType<
-        typeof buildAppearanceGroupsFromPropertyMap
-      >["groups"];
+      groups: ReturnType<typeof buildAppearanceGroupsFromPropertyMap>["groups"];
     }> = [];
 
     for (const featureIdAttribute of attributes) {
@@ -207,9 +203,7 @@ export class StyleHelper {
     if (!rootGroup) return;
 
     for (const collector of this.styleCollectors) {
-      const h = this.meshChangeHandlers.get(
-        collector.getInteractionGroupKey(),
-      );
+      const h = this.meshChangeHandlers.get(collector.getInteractionGroupKey());
       if (h) collector.removeEventListener("mesh-change", h);
       this.context.releaseMeshCollector(collector);
     }
@@ -222,12 +216,16 @@ export class StyleHelper {
 
     const attributes = getFeatureIdAttributesFromStyleConfig(style);
     for (const featureIdAttribute of attributes) {
-      this.context.setPartVisibilityConfigLayer(STYLE_VISIBILITY_LAYER, featureIdAttribute, [
-        {
-          show: style.show,
-          conditions: style.conditions ?? [],
-        },
-      ]);
+      this.context.setPartVisibilityConfigLayer(
+        STYLE_VISIBILITY_LAYER,
+        featureIdAttribute,
+        [
+          {
+            show: style.show,
+            conditions: style.conditions ?? [],
+          },
+        ],
+      );
     }
     for (const attribute of [0, 1]) {
       if (!attributes.includes(attribute)) {

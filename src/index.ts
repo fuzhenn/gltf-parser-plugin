@@ -25,7 +25,7 @@ export type {
   MeshCollectorQuery,
   ResolvedMeshCollectorQuery,
 } from "./MeshCollector";
-export type { StyleConditionEvaluator } from "./plugin/style-condition-eval";
+export type { StyleConditionEvaluator } from "./appearance";
 export type { FeatureInfo } from "./mesh-helper/intersection";
 export type { ColorInput } from "./utils/color-input";
 export type {

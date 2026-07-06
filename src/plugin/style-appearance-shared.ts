@@ -9,11 +9,11 @@ import {
   Object3D,
   Vector3,
 } from "three";
-import { evaluateStyleCondition } from "./style-condition-eval";
+import { evaluateStyleCondition } from "../appearance";
 import {
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
-} from "./style-condition-input";
+} from "../appearance";
 import { toColor, type ColorInput } from "../utils/color-input";
 import type {
   StyleAppearance,
@@ -63,7 +63,9 @@ function styleFnIdentity(fn: Function): number {
 }
 
 /** 从构件材质提取贴图，供 material 回调使用 */
-export function extractStyleMaterialMaps(material: Material): StyleMaterialMaps {
+export function extractStyleMaterialMaps(
+  material: Material,
+): StyleMaterialMaps {
   const m = material as unknown as Record<string, unknown>;
   const tex = (key: string) => {
     const v = m[key];
@@ -98,7 +100,10 @@ const defaultColorMaterialCache = new Map<string, MeshStandardMaterial>();
  * - 用 `WeakMap` 持有原始 Material 作为外层 key，原始 Material 被 GC 时
  *   缓存条目自动回收，避免内存泄漏。
  */
-const colorOverrideMaterialCache = new WeakMap<Material, Map<string, Material>>();
+const colorOverrideMaterialCache = new WeakMap<
+  Material,
+  Map<string, Material>
+>();
 
 function clampOpacity01(o: number): number {
   return Math.max(0, Math.min(1, o));
@@ -123,7 +128,9 @@ function overrideMaterialCacheKey(
 ): string {
   const h = colorInput !== undefined ? String(colorHex(colorInput)) : "_";
   const o =
-    opacityOverride !== undefined ? clampOpacity01(opacityOverride).toFixed(4) : "_";
+    opacityOverride !== undefined
+      ? clampOpacity01(opacityOverride).toFixed(4)
+      : "_";
   return `${h},${o}`;
 }
 
@@ -173,7 +180,9 @@ function applyAppearanceOverridesToMaterialInstance(
   if (!cloned) {
     cloned = mat.clone();
     if (canColor) {
-      (cloned as Material & { color: Color }).color.setHex(colorHex(colorInput!));
+      (cloned as Material & { color: Color }).color.setHex(
+        colorHex(colorInput!),
+      );
     }
     if (canOpacity) {
       const o = clampOpacity01(opacityOverride!);
@@ -348,7 +357,7 @@ export function resolveConditionsAppearance<T>(
   propertyData: Record<string, unknown> | null,
   evaluators?: ReadonlyMap<
     string,
-    import("./style-condition-eval").StyleConditionEvaluator
+    import("../appearance").StyleConditionEvaluator
   >,
   featureIdAttribute?: number,
 ): T | null {
@@ -367,7 +376,6 @@ export function resolveConditionsAppearance<T>(
   return null;
 }
 
-
 /**
  * setStyle 的核心分组逻辑：把 feature id → propertyData
  * 经 `show` 过滤、conditions first-match 评估后，按 {@link appearanceGroupKey} 聚合。
@@ -377,7 +385,7 @@ export function buildAppearanceGroupsFromPropertyMap(
   config: { show?: StyleShowInput; conditions: StyleCondition[] },
   evaluators?: ReadonlyMap<
     string,
-    import("./style-condition-eval").StyleConditionEvaluator
+    import("../appearance").StyleConditionEvaluator
   >,
   featureIdAttribute = 0,
 ): {
@@ -516,7 +524,10 @@ export function applyStyleAppearanceToMesh(
   const anchorMesh = mesh;
 
   if (!maps.originalMaterialByMesh.has(anchorMesh.uuid)) {
-    maps.originalMaterialByMesh.set(anchorMesh.uuid, anchorMesh.material as Material);
+    maps.originalMaterialByMesh.set(
+      anchorMesh.uuid,
+      anchorMesh.material as Material,
+    );
   }
   const originalMaterial = maps.originalMaterialByMesh.get(anchorMesh.uuid)!;
   const resolvedMaterial = resolveStyleMaterial(appearance, originalMaterial);

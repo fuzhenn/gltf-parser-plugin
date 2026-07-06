@@ -25,7 +25,7 @@ import {
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
-} from "./plugin/style-condition-eval";
+} from "./appearance";
 import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
 import type { PartEffectHost } from "./plugin/part-effect-host";
 import { StyleHelper, type StyleConfig } from "./plugin/StyleHelper";
@@ -155,7 +155,11 @@ export class GLTFParserPlugin {
     this._styleHelper = new StyleHelper({
       getTiles: () => this.tiles,
       setPartVisibilityConfigLayer: (layerId, attr, configs) =>
-        this.partVisibility.setPartVisibilityConfigLayer(layerId, attr, configs),
+        this.partVisibility.setPartVisibilityConfigLayer(
+          layerId,
+          attr,
+          configs,
+        ),
       removePartVisibilityConfigLayer: (layerId, attr) =>
         this.partVisibility.removePartVisibilityConfigLayer(layerId, attr),
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,

@@ -21,20 +21,22 @@ import type { StyleConditionDescriptor } from "./plugin/style-appearance-types";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
-} from "./plugin/style-condition-eval";
+} from "./appearance";
 import {
   normalizeFeatureIdAttribute,
   resolveStyleConditionContent,
-} from "./plugin/style-condition-input";
+} from "./appearance";
 import { detachStyledMeshFromScene } from "./plugin/style-appearance-shared";
 
 /** 挂在瓦片 feature mesh 的 userData 上：按「排序后 feature id 集 + 通道」复用合并 split 的 BufferGeometry */
 const TILE_SPLIT_GEOMETRY_CACHE_KEY = "_gltfParserMergedSplitGeometryCache";
 
-function getTileSplitGeometryCache(tileMesh: Mesh): Map<string, BufferGeometry> {
-  const existing = tileMesh.userData[
-    TILE_SPLIT_GEOMETRY_CACHE_KEY
-  ] as Map<string, BufferGeometry> | undefined;
+function getTileSplitGeometryCache(
+  tileMesh: Mesh,
+): Map<string, BufferGeometry> {
+  const existing = tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY] as
+    | Map<string, BufferGeometry>
+    | undefined;
   if (existing) return existing;
   const map = new Map<string, BufferGeometry>();
   tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY] = map;
@@ -43,9 +45,9 @@ function getTileSplitGeometryCache(tileMesh: Mesh): Map<string, BufferGeometry> 
 
 /** 释放该瓦片 mesh 上缓存的 split 几何；瓦片卸载 / dispose 前应调用（或由 {@link MeshSplitResolver.disposeSplitMeshesByTile}） */
 export function disposeTileMeshSplitGeometryCache(tileMesh: Mesh): void {
-  const map = tileMesh.userData[
-    TILE_SPLIT_GEOMETRY_CACHE_KEY
-  ] as Map<string, BufferGeometry> | undefined;
+  const map = tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY] as
+    | Map<string, BufferGeometry>
+    | undefined;
   if (!map) return;
   for (const geom of map.values()) {
     disposeMergedSplitGeometryCacheEntry(geom, tileMesh);
@@ -248,7 +250,10 @@ export const MESH_CACHE_NAMESPACE_HIGHLIGHT = "highlight";
 
 /** @deprecated 请使用 meshCollectorQueryCacheKey({ featureIds, featureIdAttribute: 0 }) */
 export function meshCollectorGroupKey(oids: readonly number[]): string {
-  return meshCollectorQueryCacheKey({ featureIds: oids, featureIdAttribute: 0 });
+  return meshCollectorQueryCacheKey({
+    featureIds: oids,
+    featureIdAttribute: 0,
+  });
 }
 
 /**
@@ -257,9 +262,8 @@ export function meshCollectorGroupKey(oids: readonly number[]): string {
 export class MeshSplitResolver {
   constructor(
     private readonly getTiles: () => TilesRenderer | null,
-    private readonly getInternalData: () =>
-      | InternalData
-      | undefined = () => undefined,
+    private readonly getInternalData: () => InternalData | undefined = () =>
+      undefined,
   ) {}
 
   /**

@@ -3,9 +3,7 @@ import {
   normalizeMeshCollectorFeatureIds,
   type MeshCollector,
 } from "../MeshCollector";
-import {
-  getPropertyDataMapFromTilesByFeatureAttribute,
-} from "../mesh-helper/mesh";
+import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/mesh";
 import type { MeshPartVisibilityConfig } from "../mesh-helper";
 import type {
   StyleCondition,
@@ -15,21 +13,16 @@ import type {
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
-} from "./style-condition-eval";
+} from "../appearance";
 import {
   getFeatureIdAttributesFromStyleConfig,
   normalizeFeatureIdAttribute,
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
-} from "./style-condition-input";
+} from "../appearance";
 import type { PartEffectHost } from "./part-effect-host";
 import type { ColorInput } from "../utils/color-input";
-import {
-  Euler,
-  Material,
-  Object3D,
-  Vector3,
-} from "three";
+import { Euler, Material, Object3D, Vector3 } from "three";
 import type {
   StyleAppearance,
   StyleEulerInput,
@@ -111,8 +104,10 @@ function resolveHighlightOptions(
 ): ResolvedHighlightOptions {
   const hasFeatureIds =
     normalizeMeshCollectorFeatureIds(options.featureIds ?? []).length > 0;
-  const hasOids = normalizeMeshCollectorFeatureIds(options.oids ?? []).length > 0;
-  const hasPids = normalizeMeshCollectorFeatureIds(options.pids ?? []).length > 0;
+  const hasOids =
+    normalizeMeshCollectorFeatureIds(options.oids ?? []).length > 0;
+  const hasPids =
+    normalizeMeshCollectorFeatureIds(options.pids ?? []).length > 0;
   const legacyCount = [hasFeatureIds, hasOids, hasPids].filter(Boolean).length;
   if (legacyCount > 1) {
     throw new Error(
@@ -168,9 +163,7 @@ function highlightGroupAppliesToAttribute(
     return true;
   }
   for (const [cond] of hl.conditions ?? []) {
-    if (
-      resolveStyleConditionFeatureIdAttribute(cond) === featureIdAttribute
-    ) {
+    if (resolveStyleConditionFeatureIdAttribute(cond) === featureIdAttribute) {
       return true;
     }
   }
@@ -327,12 +320,10 @@ export class PartHighlightHelper {
             resolveStyleConditionFeatureIdAttribute(cond) ===
             featureIdAttribute,
         )
-        .map(
-          ([c, h]): [StyleConditionInput, StyleAppearance] => [
-            c,
-            toStyleAppearance(h),
-          ],
-        );
+        .map(([c, h]): [StyleConditionInput, StyleAppearance] => [
+          c,
+          toStyleAppearance(h),
+        ]);
       const showForChannel =
         hl.show != null &&
         resolveShowFeatureIdAttribute(hl.show) === featureIdAttribute
@@ -404,8 +395,7 @@ export class PartHighlightHelper {
 
       const conditions = (hl.conditions ?? []).filter(
         ([cond]) =>
-          resolveStyleConditionFeatureIdAttribute(cond) ===
-          featureIdAttribute,
+          resolveStyleConditionFeatureIdAttribute(cond) === featureIdAttribute,
       ) as StyleCondition[];
 
       configs.push({
@@ -548,12 +538,13 @@ export class PartHighlightHelper {
     this.highlightGroups.set(resolved.name, {
       show: resolved.show,
       conditions: resolved.conditions,
-      featureIds: resolved.featureIds.length
-        ? resolved.featureIds
-        : undefined,
+      featureIds: resolved.featureIds.length ? resolved.featureIds : undefined,
       featureIdAttribute: resolved.featureIdAttribute,
     });
-    this.highlightConfigByName.set(resolved.name, cloneHighlightOptions(options));
+    this.highlightConfigByName.set(
+      resolved.name,
+      cloneHighlightOptions(options),
+    );
     this.reapplyAll();
   }
 

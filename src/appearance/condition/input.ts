@@ -23,10 +23,7 @@
  * ```
  */
 
-import type {
-  StyleConditionInput,
-  StyleShowInput,
-} from "./style-appearance-types";
+import type { StyleConditionInput, StyleShowInput } from "../types";
 
 const DEFAULT_FEATURE_ID_ATTRIBUTE = 0;
 

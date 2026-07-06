@@ -7,11 +7,12 @@
  * 将返回的 Map 传入 `evaluateStyleCondition`，避免在 OID 循环中重复编译。
  */
 
-import type { StyleCondition, StyleShowInput } from "./style-appearance-types";
-import {
-  resolveShowContent,
-  resolveStyleConditionContent,
-} from "./style-condition-input";
+import type {
+  StyleCondition,
+  StyleConditionInput,
+  StyleShowInput,
+} from "../types";
+import { resolveShowContent, resolveStyleConditionContent } from "./input";
 
 export type StyleConditionEvaluator = (
   data: Record<string, unknown>,
@@ -60,7 +61,7 @@ export function buildStyleConditionEvaluatorMap(config: {
 }
 
 export function evaluateStyleCondition(
-  expr: import("./style-appearance-types").StyleConditionInput,
+  expr: StyleConditionInput,
   propertyData: Record<string, unknown> | null,
   evaluators?: ReadonlyMap<string, StyleConditionEvaluator>,
 ): boolean {

@@ -7,11 +7,11 @@ import type {
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
-} from "../plugin/style-condition-eval";
+} from "../appearance";
 import {
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
-} from "../plugin/style-condition-input";
+} from "../appearance";
 import {
   buildVisibleIndexExcludingHiddenFids,
   forEachLoadedFeatureMesh,
