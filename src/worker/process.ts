@@ -157,33 +157,36 @@ export function processGLTFData(data: any): {
       const instancingExt = node.extensions?.EXT_mesh_gpu_instancing;
       if (instancingExt?.attributes) {
         const attrs = instancingExt.attributes;
-        const translationAttr = attrs.TRANSLATION;
-        const rotationAttr = attrs.ROTATION;
-        const scaleAttr = attrs.SCALE;
-
-        // Derive instance count from the first available attribute
-        const refAttr = translationAttr || rotationAttr || scaleAttr;
+        const refAttr =
+          attrs.TRANSLATION ||
+          attrs.ROTATION ||
+          attrs.SCALE ||
+          Object.values(attrs)[0];
         if (refAttr) {
           const refArray = refAttr.array || refAttr;
-          const itemSize =
-            refAttr.itemSize || (refAttr === rotationAttr ? 4 : 3);
-          const count = refArray.length / itemSize;
+          const refItemSize =
+            refAttr.itemSize ||
+            (refAttr === attrs.ROTATION
+              ? 4
+              : refAttr === attrs.TRANSLATION || refAttr === attrs.SCALE
+                ? 3
+                : 1);
+          const count = refArray.length / refItemSize;
 
           const instanceData: Record<string, any> = { count };
 
-          if (translationAttr) {
-            const arr = translationAttr.array || translationAttr;
-            instanceData.TRANSLATION = arr;
-            addTransferable(arr);
-          }
-          if (rotationAttr) {
-            const arr = rotationAttr.array || rotationAttr;
-            instanceData.ROTATION = arr;
-            addTransferable(arr);
-          }
-          if (scaleAttr) {
-            const arr = scaleAttr.array || scaleAttr;
-            instanceData.SCALE = arr;
+          for (const [key, attr] of Object.entries(attrs)) {
+            const arr = (attr as any).array || attr;
+            const itemSize =
+              (attr as any).itemSize ||
+              (key === "ROTATION"
+                ? 4
+                : key === "TRANSLATION" || key === "SCALE"
+                  ? 3
+                  : arr.length / count);
+            if (!arr || arr.length !== count * itemSize) continue;
+
+            instanceData[key] = arr;
             addTransferable(arr);
           }
 
