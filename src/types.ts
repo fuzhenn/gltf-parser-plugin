@@ -237,6 +237,21 @@ export interface GLTFNodeData {
   scale?: number[];
   children?: GLTFNodeData[];
   instanceData?: InstanceData;
+  extensions?: {
+    EXT_mesh_gpu_instancing?: {
+      attributes?: Record<string, number>;
+    };
+    EXT_instance_features?: {
+      featureIds: Array<{
+        featureCount: number;
+        propertyTable?: number;
+        nullFeatureId?: number;
+        label?: string;
+        attribute?: number;
+      }>;
+    };
+    [key: string]: unknown;
+  };
 }
 
 export type MaterialBuilder = (

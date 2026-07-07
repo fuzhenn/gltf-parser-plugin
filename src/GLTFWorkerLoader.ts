@@ -22,8 +22,9 @@ import {
 import type { GLTFNodeData, GLTFWorkerData, MaterialBuilder } from "./types";
 import { StructuralMetadata, MeshFeatures } from "3d-tiles-renderer/plugins";
 import {
-  buildStructuralMetadataFromInstanceData,
   buildInstanceOidMap,
+  buildInstanceStructuralMetadata,
+  buildInstanceFeatures,
 } from "./mesh";
 
 // Extension names
@@ -179,12 +180,14 @@ export class GLTFWorkerLoader extends Loader {
         if (nodeData.instanceData) {
           // EXT_mesh_gpu_instancing: create InstancedMesh per primitive
           const { count, TRANSLATION, ROTATION, SCALE } = nodeData.instanceData;
-          const instanceStructuralMetadata =
-            buildStructuralMetadataFromInstanceData(nodeData.instanceData);
-          const instanceOidMap = instanceStructuralMetadata
-            ? buildInstanceOidMap(instanceStructuralMetadata, count)
+          const instanceFeatures = buildInstanceFeatures(nodeData);
+          const instanceStructuralMetadata = this._metadata
+            ? buildInstanceStructuralMetadata(data, textureArray)
             : null;
-
+          const instanceOidMap =
+            instanceStructuralMetadata && instanceFeatures
+              ? buildInstanceOidMap(nodeData, instanceStructuralMetadata, 0)
+              : null;
           for (const {
             geometry,
             material,
@@ -235,6 +238,9 @@ export class GLTFWorkerLoader extends Loader {
             if (instanceStructuralMetadata) {
               instancedMesh.userData.structuralMetadata =
                 instanceStructuralMetadata;
+            }
+            if (instanceFeatures) {
+              instancedMesh.userData.instanceFeatures = instanceFeatures;
             }
             if (instanceOidMap) {
               instancedMesh.userData._tile_oidMap = instanceOidMap;
@@ -336,7 +342,7 @@ export class GLTFWorkerLoader extends Loader {
     }
 
     // Process EXT_structural_metadata
-    let rootMetadata: any = null;
+    let rootMetadata: StructuralMetadata | null = null;
     if (hasStructuralMetadata && data.structuralMetadata) {
       const rootExtension = data.json?.extensions?.[EXT_STRUCTURAL_METADATA];
       if (rootExtension) {
@@ -355,6 +361,8 @@ export class GLTFWorkerLoader extends Loader {
 
     // Traverse all meshes in the scene, process mesh-level metadata
     scene.traverse((child) => {
+      if (child instanceof InstancedMesh) return;
+
       if (!(child instanceof Mesh)) return;
 
       const meshIndex = child.userData._gltfMeshIndex as number | undefined;
