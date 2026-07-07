@@ -1,139 +1,90 @@
 import { StructuralMetadata } from "3d-tiles-renderer/plugins";
-import type { InstanceData, MetadataTypedArray } from "../types";
+import type { Texture } from "three";
+import type { GLTFNodeData, GLTFWorkerData } from "../../types";
+import type {
+  InstanceData,
+  InstanceFeatureId,
+  InstanceFeatures,
+  MetadataTypedArray,
+} from "../types";
 
-const TRANSFORM_ATTRS = new Set(["TRANSLATION", "ROTATION", "SCALE"]);
-const INSTANCE_CLASS_NAME = "InstanceMetadata";
-const INSTANCE_TABLE_NAME = "instances";
+const EXT_INSTANCE_FEATURES = "EXT_instance_features";
+const EXT_STRUCTURAL_METADATA = "EXT_structural_metadata";
 
-function isMetadataTypedArray(value: unknown): value is MetadataTypedArray {
-  return (
-    value instanceof Float32Array ||
-    value instanceof Float64Array ||
-    value instanceof Int8Array ||
-    value instanceof Int16Array ||
-    value instanceof Int32Array ||
-    value instanceof Uint8Array ||
-    value instanceof Uint16Array ||
-    value instanceof Uint32Array
+function getInstanceFeatureAttributeName(attribute: number): string {
+  return `_FEATURE_ID_${attribute}`;
+}
+
+/**
+ * 按 EXT_instance_features 读取单个实例的 feature id。
+ * 未声明 attribute 时，feature id 即为 instanceIndex（规范 implicit by index）。
+ */
+export function getInstanceFeatureId(
+  instanceData: InstanceData,
+  featureConfig: InstanceFeatureId,
+  instanceIndex: number,
+): number {
+  const attrName = getInstanceFeatureAttributeName(featureConfig.attribute!);
+  const array = instanceData[attrName] as MetadataTypedArray;
+  return array[instanceIndex];
+}
+
+/** 构建与 meshFeatures 类似的实例 feature 访问器 */
+export function buildInstanceFeatures(
+  nodeData: GLTFNodeData,
+): InstanceFeatures | null {
+  const ext = nodeData.extensions?.[EXT_INSTANCE_FEATURES]!;
+  const instanceData = nodeData.instanceData!;
+  const featureIds = ext.featureIds.map((info) => ({ ...info }));
+
+  return {
+    featureIds,
+    getFeatureId(featureIndex: number, instanceIndex: number) {
+      const config = featureIds[featureIndex];
+      if (!config) return instanceIndex;
+      return getInstanceFeatureId(instanceData, config, instanceIndex);
+    },
+  };
+}
+
+/**
+ * 由 Worker 预加载的根级 EXT_structural_metadata 构建 StructuralMetadata。
+ */
+export function buildInstanceStructuralMetadata(
+  data: GLTFWorkerData,
+  textures: (Texture | null)[],
+): StructuralMetadata | null {
+  const loaded = data.structuralMetadata;
+  if (!loaded?.schema) return null;
+
+  const rootExtension = data.json?.extensions?.[EXT_STRUCTURAL_METADATA];
+
+  return new StructuralMetadata(
+    {
+      schema: loaded.schema,
+      propertyTables: loaded.propertyTables || [],
+      propertyTextures: rootExtension?.propertyTextures || [],
+      propertyAttributes: rootExtension?.propertyAttributes || [],
+    },
+    textures,
+    loaded.buffers || [],
   );
 }
 
-function getComponentType(array: MetadataTypedArray): string {
-  if (array instanceof Float32Array) return "FLOAT32";
-  if (array instanceof Float64Array) return "FLOAT64";
-  if (array instanceof Int8Array) return "INT8";
-  if (array instanceof Int16Array) return "INT16";
-  if (array instanceof Int32Array) return "INT32";
-  if (array instanceof Uint8Array) return "UINT8";
-  if (array instanceof Uint16Array) return "UINT16";
-  if (array instanceof Uint32Array) return "UINT32";
-  return "FLOAT32";
-}
-
-function getMetadataType(itemSize: number): string {
-  switch (itemSize) {
-    case 1:
-      return "SCALAR";
-    case 2:
-      return "VEC2";
-    case 3:
-      return "VEC3";
-    case 4:
-      return "VEC4";
-    case 9:
-      return "MAT3";
-    case 16:
-      return "MAT4";
-    default:
-      return "SCALAR";
-  }
-}
-
 /**
- * 由 EXT_mesh_gpu_instancing 的实例属性数组构造 {@link StructuralMetadata}。
- *
- * 每个实例对应 property table 中的一行；实例索引即 feature id / row id。
- * TRANSLATION / ROTATION / SCALE 仅用于变换，不写入属性表。
- *
- * 构造方式与 3d-tiles-renderer 中 PropertyTableAccessor 读取逻辑一致：
- * schema.classes + propertyTables + buffers（values 为 buffers 下标）。
- */
-export function buildStructuralMetadataFromInstanceData(
-  instanceData: InstanceData,
-): StructuralMetadata | null {
-  const count = instanceData.count;
-  if (!count || count <= 0) return null;
-
-  const classProperties: Record<
-    string,
-    { type: string; componentType: string }
-  > = {};
-  const tableProperties: Record<string, { values: number }> = {};
-  const buffers: ArrayBuffer[] = [];
-
-  for (const key of Object.keys(instanceData)) {
-    if (key === "count" || TRANSFORM_ATTRS.has(key)) continue;
-
-    const array = instanceData[key];
-    if (!isMetadataTypedArray(array)) continue;
-
-    const itemSize = array.length / count;
-    if (!Number.isInteger(itemSize) || itemSize < 1) continue;
-
-    const type = getMetadataType(itemSize);
-    const componentType = getComponentType(array);
-
-    classProperties[key] = { type, componentType };
-    tableProperties[key] = { values: buffers.length };
-
-    // PropertyTableAccessor 按 ArrayBuffer 整段读取，需独立拷贝避免共享底层 buffer
-    // TODO 为什么不支持 DataView
-    buffers.push(
-      array.buffer.slice(
-        array.byteOffset,
-        array.byteOffset + array.byteLength,
-      ) as ArrayBuffer,
-    );
-    // buffers.push(
-    //   new DataView(array.buffer, array.byteOffset, array.byteLength) as any
-    // );
-  }
-
-  if (Object.keys(classProperties).length === 0) return null;
-
-  const definition = {
-    schema: {
-      classes: {
-        [INSTANCE_CLASS_NAME]: {
-          properties: classProperties,
-        },
-      },
-    },
-    propertyTables: [
-      {
-        name: INSTANCE_TABLE_NAME,
-        class: INSTANCE_CLASS_NAME,
-        count,
-        properties: tableProperties,
-      },
-    ],
-    propertyTextures: [],
-    propertyAttributes: [],
-  };
-
-  return new StructuralMetadata(definition, [], buffers);
-}
-
-/**
- * 从实例级 StructuralMetadata 构建 OID → 实例行号（feature id）映射。
- * 行号与 InstancedMesh 的 instanceId 一致。
+ * 借助 EXT_instance_features 构建 OID → featureId（property table 行号）映射。
+ * 与普通 mesh 的 `_tile_oidMap` 语义一致，而非 instanceIndex。
  */
 export function buildInstanceOidMap(
+  nodeData: GLTFNodeData,
   structuralMetadata: StructuralMetadata,
-  instanceCount: number,
-  tableIndex = 0,
+  featureIndex = 0,
 ): Record<number, number> | null {
-  const idMap: Record<number, number> = {};
+  const ext = nodeData.extensions?.[EXT_INSTANCE_FEATURES]!;
+  const instanceData = nodeData.instanceData!;
+
+  const featureConfig = ext.featureIds[featureIndex];
+  const propertyTableIndex = featureConfig.propertyTable as number;
 
   const readRow = structuralMetadata as unknown as {
     getPropertyTableData(
@@ -142,17 +93,30 @@ export function buildInstanceOidMap(
     ): Record<string, unknown>;
   };
 
-  for (let instanceId = 0; instanceId < instanceCount; instanceId++) {
+  const idMap: Record<number, number> = {};
+  const processedFeatureIds = new Set<number>();
+
+  for (
+    let instanceIndex = 0;
+    instanceIndex < instanceData.count;
+    instanceIndex++
+  ) {
+    const featureId = getInstanceFeatureId(
+      instanceData,
+      featureConfig,
+      instanceIndex,
+    );
+
+    if (processedFeatureIds.has(featureId)) continue;
+    processedFeatureIds.add(featureId);
+
     try {
-      const row = readRow.getPropertyTableData(tableIndex, instanceId);
-      const oid = row._oid;
-      if (oid === undefined || oid === null) continue;
-      const n = typeof oid === "number" ? oid : Number(oid);
-      if (!Number.isNaN(n)) {
-        idMap[n] = instanceId;
-      }
+      const row = readRow.getPropertyTableData(propertyTableIndex, featureId);
+      const oid = row._oid as number;
+      if (oid === undefined) continue;
+      idMap[oid] = featureId;
     } catch {
-      break;
+      continue;
     }
   }
 
