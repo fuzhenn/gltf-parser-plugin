@@ -23,14 +23,14 @@ export type PartIdChannel = "oid" | "pid";
 const PART_ID_CHANNEL_CONFIG = {
   oid: {
     featureIndex: 0,
-    mapKey: "idMap",
+    mapKey: "_tile_oidMap",
     idKey: "oid",
     collectorKey: "collectorOids",
     namePrefix: "merged_features",
   },
   pid: {
     featureIndex: 1,
-    mapKey: "pidMap",
+    mapKey: "_tile_pidMap",
     idKey: "pid",
     collectorKey: "collectorPids",
     namePrefix: "merged_pids",
@@ -823,7 +823,7 @@ export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
   const oidSet = new Set<number>();
 
   forEachLoadedFeatureMesh(tiles, (mesh) => {
-    const idMap = mesh.userData.idMap as Record<number, number> | undefined;
+    const idMap = mesh.userData._tile_oidMap as Record<number, number> | undefined;
     if (!idMap) return;
     for (const oid of Object.keys(idMap).map(Number)) {
       oidSet.add(oid);
@@ -863,7 +863,7 @@ export function getPropertyDataByOid(
   forEachLoadedFeatureMesh(tiles, (mesh) => {
     if (result) return;
 
-    const idMap = mesh.userData.idMap as Record<number, number> | undefined;
+    const idMap = mesh.userData._tile_oidMap as Record<number, number> | undefined;
     if (!idMap || idMap[oid] === undefined) return;
 
     const { meshFeatures, structuralMetadata } = mesh.userData;
@@ -895,7 +895,7 @@ export function getPropertyDataMapFromTiles(
   const map = new Map<number, Record<string, unknown> | null>();
 
   forEachLoadedFeatureMesh(tiles, (mesh) => {
-    const idMap = mesh.userData.idMap as Record<number, number> | undefined;
+    const idMap = mesh.userData._tile_oidMap as Record<number, number> | undefined;
     if (!idMap) return;
 
     const { meshFeatures, structuralMetadata } = mesh.userData;

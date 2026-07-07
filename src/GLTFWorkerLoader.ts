@@ -237,7 +237,7 @@ export class GLTFWorkerLoader extends Loader {
                 instanceStructuralMetadata;
             }
             if (instanceOidMap) {
-              instancedMesh.userData.idMap = instanceOidMap;
+              instancedMesh.userData._tile_oidMap = instanceOidMap;
             }
             node.add(instancedMesh);
           }

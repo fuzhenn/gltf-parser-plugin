@@ -63,7 +63,7 @@ function collectCandidateTileMeshesInScene(
   idSet: Set<number>,
   channel: PartIdChannel,
 ): Set<Mesh> {
-  const mapKey = channel === "pid" ? "pidMap" : "idMap";
+  const mapKey = channel === "pid" ? "_tile_pidMap" : "_tile_oidMap";
   const candidateTiles = new Set<Mesh>();
   scene.traverse((child) => {
     const mesh = child as Mesh;

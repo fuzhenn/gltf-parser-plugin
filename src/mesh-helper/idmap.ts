@@ -3,7 +3,7 @@ import { resolveFeatureChannelOnMesh } from "./mesh";
 
 const OID_FEATURE_INDEX = 0;
 
-type IdMapUserDataKey = "idMap" | "pidMap";
+type IdMapUserDataKey = "_tile_oidMap" | "_tile_pidMap";
 type PropertyIdField = "_oid" | "_pid";
 
 function extractPartIdFromPropertyData(
@@ -126,7 +126,7 @@ function buildPidMap(meshObject: Object3D): void {
   }
 
   if (Object.keys(pidMap).length === 0) return;
-  meshObject.userData.pidMap = pidMap;
+  meshObject.userData._tile_pidMap = pidMap;
 }
 
 /**
@@ -140,7 +140,7 @@ function buildOidToFeatureIdMap(scene: Object3D): void {
       meshObject,
       OID_FEATURE_INDEX,
       "_oid",
-      "idMap",
+      "_tile_oidMap",
     );
     buildPidMap(meshObject);
   });

@@ -189,7 +189,7 @@ function getHiddenFeatureIdsForChannel(
   hiddenIds: Set<number>,
   channel: PartIdChannel,
 ): Set<number> {
-  const mapKey = channel === "oid" ? "idMap" : "pidMap";
+  const mapKey = channel === "oid" ? "_tile_oidMap" : "_tile_pidMap";
   const idMap = mesh.userData?.[mapKey] as Record<number, number> | undefined;
   if (!idMap) return new Set();
 

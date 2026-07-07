@@ -145,7 +145,7 @@ export function buildInstanceOidMap(
   for (let instanceId = 0; instanceId < instanceCount; instanceId++) {
     try {
       const row = readRow.getPropertyTableData(tableIndex, instanceId);
-      const oid = row._oid ?? row.oid ?? row.OID ?? row._OID ?? row._Oid;
+      const oid = row._oid;
       if (oid === undefined || oid === null) continue;
       const n = typeof oid === "number" ? oid : Number(oid);
       if (!Number.isNaN(n)) {
