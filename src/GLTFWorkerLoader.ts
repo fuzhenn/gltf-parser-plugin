@@ -21,8 +21,10 @@ import {
 } from "./utils";
 import type { GLTFNodeData, GLTFWorkerData, MaterialBuilder } from "./types";
 import { StructuralMetadata, MeshFeatures } from "3d-tiles-renderer/plugins";
-
-// 隔离接收oid数组
+import {
+  buildStructuralMetadataFromInstanceData,
+  buildInstanceOidMap,
+} from "./mesh";
 
 // Extension names
 const EXT_STRUCTURAL_METADATA = "EXT_structural_metadata";
@@ -177,6 +179,11 @@ export class GLTFWorkerLoader extends Loader {
         if (nodeData.instanceData) {
           // EXT_mesh_gpu_instancing: create InstancedMesh per primitive
           const { count, TRANSLATION, ROTATION, SCALE } = nodeData.instanceData;
+          const instanceStructuralMetadata =
+            buildStructuralMetadataFromInstanceData(nodeData.instanceData);
+          const instanceOidMap = instanceStructuralMetadata
+            ? buildInstanceOidMap(instanceStructuralMetadata, count)
+            : null;
 
           for (const {
             geometry,
@@ -225,7 +232,14 @@ export class GLTFWorkerLoader extends Loader {
             instancedMesh.instanceMatrix.needsUpdate = true;
             instancedMesh.userData._gltfMeshIndex = nodeData.mesh;
             instancedMesh.userData._gltfPrimitiveIndex = primitiveIndex;
-            // node.add(instancedMesh);
+            if (instanceStructuralMetadata) {
+              instancedMesh.userData.structuralMetadata =
+                instanceStructuralMetadata;
+            }
+            if (instanceOidMap) {
+              instancedMesh.userData._tile_oidMap = instanceOidMap;
+            }
+            node.add(instancedMesh);
           }
         } else {
           for (const {
