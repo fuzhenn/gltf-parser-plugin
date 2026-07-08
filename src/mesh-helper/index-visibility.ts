@@ -1,5 +1,13 @@
-import { BufferAttribute, BufferGeometry, Mesh, Object3D } from "three";
+import {
+  BufferAttribute,
+  BufferGeometry,
+  InstancedMesh,
+  Matrix4,
+  Mesh,
+  Object3D,
+} from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
+import type { InstanceFeatures } from "../mesh/types";
 import type {
   StyleCondition,
   StyleShowInput,
@@ -14,7 +22,6 @@ import {
 } from "../appearance";
 import {
   buildVisibleIndexExcludingHiddenFids,
-  forEachLoadedFeatureMesh,
   getPartIdMapForFeatureAttribute,
   getPropertyDataFromMeshUserData,
   resolveFeatureChannelOnMesh,
@@ -28,14 +35,67 @@ export interface MeshPartVisibilityConfig {
   conditions?: readonly StyleCondition[];
 }
 
+type FeatureSource = Mesh | InstancedMesh;
+
 /**
- * 根据 mesh.userData、feature 通道与 show/conditions，解析本 mesh 上应隐藏的 partId。
+ * 根据 userData、feature 通道与 show/conditions，解析应隐藏的 partId。
  *
- * @param userData 瓦片 feature mesh 的 userData（需含 idMap/pidMap、meshFeatures、structuralMetadata）
+ * @param userData 瓦片 feature 对象的 userData（meshFeatures 或 instanceFeatures + structuralMetadata）
  * @param featureIdAttribute 0 → OID（`_FEATURE_ID_0`），1 → PID（`_FEATURE_ID_1`）
- * @returns 本 mesh 上应隐藏的 OID 或 PID 集合（不含其它 mesh 上的 id）
+ * @returns 本对象上应隐藏的 OID 或 PID 集合
  */
-export function resolveHiddenPartIdsOnMeshUserData(
+function getPropertyDataFromUserData(
+  userData: Record<string, unknown>,
+  partId: number,
+  featureIdAttribute: number,
+  internalData?: InternalData,
+): Record<string, unknown> | null {
+  const instanceFeatures = userData.instanceFeatures as
+    | InstanceFeatures
+    | undefined;
+  if (instanceFeatures) {
+    const structuralMetadata = userData.structuralMetadata as
+      | {
+          getPropertyTableData(
+            tableIndex: number,
+            id: number,
+          ): Record<string, unknown>;
+        }
+      | undefined;
+    const idMap = getPartIdMapForFeatureAttribute(userData, featureIdAttribute);
+    if (!structuralMetadata || !idMap) return null;
+
+    const fid = idMap[partId];
+    if (fid === undefined) return null;
+
+    const propertyTableIndex =
+      instanceFeatures.featureIds[featureIdAttribute]?.propertyTable;
+    if (propertyTableIndex === undefined) {
+      return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
+    }
+
+    try {
+      const data = structuralMetadata.getPropertyTableData(
+        propertyTableIndex,
+        fid,
+      );
+      return featureIdAttribute === 0 && internalData
+        ? internalData(partId, data)
+        : data;
+    } catch {
+      return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
+    }
+  }
+
+  return getPropertyDataFromMeshUserData(
+    userData,
+    partId,
+    featureIdAttribute,
+    internalData,
+  );
+}
+
+function resolveHiddenPartIdsOnUserData(
   userData: Record<string, unknown>,
   featureIdAttribute: number,
   config: MeshPartVisibilityConfig,
@@ -61,7 +121,7 @@ export function resolveHiddenPartIdsOnMeshUserData(
   const candidateIds = Object.keys(idMap).map(Number);
 
   for (const partId of candidateIds) {
-    const propertyData = getPropertyDataFromMeshUserData(
+    const propertyData = getPropertyDataFromUserData(
       userData,
       partId,
       featureIdAttribute,
@@ -91,6 +151,20 @@ export function resolveHiddenPartIdsOnMeshUserData(
   }
 
   return hidden;
+}
+
+export function resolveHiddenPartIdsOnMeshUserData(
+  userData: Record<string, unknown>,
+  featureIdAttribute: number,
+  config: MeshPartVisibilityConfig,
+  internalData?: InternalData,
+): Set<number> {
+  return resolveHiddenPartIdsOnUserData(
+    userData,
+    featureIdAttribute,
+    config,
+    internalData,
+  );
 }
 
 /** {@link resolveHiddenPartIdsOnMeshUserData} 的 mesh 便捷封装 */
@@ -155,8 +229,8 @@ function hasMeshPartVisibilityRules(): boolean {
   return false;
 }
 
-function resolveAllHiddenPartIdsOnMesh(
-  mesh: Mesh,
+function resolveAllHiddenPartIdsOnSource(
+  source: FeatureSource,
   featureIdAttribute: number,
 ): Set<number> {
   const configs =
@@ -165,8 +239,8 @@ function resolveAllHiddenPartIdsOnMesh(
 
   const hidden = new Set<number>();
   for (const config of configs) {
-    for (const partId of resolveHiddenPartIdsOnMesh(
-      mesh,
+    for (const partId of resolveHiddenPartIdsOnUserData(
+      source.userData,
       featureIdAttribute,
       config,
       meshPartVisibilityInternalData,
@@ -185,12 +259,14 @@ function getVisibilityGeometry(mesh: Mesh): BufferGeometry | null {
 }
 
 function getHiddenFeatureIdsForChannel(
-  mesh: Mesh,
+  source: FeatureSource,
   hiddenIds: Set<number>,
   channel: PartIdChannel,
 ): Set<number> {
   const mapKey = channel === "oid" ? "_tile_oidMap" : "_tile_pidMap";
-  const idMap = mesh.userData?.[mapKey] as Record<number, number> | undefined;
+  const idMap = source.userData?.[mapKey] as
+    | Record<number, number>
+    | undefined;
   if (!idMap) return new Set();
 
   const hidden = new Set<number>();
@@ -201,12 +277,109 @@ function getHiddenFeatureIdsForChannel(
   return hidden;
 }
 
-function isTileFeatureSourceMesh(mesh: Mesh): boolean {
+function isTileFeatureSource(obj: Object3D): obj is FeatureSource {
+  if (!(obj instanceof Mesh)) return false;
+
+  const userData = obj.userData;
+  if (obj instanceof InstancedMesh) {
+    return Boolean(userData?.instanceFeatures && userData?.structuralMetadata);
+  }
+
   return Boolean(
-    mesh.userData?.meshFeatures &&
-    mesh.userData?.structuralMetadata &&
-    !mesh.userData?.isSplit,
+    userData?.meshFeatures && userData?.structuralMetadata && !userData?.isSplit,
   );
+}
+
+const HIDDEN_INSTANCE_MATRIX = new Matrix4().makeScale(0, 0, 0);
+const tmpInstanceMatrix = new Matrix4();
+
+function snapshotOriginalInstanceMatrices(mesh: InstancedMesh): Float32Array {
+  if (!mesh.userData._originalInstanceMatrices) {
+    mesh.userData._originalInstanceMatrices = new Float32Array(
+      mesh.instanceMatrix.array,
+    );
+  }
+  return mesh.userData._originalInstanceMatrices as Float32Array;
+}
+
+function getHiddenInstanceIndices(
+  mesh: InstancedMesh,
+  hiddenOids: Set<number>,
+  hiddenPids: Set<number>,
+): Set<number> {
+  const instanceFeatures = mesh.userData.instanceFeatures as
+    | InstanceFeatures
+    | undefined;
+  if (!instanceFeatures) return new Set();
+
+  const hiddenOidFids = getHiddenFeatureIdsForChannel(mesh, hiddenOids, "oid");
+  const hiddenPidFids = getHiddenFeatureIdsForChannel(mesh, hiddenPids, "pid");
+  const needsOidHide = hiddenOids.size > 0 && hiddenOidFids.size > 0;
+  const needsPidHide =
+    hiddenPids.size > 0 &&
+    hiddenPidFids.size > 0 &&
+    instanceFeatures.featureIds.length > 1;
+
+  if (!needsOidHide && !needsPidHide) return new Set();
+
+  const hidden = new Set<number>();
+  for (let i = 0; i < mesh.count; i++) {
+    if (needsOidHide) {
+      const oidFid = instanceFeatures.getFeatureId(0, i);
+      if (hiddenOidFids.has(oidFid)) {
+        hidden.add(i);
+        continue;
+      }
+    }
+    if (needsPidHide) {
+      const pidFid = instanceFeatures.getFeatureId(1, i);
+      if (hiddenPidFids.has(pidFid)) {
+        hidden.add(i);
+      }
+    }
+  }
+  return hidden;
+}
+
+function restoreInstancedMeshMatrices(mesh: InstancedMesh): void {
+  const original = mesh.userData._originalInstanceMatrices as
+    | Float32Array
+    | undefined;
+  if (!original) return;
+
+  for (let i = 0; i < mesh.count; i++) {
+    tmpInstanceMatrix.fromArray(original, i * 16);
+    mesh.setMatrixAt(i, tmpInstanceMatrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  delete mesh.userData._originalInstanceMatrices;
+}
+
+function applyInstancedMatrixVisibility(mesh: InstancedMesh): void {
+  const hiddenOids = resolveAllHiddenPartIdsOnSource(mesh, 0);
+  const hiddenPids = resolveAllHiddenPartIdsOnSource(mesh, 1);
+
+  if (hiddenOids.size === 0 && hiddenPids.size === 0) {
+    restoreInstancedMeshMatrices(mesh);
+    return;
+  }
+
+  const hiddenInstances = getHiddenInstanceIndices(mesh, hiddenOids, hiddenPids);
+  if (hiddenInstances.size === 0) {
+    restoreInstancedMeshMatrices(mesh);
+    return;
+  }
+
+  const originalMatrices = snapshotOriginalInstanceMatrices(mesh);
+  for (let i = 0; i < mesh.count; i++) {
+    if (hiddenInstances.has(i)) {
+      mesh.setMatrixAt(i, HIDDEN_INSTANCE_MATRIX);
+      continue;
+    }
+    tmpInstanceMatrix.fromArray(originalMatrices, i * 16);
+    mesh.setMatrixAt(i, tmpInstanceMatrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
 }
 
 function setGeometryIndexFromArray(
@@ -249,33 +422,15 @@ function buildVisibleIndexExcludingMultiChannelHiddenFids(
   return filtered.subarray(0, writeOffset);
 }
 
-/**
- * 对当前已加载的所有瓦片 feature mesh 应用显隐（按 mesh.uuid 去重）。
- * 同时遍历 tiles.group 与各 tile.engineData.scene。
- */
-export function applyVisibilityToAllLoadedMeshes(tiles: TilesRenderer): void {
-  if (!hasMeshPartVisibilityRules()) {
-    forEachLoadedFeatureMesh(tiles, (mesh) => restoreMeshIndex(mesh));
-    return;
-  }
-
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
-    if (isTileFeatureSourceMesh(mesh)) {
-      applyVisibilityToMesh(mesh);
-    }
-  });
-}
-
-/** 对单个 mesh 应用可见性过滤（通过修改 index 排除隐藏的三角形） */
-export function applyVisibilityToMesh(mesh: Mesh): void {
+function applyMeshIndexVisibility(mesh: Mesh): void {
   const { meshFeatures } = mesh.userData;
   if (!meshFeatures?.featureIds?.length) return;
 
   const geometry = getVisibilityGeometry(mesh);
   if (!geometry) return;
 
-  const hiddenOids = resolveAllHiddenPartIdsOnMesh(mesh, 0);
-  const hiddenPids = resolveAllHiddenPartIdsOnMesh(mesh, 1);
+  const hiddenOids = resolveAllHiddenPartIdsOnSource(mesh, 0);
+  const hiddenPids = resolveAllHiddenPartIdsOnSource(mesh, 1);
 
   if (hiddenOids.size === 0 && hiddenPids.size === 0) {
     restoreMeshIndex(mesh);
@@ -346,6 +501,64 @@ export function applyVisibilityToMesh(mesh: Mesh): void {
   setGeometryIndexFromArray(geometry, filteredArray);
 }
 
+function applyVisibilityToSource(source: FeatureSource): void {
+  if (source instanceof InstancedMesh) {
+    applyInstancedMatrixVisibility(source);
+    return;
+  }
+  applyMeshIndexVisibility(source);
+}
+
+function restoreSourceVisibility(source: FeatureSource): void {
+  if (source instanceof InstancedMesh) {
+    restoreInstancedMeshMatrices(source);
+    return;
+  }
+  restoreMeshIndex(source);
+}
+
+function forEachLoadedFeatureSource(
+  tiles: TilesRenderer,
+  fn: (source: FeatureSource) => void,
+): void {
+  const seen = new Set<string>();
+  const visitRoot = (root: Object3D) => {
+    root.traverse((child) => {
+      if (!isTileFeatureSource(child) || seen.has(child.uuid)) return;
+      seen.add(child.uuid);
+      fn(child);
+    });
+  };
+
+  visitRoot(tiles.group);
+  tiles.traverse((tile: unknown) => {
+    const scene = (tile as { engineData?: { scene?: Object3D } }).engineData
+      ?.scene;
+    if (scene) visitRoot(scene);
+    return true;
+  }, null);
+}
+
+/**
+ * 对当前已加载的所有瓦片 feature mesh 应用显隐（按 mesh.uuid 去重）。
+ * 同时遍历 tiles.group 与各 tile.engineData.scene。
+ */
+export function applyVisibilityToAllLoadedMeshes(tiles: TilesRenderer): void {
+  const hasRules = hasMeshPartVisibilityRules();
+  forEachLoadedFeatureSource(tiles, (source) => {
+    if (hasRules) {
+      applyVisibilityToSource(source);
+    } else {
+      restoreSourceVisibility(source);
+    }
+  });
+}
+
+/** 对单个 mesh 应用可见性过滤（通过修改 index 排除隐藏的三角形） */
+export function applyVisibilityToMesh(mesh: Mesh): void {
+  applyMeshIndexVisibility(mesh);
+}
+
 /** 恢复 mesh 的原始 index */
 export function restoreMeshIndex(mesh: Mesh): void {
   const original = mesh.userData?._originalIndex;
@@ -360,20 +573,13 @@ export function restoreMeshIndex(mesh: Mesh): void {
 
 /** 遍历 scene 子树中所有 tile mesh，应用可见性过滤 */
 export function applyVisibilityToScene(scene: Object3D): void {
-  if (!hasMeshPartVisibilityRules()) {
-    scene.traverse((obj) => {
-      const mesh = obj as Mesh;
-      if (mesh.userData?.meshFeatures && !mesh.userData?.isSplit) {
-        restoreMeshIndex(mesh);
-      }
-    });
-    return;
-  }
-
+  const hasRules = hasMeshPartVisibilityRules();
   scene.traverse((obj) => {
-    const mesh = obj as Mesh;
-    if (isTileFeatureSourceMesh(mesh)) {
-      applyVisibilityToMesh(mesh);
+    if (!isTileFeatureSource(obj)) return;
+    if (hasRules) {
+      applyVisibilityToSource(obj);
+    } else {
+      restoreSourceVisibility(obj);
     }
   });
 }
