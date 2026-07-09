@@ -93,10 +93,9 @@ function buildStyledMeshesForSources(
   tileMeshes: Mesh[],
   idSet: Set<number>,
   featureIdAttribute: number,
+  cacheKey?: string,
 ): Mesh[] {
   const channel = featureIdAttributeToChannel(featureIdAttribute);
-  const sortedKey =
-    `f${featureIdAttribute}:` + [...idSet].sort((a, b) => a - b).join(",");
   const result: Mesh[] = [];
 
   for (const tileMesh of tileMeshes) {
@@ -108,6 +107,7 @@ function buildStyledMeshesForSources(
         tileMesh,
         idSet,
         featureIdAttribute,
+        cacheKey,
       );
       if (instanced) result.push(instanced);
       continue;
@@ -115,17 +115,26 @@ function buildStyledMeshesForSources(
 
     if (!isFeatureSourceMesh(tileMesh)) continue;
 
-    const perTile = getTileSplitGeometryCache(tileMesh);
-    let geometry: BufferGeometry | undefined = perTile.get(sortedKey);
-    if (!geometry) {
+    let geometry: BufferGeometry | undefined;
+    if (cacheKey) {
+      const perTile = getTileSplitGeometryCache(tileMesh);
+      geometry = perTile.get(cacheKey);
+      if (!geometry) {
+        const built =
+          channel === "pid"
+            ? buildMergedSplitGeometryForTileMeshByPids(tileMesh, idSet)
+            : buildMergedSplitGeometryForTileMesh(tileMesh, idSet);
+        if (built) {
+          geometry = built;
+          perTile.set(cacheKey, geometry);
+        }
+      }
+    } else {
       const built =
         channel === "pid"
           ? buildMergedSplitGeometryForTileMeshByPids(tileMesh, idSet)
           : buildMergedSplitGeometryForTileMesh(tileMesh, idSet);
-      if (built) {
-        geometry = built;
-        perTile.set(sortedKey, geometry);
-      }
+      geometry = built ?? undefined;
     }
 
     if (!geometry) continue;
@@ -168,12 +177,41 @@ export interface MeshCollectorQuery {
    * 区分样式 / 高亮等（参与 `meshCollectorQueryCacheKey` 等语义），与几何缓存无关。
    */
   meshCacheNamespace?: string;
+  /** 样式/高亮代际 uid（每次 setStyle / reapplyHighlight 递增） */
+  generationUid?: number;
+  /** 同一代际内 collector 序号（对应该次样式/高亮中的 condition 分组） */
+  conditionIndex?: number;
 }
 
 export interface ResolvedMeshCollectorQuery {
   featureIds: number[];
   featureIdAttribute: number;
   condition?: string;
+  /** 瓦片级 split / instance subset 缓存键（由 generationUid + conditionIndex 生成） */
+  tileSubsetCacheKey?: string;
+}
+
+let styleGenerationUid = 0;
+let highlightGenerationUid = 0;
+
+/** setStyle 时调用，返回新的样式代际 uid */
+export function bumpStyleGenerationUid(): number {
+  return ++styleGenerationUid;
+}
+
+/** reapplyHighlight 时调用，返回新的高亮代际 uid */
+export function bumpHighlightGenerationUid(): number {
+  return ++highlightGenerationUid;
+}
+
+/** 瓦片级 subset/split 缓存键：feature 通道 + 命名空间 + 代际 uid + condition 序号 */
+export function buildTileSubsetCacheKey(
+  featureIdAttribute: number,
+  namespace: string,
+  generationUid: number,
+  conditionIndex: number,
+): string {
+  return `f${featureIdAttribute}:${namespace}:${generationUid}:c${conditionIndex}`;
 }
 
 /** 去重并排序 feature id */
@@ -247,10 +285,22 @@ export function resolveMeshCollectorQuery(
     featureIdAttribute = conditionAttr;
   }
 
+  let tileSubsetCacheKey: string | undefined;
+  if (query.generationUid != null && query.conditionIndex != null) {
+    const ns = query.meshCacheNamespace?.trim() || "default";
+    tileSubsetCacheKey = buildTileSubsetCacheKey(
+      featureIdAttribute,
+      ns,
+      query.generationUid,
+      query.conditionIndex,
+    );
+  }
+
   return {
     featureIds,
     featureIdAttribute,
     condition: conditionFromQuery,
+    tileSubsetCacheKey,
   };
 }
 
@@ -332,6 +382,7 @@ export class MeshSplitResolver {
     return this.getMergedSplitMeshesForIdSet(
       new Set(targetIds),
       params.featureIdAttribute,
+      params.tileSubsetCacheKey,
     );
   }
 
@@ -342,6 +393,7 @@ export class MeshSplitResolver {
     idSet: Set<number>,
     featureIdAttribute: number,
     scene: Object3D,
+    cacheKey?: string,
   ): Mesh[] {
     if (idSet.size === 0) return [];
 
@@ -356,7 +408,12 @@ export class MeshSplitResolver {
         ? selectDominantTileMeshesForPidSet(candidateTiles, idSet)
         : selectDominantTileMeshesForOidSet(candidateTiles, idSet);
 
-    return buildStyledMeshesForSources(tileMeshes, idSet, featureIdAttribute);
+    return buildStyledMeshesForSources(
+      tileMeshes,
+      idSet,
+      featureIdAttribute,
+      cacheKey,
+    );
   }
 
   private resolveTargetIdsForCollectorQuery(
@@ -400,6 +457,7 @@ export class MeshSplitResolver {
   private getMergedSplitMeshesForIdSet(
     idSet: Set<number>,
     featureIdAttribute: number,
+    cacheKey?: string,
   ): Mesh[] {
     const tiles = this.getTiles();
     if (!tiles || idSet.size === 0) return [];
@@ -422,7 +480,12 @@ export class MeshSplitResolver {
         ? selectDominantTileMeshesForPidSet(candidateTiles, idSet)
         : selectDominantTileMeshesForOidSet(candidateTiles, idSet);
 
-    return buildStyledMeshesForSources(tileMeshes, idSet, featureIdAttribute);
+    return buildStyledMeshesForSources(
+      tileMeshes,
+      idSet,
+      featureIdAttribute,
+      cacheKey,
+    );
   }
 
   /**
@@ -562,6 +625,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
       idSet,
       this.resolvedQuery.featureIdAttribute,
       scene,
+      this.resolvedQuery.tileSubsetCacheKey,
     );
     if (newMeshes.length === 0) return [];
 

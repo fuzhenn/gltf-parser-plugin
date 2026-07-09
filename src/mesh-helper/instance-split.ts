@@ -189,17 +189,22 @@ export function buildSubsetInstancedMeshForTileMesh(
   source: InstancedMesh,
   idSet: ReadonlySet<number>,
   featureIdAttribute: number,
+  cacheKey?: string,
 ): InstancedMesh | null {
   if (idSet.size === 0) return null;
 
-  const sortedKey =
-    `f${featureIdAttribute}:` + [...idSet].sort((a, b) => a - b).join(",");
-  const cache = getTileInstanceSubsetCache(source);
-  let indices = cache.get(sortedKey);
-  if (!indices) {
+  let indices: number[] | undefined;
+  if (cacheKey) {
+    const cache = getTileInstanceSubsetCache(source);
+    indices = cache.get(cacheKey);
+    if (!indices) {
+      indices = getMatchingInstanceIndices(source, idSet, featureIdAttribute);
+      if (indices.length === 0) return null;
+      cache.set(cacheKey, indices);
+    }
+  } else {
     indices = getMatchingInstanceIndices(source, idSet, featureIdAttribute);
     if (indices.length === 0) return null;
-    cache.set(sortedKey, indices);
   }
 
   return createSubsetInstancedMesh(source, indices, idSet, featureIdAttribute);

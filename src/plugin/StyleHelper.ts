@@ -1,5 +1,6 @@
 import {
   MESH_CACHE_NAMESPACE_STYLE,
+  bumpStyleGenerationUid,
   normalizeMeshCollectorFeatureIds,
   type MeshCollector,
   type MeshCollectorQuery,
@@ -241,6 +242,9 @@ export class StyleHelper {
       originalTransformByMesh: this.originalTransformByMesh,
     };
 
+    const generationUid = bumpStyleGenerationUid();
+    let conditionIndex = 0;
+
     for (const { featureIdAttribute, groups } of resolved.channelGroups) {
       for (const { appearance, featureIds } of groups.values()) {
         const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
@@ -248,6 +252,8 @@ export class StyleHelper {
           featureIds: sortedIds,
           featureIdAttribute,
           meshCacheNamespace: MESH_CACHE_NAMESPACE_STYLE,
+          generationUid,
+          conditionIndex: conditionIndex++,
         });
         this.styleCollectors.push(collector);
 

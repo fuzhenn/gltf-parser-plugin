@@ -1,5 +1,6 @@
 import {
   MESH_CACHE_NAMESPACE_HIGHLIGHT,
+  bumpHighlightGenerationUid,
   normalizeMeshCollectorFeatureIds,
   type MeshCollector,
 } from "../MeshCollector";
@@ -487,6 +488,8 @@ export class PartHighlightHelper {
     if (!tiles || !scene) return;
 
     const maps = this.getMaps();
+    const generationUid = bumpHighlightGenerationUid();
+    let conditionIndex = 0;
 
     for (const featureIdAttribute of attributes) {
       const propertyMap = getPropertyDataMapFromTilesByFeatureAttribute(
@@ -505,6 +508,8 @@ export class PartHighlightHelper {
           featureIds: sortedIds,
           featureIdAttribute,
           meshCacheNamespace: MESH_CACHE_NAMESPACE_HIGHLIGHT,
+          generationUid,
+          conditionIndex: conditionIndex++,
         });
         this.highlightCollectors.push(collector);
 
