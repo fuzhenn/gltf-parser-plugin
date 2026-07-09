@@ -9,7 +9,7 @@ import {
 import {
   FeatureInfo,
   buildOidToFeatureIdMap,
-  disposeMergedSplitMeshResources,
+  disposeStyledMeshResources,
   getAllOidsFromTiles,
   getPropertyDataByOid,
   queryFeatureFromIntersection,
@@ -738,7 +738,7 @@ export class GLTFParserPlugin {
       meshBox.expandByObject(mesh);
     }
     for (const mesh of meshes) {
-      disposeMergedSplitMeshResources(mesh);
+      disposeStyledMeshResources(mesh);
     }
     if (meshBox.isEmpty()) return null;
     return meshBox.getCenter(new Vector3());

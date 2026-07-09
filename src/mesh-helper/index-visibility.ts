@@ -22,8 +22,10 @@ import {
 } from "../appearance";
 import {
   buildVisibleIndexExcludingHiddenFids,
+  forEachLoadedFeatureSource,
   getPartIdMapForFeatureAttribute,
-  getPropertyDataFromMeshUserData,
+  getPropertyDataFromUserData,
+  isTileFeatureSource,
   resolveFeatureChannelOnMesh,
   type InternalData,
   type PartIdChannel,
@@ -36,64 +38,6 @@ export interface MeshPartVisibilityConfig {
 }
 
 type FeatureSource = Mesh | InstancedMesh;
-
-/**
- * 根据 userData、feature 通道与 show/conditions，解析应隐藏的 partId。
- *
- * @param userData 瓦片 feature 对象的 userData（meshFeatures 或 instanceFeatures + structuralMetadata）
- * @param featureIdAttribute 0 → OID（`_FEATURE_ID_0`），1 → PID（`_FEATURE_ID_1`）
- * @returns 本对象上应隐藏的 OID 或 PID 集合
- */
-function getPropertyDataFromUserData(
-  userData: Record<string, unknown>,
-  partId: number,
-  featureIdAttribute: number,
-  internalData?: InternalData,
-): Record<string, unknown> | null {
-  const instanceFeatures = userData.instanceFeatures as
-    | InstanceFeatures
-    | undefined;
-  if (instanceFeatures) {
-    const structuralMetadata = userData.structuralMetadata as
-      | {
-          getPropertyTableData(
-            tableIndex: number,
-            id: number,
-          ): Record<string, unknown>;
-        }
-      | undefined;
-    const idMap = getPartIdMapForFeatureAttribute(userData, featureIdAttribute);
-    if (!structuralMetadata || !idMap) return null;
-
-    const fid = idMap[partId];
-    if (fid === undefined) return null;
-
-    const propertyTableIndex =
-      instanceFeatures.featureIds[featureIdAttribute]?.propertyTable;
-    if (propertyTableIndex === undefined) {
-      return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
-    }
-
-    try {
-      const data = structuralMetadata.getPropertyTableData(
-        propertyTableIndex,
-        fid,
-      );
-      return featureIdAttribute === 0 && internalData
-        ? internalData(partId, data)
-        : data;
-    } catch {
-      return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
-    }
-  }
-
-  return getPropertyDataFromMeshUserData(
-    userData,
-    partId,
-    featureIdAttribute,
-    internalData,
-  );
-}
 
 function resolveHiddenPartIdsOnUserData(
   userData: Record<string, unknown>,
@@ -275,19 +219,6 @@ function getHiddenFeatureIdsForChannel(
     if (fid !== undefined) hidden.add(fid);
   }
   return hidden;
-}
-
-function isTileFeatureSource(obj: Object3D): obj is FeatureSource {
-  if (!(obj instanceof Mesh)) return false;
-
-  const userData = obj.userData;
-  if (obj instanceof InstancedMesh) {
-    return Boolean(userData?.instanceFeatures && userData?.structuralMetadata);
-  }
-
-  return Boolean(
-    userData?.meshFeatures && userData?.structuralMetadata && !userData?.isSplit,
-  );
 }
 
 const HIDDEN_INSTANCE_MATRIX = new Matrix4().makeScale(0, 0, 0);
@@ -515,28 +446,6 @@ function restoreSourceVisibility(source: FeatureSource): void {
     return;
   }
   restoreMeshIndex(source);
-}
-
-function forEachLoadedFeatureSource(
-  tiles: TilesRenderer,
-  fn: (source: FeatureSource) => void,
-): void {
-  const seen = new Set<string>();
-  const visitRoot = (root: Object3D) => {
-    root.traverse((child) => {
-      if (!isTileFeatureSource(child) || seen.has(child.uuid)) return;
-      seen.add(child.uuid);
-      fn(child);
-    });
-  };
-
-  visitRoot(tiles.group);
-  tiles.traverse((tile: unknown) => {
-    const scene = (tile as { engineData?: { scene?: Object3D } }).engineData
-      ?.scene;
-    if (scene) visitRoot(scene);
-    return true;
-  }, null);
 }
 
 /**

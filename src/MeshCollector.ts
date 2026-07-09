@@ -1,4 +1,4 @@
-import { BufferGeometry, EventDispatcher, Mesh, Object3D } from "three";
+import { BufferGeometry, EventDispatcher, InstancedMesh, Mesh, Object3D } from "three";
 import { TilesRenderer } from "3d-tiles-renderer";
 import {
   buildMergedSplitGeometryForTileMesh,
@@ -6,17 +6,23 @@ import {
   createMergedSplitMeshFromGeometry,
   createMergedSplitMeshFromGeometryByPids,
   disposeMergedSplitGeometryCacheEntry,
-  disposeMergedSplitMeshResources,
+  disposeStyledMeshResources,
   featureIdAttributeToChannel,
   getAllFeatureIdsFromTiles,
   getPropertyDataByFeatureAttribute,
   getTileMeshesByFeatureAttribute,
+  isFeatureSourceInstancedMesh,
   isFeatureSourceMesh,
+  isTileFeatureSource,
   selectDominantTileMeshesForOidSet,
   selectDominantTileMeshesForPidSet,
   type InternalData,
   type PartIdChannel,
 } from "./mesh-helper";
+import {
+  buildSubsetInstancedMeshForTileMesh,
+  disposeTileMeshInstanceSubsetCache,
+} from "./mesh-helper/instance-split";
 import type { StyleConditionDescriptor } from "./plugin/style-appearance-types";
 import {
   buildStyleConditionEvaluatorMap,
@@ -43,22 +49,26 @@ function getTileSplitGeometryCache(
   return map;
 }
 
-/** 释放该瓦片 mesh 上缓存的 split 几何；瓦片卸载 / dispose 前应调用（或由 {@link MeshSplitResolver.disposeSplitMeshesByTile}） */
+/** 释放该瓦片 feature 源上缓存的 split 几何 / instance 下标；瓦片卸载前应调用 */
 export function disposeTileMeshSplitGeometryCache(tileMesh: Mesh): void {
   const map = tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY] as
     | Map<string, BufferGeometry>
     | undefined;
-  if (!map) return;
-  for (const geom of map.values()) {
-    disposeMergedSplitGeometryCacheEntry(geom, tileMesh);
+  if (map) {
+    for (const geom of map.values()) {
+      disposeMergedSplitGeometryCacheEntry(geom, tileMesh);
+    }
+    map.clear();
+    delete tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY];
   }
-  map.clear();
-  delete tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY];
+  if (tileMesh instanceof InstancedMesh) {
+    disposeTileMeshInstanceSubsetCache(tileMesh);
+  }
 }
 
 /** 收集器查询：feature id 范围 + 可选属性条件（语义同 setStyle 的 show / conditions） */
-/** 在单个瓦片 scene 内查找包含给定 part id 的 feature source mesh */
-function collectCandidateTileMeshesInScene(
+/** 在单个瓦片 scene 内查找包含给定 part id 的 feature 源 */
+function collectCandidateFeatureSourcesInScene(
   scene: Object3D,
   idSet: Set<number>,
   channel: PartIdChannel,
@@ -66,13 +76,12 @@ function collectCandidateTileMeshesInScene(
   const mapKey = channel === "pid" ? "_tile_pidMap" : "_tile_oidMap";
   const candidateTiles = new Set<Mesh>();
   scene.traverse((child) => {
-    const mesh = child as Mesh;
-    if (!isFeatureSourceMesh(mesh)) return;
-    const idMap = mesh.userData?.[mapKey] as Record<number, number> | undefined;
+    if (!isTileFeatureSource(child)) return;
+    const idMap = child.userData?.[mapKey] as Record<number, number> | undefined;
     if (!idMap) return;
     for (const partId of idSet) {
       if (idMap[partId] !== undefined) {
-        candidateTiles.add(mesh);
+        candidateTiles.add(child);
         break;
       }
     }
@@ -80,7 +89,7 @@ function collectCandidateTileMeshesInScene(
   return candidateTiles;
 }
 
-function buildSplitMeshesForTileMeshes(
+function buildStyledMeshesForSources(
   tileMeshes: Mesh[],
   idSet: Set<number>,
   featureIdAttribute: number,
@@ -91,6 +100,21 @@ function buildSplitMeshesForTileMeshes(
   const result: Mesh[] = [];
 
   for (const tileMesh of tileMeshes) {
+    if (
+      tileMesh instanceof InstancedMesh &&
+      isFeatureSourceInstancedMesh(tileMesh)
+    ) {
+      const instanced = buildSubsetInstancedMeshForTileMesh(
+        tileMesh,
+        idSet,
+        featureIdAttribute,
+      );
+      if (instanced) result.push(instanced);
+      continue;
+    }
+
+    if (!isFeatureSourceMesh(tileMesh)) continue;
+
     const perTile = getTileSplitGeometryCache(tileMesh);
     let geometry: BufferGeometry | undefined = perTile.get(sortedKey);
     if (!geometry) {
@@ -322,7 +346,7 @@ export class MeshSplitResolver {
     if (idSet.size === 0) return [];
 
     const channel = featureIdAttributeToChannel(featureIdAttribute);
-    const candidateTiles = collectCandidateTileMeshesInScene(
+    const candidateTiles = collectCandidateFeatureSourcesInScene(
       scene,
       idSet,
       channel,
@@ -332,7 +356,7 @@ export class MeshSplitResolver {
         ? selectDominantTileMeshesForPidSet(candidateTiles, idSet)
         : selectDominantTileMeshesForOidSet(candidateTiles, idSet);
 
-    return buildSplitMeshesForTileMeshes(tileMeshes, idSet, featureIdAttribute);
+    return buildStyledMeshesForSources(tileMeshes, idSet, featureIdAttribute);
   }
 
   private resolveTargetIdsForCollectorQuery(
@@ -398,7 +422,7 @@ export class MeshSplitResolver {
         ? selectDominantTileMeshesForPidSet(candidateTiles, idSet)
         : selectDominantTileMeshesForOidSet(candidateTiles, idSet);
 
-    return buildSplitMeshesForTileMeshes(tileMeshes, idSet, featureIdAttribute);
+    return buildStyledMeshesForSources(tileMeshes, idSet, featureIdAttribute);
   }
 
   /**
@@ -517,7 +541,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
 
     for (const mesh of this._meshes) {
       detachStyledMeshFromScene(mesh);
-      disposeMergedSplitMeshResources(mesh);
+      disposeStyledMeshResources(mesh);
     }
     this._meshes = newMeshes;
 
@@ -576,7 +600,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
       const orig = sm.userData?.originalMesh as Mesh | undefined;
       if (orig && sourceMeshes.has(orig)) {
         detachStyledMeshFromScene(sm);
-        disposeMergedSplitMeshResources(sm);
+        disposeStyledMeshResources(sm);
       } else {
         kept.push(sm);
       }
@@ -595,7 +619,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     if (this._meshes.length > 0) {
       for (const mesh of this._meshes) {
         detachStyledMeshFromScene(mesh);
-        disposeMergedSplitMeshResources(mesh);
+        disposeStyledMeshResources(mesh);
       }
     }
 
