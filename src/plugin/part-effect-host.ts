@@ -36,6 +36,7 @@ export interface PartEffectHost {
   showPartsByPids(pids: number[]): void;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   releaseMeshCollector(collector: MeshCollector): void;
+  clearTileSubsetCache(): void;
   getRootGroup(): Object3D | null;
   getInternalData?(): InternalData | undefined;
 }

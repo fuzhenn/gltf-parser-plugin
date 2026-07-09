@@ -164,6 +164,7 @@ export class GLTFParserPlugin {
         this.partVisibility.removePartVisibilityConfigLayer(layerId, attr),
       getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
       releaseMeshCollector: partFx.releaseMeshCollector,
+      clearTileSubsetCache: () => this.meshSplit.clearCache(),
       getRootGroup: partFx.getRootGroup,
       getInternalData: () => this._internalData,
     });
@@ -224,6 +225,7 @@ export class GLTFParserPlugin {
         this.partVisibility.showPartsByFeatureAttribute(pids, 1),
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       releaseMeshCollector: (c) => this.releaseMeshCollector(c),
+      clearTileSubsetCache: () => this.meshSplit.clearCache(),
       getRootGroup: () => this.tiles?.group ?? null,
       getInternalData: () => this._internalData,
     };

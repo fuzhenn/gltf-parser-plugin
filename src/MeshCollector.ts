@@ -8,6 +8,7 @@ import {
   disposeMergedSplitGeometryCacheEntry,
   disposeStyledMeshResources,
   featureIdAttributeToChannel,
+  forEachLoadedFeatureSource,
   getAllFeatureIdsFromTiles,
   getPropertyDataByFeatureAttribute,
   getTileMeshesByFeatureAttribute,
@@ -191,19 +192,6 @@ export interface ResolvedMeshCollectorQuery {
   tileSubsetCacheKey?: string;
 }
 
-let styleGenerationUid = 0;
-let highlightGenerationUid = 0;
-
-/** setStyle 时调用，返回新的样式代际 uid */
-export function bumpStyleGenerationUid(): number {
-  return ++styleGenerationUid;
-}
-
-/** reapplyHighlight 时调用，返回新的高亮代际 uid */
-export function bumpHighlightGenerationUid(): number {
-  return ++highlightGenerationUid;
-}
-
 /** 瓦片级 subset/split 缓存键：feature 通道 + 命名空间 + 代际 uid + condition 序号 */
 export function buildTileSubsetCacheKey(
   featureIdAttribute: number,
@@ -347,10 +335,8 @@ export class MeshSplitResolver {
   clearCache(): void {
     const tiles = this.getTiles();
     if (!tiles) return;
-    tiles.group.traverse((obj) => {
-      if (obj instanceof Mesh) {
-        disposeTileMeshSplitGeometryCache(obj);
-      }
+    forEachLoadedFeatureSource(tiles, (source) => {
+      disposeTileMeshSplitGeometryCache(source);
     });
   }
 

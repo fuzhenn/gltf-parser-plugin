@@ -1,6 +1,5 @@
 import {
   MESH_CACHE_NAMESPACE_HIGHLIGHT,
-  bumpHighlightGenerationUid,
   normalizeMeshCollectorFeatureIds,
   type MeshCollector,
 } from "../MeshCollector";
@@ -285,6 +284,8 @@ export class PartHighlightHelper {
   private meshChangeHandlers = new Map<string, () => void>();
   private collectorAppearanceByKey = new Map<string, StyleAppearance>();
   private highlightCollectors: MeshCollector[] = [];
+  /** 高亮代际 uid，每次 reapplyAll 重建收集器时递增 */
+  private _generationUid = 0;
 
   constructor(private context: PartEffectHost) {}
 
@@ -426,6 +427,7 @@ export class PartHighlightHelper {
   }
 
   private clearCollectorsAndRestoreMeshes(): void {
+    this.context.clearTileSubsetCache();
     const maps = this.getMaps();
     for (const collector of this.highlightCollectors) {
       collector.meshes.forEach((mesh) => {
@@ -488,7 +490,7 @@ export class PartHighlightHelper {
     if (!tiles || !scene) return;
 
     const maps = this.getMaps();
-    const generationUid = bumpHighlightGenerationUid();
+    const generationUid = ++this._generationUid;
     let conditionIndex = 0;
 
     for (const featureIdAttribute of attributes) {
