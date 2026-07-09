@@ -51,6 +51,7 @@ interface StyleHelperContext {
   ): void;
   getMeshCollectorByCondition(query: MeshCollectorQuery): MeshCollector;
   releaseMeshCollector(collector: MeshCollector): void;
+  clearTileSubsetCache(): void;
   getRootGroup(): Object3D | null;
   getInternalData?(): import("../mesh-helper/mesh").InternalData | undefined;
 }
@@ -70,6 +71,8 @@ export class StyleHelper {
   private collectorAppearanceByKey = new Map<string, StyleAppearance>();
   /** 当前样式占用的收集器（用于 clearStyle / 下次 applyStyle 前卸载监听） */
   private styleCollectors: MeshCollector[] = [];
+  /** 样式代际 uid，每次 applyStyle 递增，用于瓦片级 subset/split 缓存键 */
+  private _generationUid = 0;
 
   constructor(private context: StyleHelperContext) {}
 
@@ -95,6 +98,7 @@ export class StyleHelper {
    * 清除样式，恢复默认显示
    */
   clearStyle(): void {
+    this.context.clearTileSubsetCache();
     this.context.removePartVisibilityConfigLayer(STYLE_VISIBILITY_LAYER);
 
     const maps: MeshAppearanceMaps = {
@@ -241,6 +245,9 @@ export class StyleHelper {
       originalTransformByMesh: this.originalTransformByMesh,
     };
 
+    const generationUid = ++this._generationUid;
+    let conditionIndex = 0;
+
     for (const { featureIdAttribute, groups } of resolved.channelGroups) {
       for (const { appearance, featureIds } of groups.values()) {
         const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
@@ -248,6 +255,8 @@ export class StyleHelper {
           featureIds: sortedIds,
           featureIdAttribute,
           meshCacheNamespace: MESH_CACHE_NAMESPACE_STYLE,
+          generationUid,
+          conditionIndex: conditionIndex++,
         });
         this.styleCollectors.push(collector);
 

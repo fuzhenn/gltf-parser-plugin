@@ -2,6 +2,7 @@ import {
   Box3,
   BufferAttribute,
   BufferGeometry,
+  InstancedMesh,
   Material,
   Mesh,
   Object3D,
@@ -9,6 +10,10 @@ import {
 } from "three";
 
 import { TilesRenderer } from "3d-tiles-renderer";
+
+import type { InstanceFeatures } from "../mesh/types";
+import { measureInstanceSubsetForTile } from "./instance-split";
+import { disposeSubsetInstancedMeshResources } from "./instance-split";
 
 import {
   buildFeatureIdIndexMap,
@@ -401,12 +406,41 @@ function selectDominantTileMeshesForIdSet(
     }
     if (idsOnMesh.size === 0) continue;
 
-    const measured = measureSplitGeometryForTile(tileMesh, idSet, channel);
+    let measured: { size: number; bbox: Box3 } | null = null;
+    if (
+      tileMesh instanceof InstancedMesh &&
+      isFeatureSourceInstancedMesh(tileMesh)
+    ) {
+      const featureIdAttribute = channel === "pid" ? 1 : 0;
+      const instanced = measureInstanceSubsetForTile(
+        tileMesh,
+        idSet,
+        featureIdAttribute,
+      );
+      if (instanced) {
+        measured = {
+          size: instanced.instanceCount,
+          bbox: instanced.bbox,
+        };
+      }
+    } else {
+      const splitMeasured = measureSplitGeometryForTile(
+        tileMesh,
+        idSet,
+        channel,
+      );
+      if (splitMeasured) {
+        measured = {
+          size: splitMeasured.triCount,
+          bbox: splitMeasured.bbox,
+        };
+      }
+    }
     if (!measured) continue;
 
     entries.push({
       mesh: tileMesh,
-      triCount: measured.triCount,
+      triCount: measured.size,
       ids: idsOnMesh,
       bbox: measured.bbox,
     });
@@ -774,10 +808,123 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
   disposeSplitGeometryAttributesNotSharedWithSources(geom, sources);
 }
 
+/** 释放样式/高亮产生的 split mesh 或 subset InstancedMesh */
+export function disposeStyledMeshResources(mesh: Mesh): void {
+  if (mesh.userData?.isInstancedSplit) {
+    disposeSubsetInstancedMeshResources(mesh);
+    return;
+  }
+  disposeMergedSplitMeshResources(mesh);
+}
+
 /** 瓦片内原始 feature mesh（非 split 子网格） */
 export function isFeatureSourceMesh(mesh: Mesh): boolean {
   const u = mesh.userData;
   return Boolean(u?.meshFeatures && u?.structuralMetadata && !u?.isSplit);
+}
+
+export function isFeatureSourceInstancedMesh(
+  obj: Object3D,
+): obj is InstancedMesh {
+  const userData = obj.userData;
+  return (
+    obj instanceof InstancedMesh &&
+    Boolean(userData?.instanceFeatures && userData?.structuralMetadata) &&
+    !userData?.isSplit
+  );
+}
+
+export function isTileFeatureSource(obj: Object3D): obj is Mesh | InstancedMesh {
+  if (!(obj instanceof Mesh)) return false;
+  if (obj instanceof InstancedMesh) return isFeatureSourceInstancedMesh(obj);
+  return isFeatureSourceMesh(obj);
+}
+
+/**
+ * 遍历当前已加载的瓦片 feature 源（普通 mesh + InstancedMesh，按 uuid 去重）。
+ */
+export function forEachLoadedFeatureSource(
+  tiles: TilesRenderer,
+  fn: (source: Mesh | InstancedMesh) => void,
+): void {
+  const seen = new Set<string>();
+  const visitRoot = (root: Object3D) => {
+    root.traverse((child) => {
+      if (!isTileFeatureSource(child) || seen.has(child.uuid)) return;
+      seen.add(child.uuid);
+      fn(child);
+    });
+  };
+  visitRoot(tiles.group);
+  tiles.traverse((tile: unknown) => {
+    const scene = (tile as { engineData?: { scene?: Object3D } }).engineData
+      ?.scene;
+    if (scene) visitRoot(scene);
+    return true;
+  }, null);
+}
+
+/**
+ * 从 userData 读取零件属性（自动区分 meshFeatures / instanceFeatures）。
+ */
+export function getPropertyDataFromUserData(
+  userData: Record<string, unknown>,
+  partId: number,
+  featureIdAttribute: number,
+  internalData?: InternalData,
+): Record<string, unknown> | null {
+  const instanceFeatures = userData.instanceFeatures as
+    | InstanceFeatures
+    | undefined;
+  if (instanceFeatures) {
+    const structuralMetadata = userData.structuralMetadata as
+      | {
+          getPropertyTableData(
+            tableIndex: number,
+            id: number,
+          ): Record<string, unknown>;
+        }
+      | undefined;
+    const idMap = getPartIdMapForFeatureAttribute(userData, featureIdAttribute);
+    if (!structuralMetadata || !idMap) return null;
+
+    const fid = idMap[partId];
+    if (fid === undefined) return null;
+
+    const propertyTableIndex =
+      instanceFeatures.featureIds[featureIdAttribute]?.propertyTable;
+    if (propertyTableIndex === undefined) {
+      return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
+    }
+
+    try {
+      const data = structuralMetadata.getPropertyTableData(
+        propertyTableIndex,
+        fid,
+      );
+      return featureIdAttribute === 0 && internalData
+        ? internalData(partId, data)
+        : data;
+    } catch {
+      return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
+    }
+  }
+
+  return getPropertyDataFromMeshUserData(
+    userData,
+    partId,
+    featureIdAttribute,
+    internalData,
+  );
+}
+
+function collectPartIdsFromSourceUserData(
+  userData: Record<string, unknown>,
+  featureIdAttribute: number,
+): number[] {
+  const idMap = getPartIdMapForFeatureAttribute(userData, featureIdAttribute);
+  if (!idMap) return [];
+  return Object.keys(idMap).map(Number);
 }
 
 /**
@@ -788,23 +935,9 @@ export function forEachLoadedFeatureMesh(
   tiles: TilesRenderer,
   fn: (mesh: Mesh) => void,
 ): void {
-  const seen = new Set<string>();
-  const visitRoot = (root: Object3D) => {
-    root.traverse((child) => {
-      const mesh = child as Mesh;
-      if (!isFeatureSourceMesh(mesh)) return;
-      if (seen.has(mesh.uuid)) return;
-      seen.add(mesh.uuid);
-      fn(mesh);
-    });
-  };
-  visitRoot(tiles.group);
-  tiles.traverse((tile: unknown) => {
-    const scene = (tile as { engineData?: { scene?: Object3D } }).engineData
-      ?.scene;
-    if (scene) visitRoot(scene);
-    return true;
-  }, null);
+  forEachLoadedFeatureSource(tiles, (source) => {
+    if (isFeatureSourceMesh(source)) fn(source);
+  });
 }
 
 /**
@@ -822,10 +955,8 @@ export type InternalData = (
 export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
   const oidSet = new Set<number>();
 
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
-    const idMap = mesh.userData._tile_oidMap as Record<number, number> | undefined;
-    if (!idMap) return;
-    for (const oid of Object.keys(idMap).map(Number)) {
+  forEachLoadedFeatureSource(tiles, (source) => {
+    for (const oid of collectPartIdsFromSourceUserData(source.userData, 0)) {
       oidSet.add(oid);
     }
   });
@@ -839,10 +970,8 @@ export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
 export function getAllPidsFromTiles(tiles: TilesRenderer): number[] {
   const pidSet = new Set<number>();
 
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
-    const pidMap = getPartIdMap(mesh, "pid");
-    if (!pidMap) return;
-    for (const pid of Object.keys(pidMap).map(Number)) {
+  forEachLoadedFeatureSource(tiles, (source) => {
+    for (const pid of collectPartIdsFromSourceUserData(source.userData, 1)) {
       pidSet.add(pid);
     }
   });
@@ -860,25 +989,14 @@ export function getPropertyDataByOid(
 ): Record<string, unknown> | null {
   let result: Record<string, unknown> | null = null;
 
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
+  forEachLoadedFeatureSource(tiles, (source) => {
     if (result) return;
-
-    const idMap = mesh.userData._tile_oidMap as Record<number, number> | undefined;
-    if (!idMap || idMap[oid] === undefined) return;
-
-    const { meshFeatures, structuralMetadata } = mesh.userData;
-    const featureId = meshFeatures.featureIds[0];
-    const fid = idMap[oid];
-
-    try {
-      const data = structuralMetadata.getPropertyTableData(
-        featureId.propertyTable,
-        fid,
-      ) as Record<string, unknown>;
-      result = internalData ? internalData(oid, data) : data;
-    } catch {
-      // ignore
-    }
+    result = getPropertyDataFromUserData(
+      source.userData,
+      oid,
+      0,
+      internalData,
+    );
   });
 
   return result;
@@ -894,31 +1012,19 @@ export function getPropertyDataMapFromTiles(
 ): Map<number, Record<string, unknown> | null> {
   const map = new Map<number, Record<string, unknown> | null>();
 
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
-    const idMap = mesh.userData._tile_oidMap as Record<number, number> | undefined;
-    if (!idMap) return;
-
-    const { meshFeatures, structuralMetadata } = mesh.userData;
-    const featureId = meshFeatures.featureIds[0];
-    const propertyTable = featureId.propertyTable;
-
-    for (const oid of Object.keys(idMap).map(Number)) {
-      const fid = idMap[oid];
-      if (fid === undefined) continue;
-
-      const existing = map.get(oid);
-      if (existing != null) continue;
-
-      try {
-        const data = structuralMetadata.getPropertyTableData(
-          propertyTable,
-          fid,
-        ) as Record<string, unknown>;
-        map.set(oid, internalData ? internalData(oid, data) : data);
-      } catch {
-        if (!map.has(oid)) {
-          map.set(oid, null);
-        }
+  forEachLoadedFeatureSource(tiles, (source) => {
+    for (const oid of collectPartIdsFromSourceUserData(source.userData, 0)) {
+      if (map.has(oid) && map.get(oid) != null) continue;
+      const data = getPropertyDataFromUserData(
+        source.userData,
+        oid,
+        0,
+        internalData,
+      );
+      if (data != null) {
+        map.set(oid, data);
+      } else if (!map.has(oid)) {
+        map.set(oid, null);
       }
     }
   });
@@ -932,9 +1038,9 @@ export function getPropertyDataMapFromTiles(
 export function getTileMeshesByOid(tiles: TilesRenderer, oid: number): Mesh[] {
   const tileMeshes: Mesh[] = [];
 
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
-    if (checkMeshContainsOid(mesh, oid)) {
-      tileMeshes.push(mesh);
+  forEachLoadedFeatureSource(tiles, (source) => {
+    if (checkMeshContainsOid(source, oid)) {
+      tileMeshes.push(source);
     }
   });
 
@@ -947,9 +1053,9 @@ export function getTileMeshesByOid(tiles: TilesRenderer, oid: number): Mesh[] {
 export function getTileMeshesByPid(tiles: TilesRenderer, pid: number): Mesh[] {
   const tileMeshes: Mesh[] = [];
 
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
-    if (checkMeshContainsPid(mesh, pid)) {
-      tileMeshes.push(mesh);
+  forEachLoadedFeatureSource(tiles, (source) => {
+    if (checkMeshContainsPid(source, pid)) {
+      tileMeshes.push(source);
     }
   });
 
@@ -965,26 +1071,9 @@ export function getPropertyDataByPid(
 ): Record<string, unknown> | null {
   let result: Record<string, unknown> | null = null;
 
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
+  forEachLoadedFeatureSource(tiles, (source) => {
     if (result) return;
-
-    const pidMap = getPartIdMap(mesh, "pid");
-    if (!pidMap || pidMap[pid] === undefined) return;
-
-    const { meshFeatures, structuralMetadata } = mesh.userData;
-    const featureId = meshFeatures.featureIds[1];
-    if (!featureId || featureId.propertyTable === undefined) return;
-
-    const fid = pidMap[pid];
-
-    try {
-      result = structuralMetadata.getPropertyTableData(
-        featureId.propertyTable,
-        fid,
-      ) as Record<string, unknown>;
-    } catch {
-      // ignore
-    }
+    result = getPropertyDataFromUserData(source.userData, pid, 1);
   });
 
   return result;
@@ -998,36 +1087,14 @@ export function getPropertyDataMapFromTilesByPid(
 ): Map<number, Record<string, unknown> | null> {
   const map = new Map<number, Record<string, unknown> | null>();
 
-  forEachLoadedFeatureMesh(tiles, (mesh) => {
-    const pidMap = getPartIdMap(mesh, "pid");
-    if (!pidMap) return;
-
-    const { meshFeatures, structuralMetadata } = mesh.userData;
-    const featureId = meshFeatures.featureIds[1];
-    const propertyTable = featureId?.propertyTable;
-
-    for (const pid of Object.keys(pidMap).map(Number)) {
-      const fid = pidMap[pid];
-      if (fid === undefined) continue;
-
-      const existing = map.get(pid);
-      if (existing != null) continue;
-
-      if (propertyTable === undefined) {
-        map.set(pid, { _pid: pid, pid });
-        continue;
-      }
-
-      try {
-        const data = structuralMetadata.getPropertyTableData(
-          propertyTable,
-          fid,
-        ) as Record<string, unknown>;
+  forEachLoadedFeatureSource(tiles, (source) => {
+    for (const pid of collectPartIdsFromSourceUserData(source.userData, 1)) {
+      if (map.has(pid) && map.get(pid) != null) continue;
+      const data = getPropertyDataFromUserData(source.userData, pid, 1);
+      if (data != null) {
         map.set(pid, data);
-      } catch {
-        if (!map.has(pid)) {
-          map.set(pid, null);
-        }
+      } else if (!map.has(pid)) {
+        map.set(pid, null);
       }
     }
   });

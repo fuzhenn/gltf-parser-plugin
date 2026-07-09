@@ -2,6 +2,7 @@ import {
   Color,
   Euler,
   type EulerOrder,
+  InstancedMesh,
   Material,
   Matrix4,
   Mesh,
@@ -542,9 +543,12 @@ export function applyStyleAppearanceToMesh(
     if (prevBuilt) {
       prevBuilt.removeFromParent();
     }
-    const built = appearance.mesh(anchorMesh.geometry, resolvedMaterial);
+    let built = appearance.mesh(anchorMesh.geometry, resolvedMaterial);
+    if (anchorMesh instanceof InstancedMesh) {
+      built = promoteBuiltMeshForInstancedAnchor(anchorMesh, built);
+    }
     anchorMesh.userData[STYLE_APPEARANCE_BUILT_KEY] = built;
-    renderMesh = built as unknown as Mesh;
+    renderMesh = built;
   } else {
     anchorMesh.material = resolvedMaterial;
   }
@@ -629,4 +633,37 @@ export function applyStyleAppearanceToMesh(
 
   placeMeshUnderRoot(renderMesh, scene, placementWorld);
   scene.add(renderMesh);
+}
+
+const tmpInstancedStyleMatrix = new Matrix4();
+
+function promoteBuiltMeshForInstancedAnchor(
+  anchorMesh: InstancedMesh,
+  built: Mesh,
+): Mesh {
+  if (built instanceof InstancedMesh) return built;
+
+  const instancedBuilt = new InstancedMesh(
+    built.geometry,
+    built.material as Material,
+    anchorMesh.count,
+  );
+  for (let i = 0; i < anchorMesh.count; i++) {
+    anchorMesh.getMatrixAt(i, tmpInstancedStyleMatrix);
+    instancedBuilt.setMatrixAt(i, tmpInstancedStyleMatrix);
+  }
+  instancedBuilt.instanceMatrix.needsUpdate = true;
+
+  built.removeFromParent();
+  if (built.geometry !== anchorMesh.geometry) {
+    built.geometry.dispose();
+  }
+  const builtMats = Array.isArray(built.material)
+    ? built.material
+    : [built.material];
+  for (const mat of builtMats) {
+    if (mat && mat !== anchorMesh.material) mat.dispose();
+  }
+
+  return instancedBuilt;
 }
