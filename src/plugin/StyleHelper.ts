@@ -127,6 +127,32 @@ export class StyleHelper {
   }
 
   /**
+   * 属性表或瓦片 mesh 就绪后补建样式收集器。
+   * 早于模型加载时 `setStyle` 可能只写入配置、未创建 collector；应在 `load-model` 等时机调用。
+   */
+  ensureStyleApplied(): void {
+    const style = this.style;
+    if (!style) return;
+    if (
+      !style.show &&
+      (!style.conditions || style.conditions.length === 0)
+    ) {
+      return;
+    }
+    if (this.styleCollectors.length > 0) return;
+
+    const resolved = this.resolveStyleFromTiles();
+    if (!resolved) return;
+
+    const hasGroups = resolved.channelGroups.some(
+      ({ groups }) => groups.size > 0,
+    );
+    if (!hasGroups) return;
+
+    this.applyStyle();
+  }
+
+  /**
    * 单瓦片可见时增量应用样式 split mesh（仅遍历该 scene，不全局扫描）。
    */
   applyStyleToTileScene(scene: Object3D): void {

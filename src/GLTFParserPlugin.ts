@@ -560,6 +560,7 @@ export class GLTFParserPlugin {
     if (!event.visible || !event.scene) return;
     buildOidToFeatureIdMap(event.scene);
     this.partVisibility.applyVisibilityToScene(event.scene);
+    this._styleHelper?.ensureStyleApplied();
     this._styleHelper?.applyStyleToTileScene(event.scene);
     this._partHighlightHelper?.applyHighlightToTileScene(event.scene);
     this._appendOtherCollectorsForTileScene(event.scene);
@@ -605,11 +606,15 @@ export class GLTFParserPlugin {
     const ud = scene.userData as { _gltfParserPreVisibilityApplied?: boolean };
     if (ud._gltfParserPreVisibilityApplied) {
       delete ud._gltfParserPreVisibilityApplied;
-      return;
+    } else {
+      buildOidToFeatureIdMap(scene);
+      this.partVisibility.applyVisibilityToScene(scene);
     }
 
-    buildOidToFeatureIdMap(scene);
-    this.partVisibility.applyVisibilityToScene(scene);
+    this._styleHelper?.ensureStyleApplied();
+    this._styleHelper?.applyStyleToTileScene(scene);
+    this._partHighlightHelper?.applyHighlightToTileScene(scene);
+    this._appendOtherCollectorsForTileScene(scene);
   }
 
   /**
