@@ -115,7 +115,6 @@ export class GLTFParserPlugin {
   );
   private readonly _clippingPlanesHelper = new ClippingPlanesHelper(
     () => this.tiles,
-    () => this._renderer,
   );
   /** WebGLRenderer 实例，用于 mesh helper 等扩展 */
   get renderer(): WebGLRenderer | null {

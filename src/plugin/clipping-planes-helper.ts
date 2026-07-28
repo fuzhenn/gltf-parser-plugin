@@ -1,4 +1,4 @@
-import { Object3D, Plane, WebGLRenderer } from "three";
+import { Object3D, Plane } from "three";
 import { TilesRenderer } from "3d-tiles-renderer";
 import { applyClippingPlanesToObject3D } from "../mesh-helper/clipping-planes";
 
@@ -8,18 +8,10 @@ import { applyClippingPlanesToObject3D } from "../mesh-helper/clipping-planes";
 export class ClippingPlanesHelper {
   private planes: Plane[] | null = null;
 
-  constructor(
-    private readonly getTiles: () => TilesRenderer | null,
-    private readonly getRenderer: () => WebGLRenderer | null,
-  ) {}
+  constructor(private readonly getTiles: () => TilesRenderer | null) {}
 
   setClippingPlanes(planes: Plane[] | null): void {
     this.planes = planes?.length ? planes : null;
-
-    const renderer = this.getRenderer();
-    if (renderer) {
-      renderer.localClippingEnabled = this.planes != null;
-    }
 
     const tiles = this.getTiles();
     if (tiles) {
@@ -34,9 +26,5 @@ export class ClippingPlanesHelper {
 
   dispose(): void {
     this.planes = null;
-    const renderer = this.getRenderer();
-    if (renderer) {
-      renderer.localClippingEnabled = false;
-    }
   }
 }
