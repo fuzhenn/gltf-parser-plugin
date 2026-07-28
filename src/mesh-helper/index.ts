@@ -7,3 +7,5 @@ export * from "./intersection";
 export * from "./instance-split";
 
 export * from "./mesh";
+
+export * from "./clipping-planes";

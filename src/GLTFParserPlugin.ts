@@ -3,6 +3,7 @@ import {
   Intersection,
   Mesh,
   Object3D,
+  Plane,
   Vector3,
   WebGLRenderer,
 } from "three";
@@ -36,6 +37,7 @@ import {
 } from "./plugin/PartHighlightHelper";
 import { InteractionFilter } from "./plugin/InteractionFilter";
 import { PartVisibilityHelper } from "./plugin/part-visibility-helper";
+import { ClippingPlanesHelper } from "./plugin/clipping-planes-helper";
 import { setMaxWorkers } from "./utils";
 import {
   bboxArrayToBox3,
@@ -110,6 +112,10 @@ export class GLTFParserPlugin {
   readonly partVisibility = new PartVisibilityHelper(
     () => this.tiles,
     () => this._internalData,
+  );
+  private readonly _clippingPlanesHelper = new ClippingPlanesHelper(
+    () => this.tiles,
+    () => this._renderer,
   );
   /** WebGLRenderer 实例，用于 mesh helper 等扩展 */
   get renderer(): WebGLRenderer | null {
@@ -540,6 +546,7 @@ export class GLTFParserPlugin {
   processTileModel(scene: Object3D, _tile: unknown): void {
     buildOidToFeatureIdMap(scene);
     this.partVisibility.applyVisibilityToScene(scene);
+    this._clippingPlanesHelper.applyToScene(scene);
     (
       scene.userData as { _gltfParserPreVisibilityApplied?: boolean }
     )._gltfParserPreVisibilityApplied = true;
@@ -564,6 +571,7 @@ export class GLTFParserPlugin {
     this._styleHelper?.applyStyleToTileScene(event.scene);
     this._partHighlightHelper?.applyHighlightToTileScene(event.scene);
     this._appendOtherCollectorsForTileScene(event.scene);
+    this._clippingPlanesHelper.applyToScene(event.scene);
   };
 
   private _appendOtherCollectorsForTileScene(scene: Object3D): void {
@@ -615,6 +623,7 @@ export class GLTFParserPlugin {
     this._styleHelper?.applyStyleToTileScene(scene);
     this._partHighlightHelper?.applyHighlightToTileScene(scene);
     this._appendOtherCollectorsForTileScene(scene);
+    this._clippingPlanesHelper.applyToScene(scene);
   }
 
   /**
@@ -777,6 +786,15 @@ export class GLTFParserPlugin {
   }
 
   /**
+   * 设置剖切平面，作用于 tiles.group 下所有 mesh 材质。
+   * 新加载或 LRU 复现的瓦片会自动应用当前配置。
+   * @param planes 剖切平面数组；传 null 或空数组清除剖切
+   */
+  setClippingPlanes(planes: Plane[] | null): void {
+    this._clippingPlanesHelper.setClippingPlanes(planes);
+  }
+
+  /**
    * 设置构件样式（条件可见性 + 条件材质）
    * @param style 样式配置，传 null 清除样式
    */
@@ -906,6 +924,8 @@ export class GLTFParserPlugin {
     this._styleHelper = null;
     this._partHighlightHelper?.dispose();
     this._partHighlightHelper = null;
+
+    this._clippingPlanesHelper.dispose();
 
     for (const collector of this.collectors) {
       this._unregisterMeshCollector(collector);
