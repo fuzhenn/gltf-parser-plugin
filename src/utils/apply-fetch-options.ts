@@ -16,6 +16,28 @@ function normalizeHeaders(headers?: HeadersInit): Record<string, string> {
 }
 
 /**
+ * 合并 fetch 选项：默认值 < tiles.fetchOptions < 插件 fetchOptions。
+ */
+export function resolveFetchOptions(
+  ...sources: (RequestInit | undefined)[]
+): RequestInit {
+  const merged: RequestInit = {
+    mode: "cors",
+    referrerPolicy: "origin",
+  };
+  for (const src of sources) {
+    if (src) Object.assign(merged, src);
+  }
+  if (typeof window !== "undefined" && merged.referrer === undefined) {
+    merged.referrer = window.location.href;
+  }
+  if (merged.mode === undefined) {
+    merged.mode = "cors";
+  }
+  return merged;
+}
+
+/**
  * 将 RequestInit 映射到 Three.js Loader 的 requestHeader / credentials / crossOrigin。
  */
 export function applyFetchOptionsToLoader(

@@ -9,10 +9,11 @@ export {
   setMaxWorkers,
   getWorkers,
   clearSchemaCache,
-  setFetchOptions,
-  resolveFetchOptions,
 } from "./worker-pool";
-export { applyFetchOptionsToLoader } from "./apply-fetch-options";
+export {
+  applyFetchOptionsToLoader,
+  resolveFetchOptions,
+} from "./apply-fetch-options";
 export {
   bboxArrayToBox3,
   pointInPolygon,

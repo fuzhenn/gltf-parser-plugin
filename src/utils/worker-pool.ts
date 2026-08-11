@@ -1,5 +1,6 @@
 // Import inline Worker (Vite will compile and bundle the worker code into a base64 data URL)
 import GLTFWorkerClass from "../worker/index?worker&inline";
+import { resolveFetchOptions } from "./apply-fetch-options";
 
 // Worker pool management
 let workerPool: Worker[] = [];
@@ -9,37 +10,6 @@ let currentWorkerIndex = 0;
 // ---- Global schema cache (shared across all workers) ----
 
 const schemaCache = new Map<string, Promise<any>>();
-
-let globalFetchOptions: RequestInit = {};
-
-/**
- * 合并并设置全局 fetch 选项（Worker schema 拉取等主线程请求共用）。
- */
-export function setFetchOptions(options: RequestInit): void {
-  globalFetchOptions = options;
-}
-
-/**
- * 合并 fetch 选项：默认值 < tiles.fetchOptions < 插件 fetchOptions。
- */
-export function resolveFetchOptions(
-  ...sources: (RequestInit | undefined)[]
-): RequestInit {
-  const merged: RequestInit = {
-    mode: "cors",
-    referrerPolicy: "origin",
-  };
-  for (const src of sources) {
-    if (src) Object.assign(merged, src);
-  }
-  if (typeof window !== "undefined" && merged.referrer === undefined) {
-    merged.referrer = window.location.href;
-  }
-  if (merged.mode === undefined) {
-    merged.mode = "cors";
-  }
-  return merged;
-}
 
 /**
  * Clear the global schema cache.
@@ -59,7 +29,7 @@ function setupSchemaHandler(worker: Worker): void {
       event.data;
     if (type !== "fetchSchema") return;
 
-    const requestInit = resolveFetchOptions(globalFetchOptions, reqFetchOptions);
+    const requestInit = resolveFetchOptions(reqFetchOptions);
 
     let promise = schemaCache.get(url);
     if (!promise) {
