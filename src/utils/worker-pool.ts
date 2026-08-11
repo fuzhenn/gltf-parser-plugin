@@ -1,5 +1,6 @@
 // Import inline Worker (Vite will compile and bundle the worker code into a base64 data URL)
 import GLTFWorkerClass from "../worker/index?worker&inline";
+import { resolveFetchOptions } from "./apply-fetch-options";
 
 // Worker pool management
 let workerPool: Worker[] = [];
@@ -24,12 +25,15 @@ export function clearSchemaCache(): void {
  */
 function setupSchemaHandler(worker: Worker): void {
   worker.addEventListener("message", (event: MessageEvent) => {
-    const { type, schemaRequestId, url } = event.data;
+    const { type, schemaRequestId, url, fetchOptions: reqFetchOptions } =
+      event.data;
     if (type !== "fetchSchema") return;
+
+    const requestInit = resolveFetchOptions(reqFetchOptions);
 
     let promise = schemaCache.get(url);
     if (!promise) {
-      promise = fetch(url)
+      promise = fetch(url, requestInit)
         .then((res) => {
           if (!res.ok) {
             throw new Error(

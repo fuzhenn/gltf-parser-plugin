@@ -38,7 +38,7 @@ import {
 import { InteractionFilter } from "./plugin/InteractionFilter";
 import { PartVisibilityHelper } from "./plugin/part-visibility-helper";
 import { ClippingPlanesHelper } from "./plugin/clipping-planes-helper";
-import { setMaxWorkers } from "./utils";
+import { setMaxWorkers, resolveFetchOptions } from "./utils";
 import {
   bboxArrayToBox3,
   selectByBoxFromOidMap,
@@ -126,6 +126,7 @@ export class GLTFParserPlugin {
     () => this._internalData,
   );
   private collectors: Set<MeshCollector> = new Set();
+  private _fetchOptions: RequestInit = {};
 
   /**
    * Create a GLTFParserPlugin instance
@@ -156,6 +157,13 @@ export class GLTFParserPlugin {
   init(tiles: TilesRenderer) {
     this.tiles = tiles;
 
+    const tilesFetchOptions = (tiles as { fetchOptions?: RequestInit })
+      .fetchOptions;
+    this._fetchOptions = resolveFetchOptions(
+      tilesFetchOptions,
+      this._options.fetchOptions,
+    );
+
     const partFx = this._createPartEffectHost();
     this._styleHelper = new StyleHelper({
       getTiles: () => this.tiles,
@@ -179,6 +187,7 @@ export class GLTFParserPlugin {
     this._loader = new GLTFWorkerLoader(tiles.manager, {
       metadata: this._options.metadata,
       materialBuilder: this._options.materialBuilder,
+      fetchOptions: this._fetchOptions,
     });
     tiles.manager.addHandler(this._gltfRegex, this._loader);
 

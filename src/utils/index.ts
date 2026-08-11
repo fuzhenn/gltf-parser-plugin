@@ -11,6 +11,10 @@ export {
   clearSchemaCache,
 } from "./worker-pool";
 export {
+  applyFetchOptionsToLoader,
+  resolveFetchOptions,
+} from "./apply-fetch-options";
+export {
   bboxArrayToBox3,
   pointInPolygon,
   segmentsIntersect,

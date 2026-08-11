@@ -39,6 +39,8 @@ export interface GLTFWorkerLoaderOptions {
   metadata?: boolean;
   /** Custom material builder function */
   materialBuilder?: MaterialBuilder;
+  /** Network request options passed to Worker parsing */
+  fetchOptions?: RequestInit;
 }
 
 let uuid = 0;
@@ -49,6 +51,7 @@ let uuid = 0;
 export class GLTFWorkerLoader extends Loader {
   private _metadata: boolean = true;
   private _materialBuilder?: MaterialBuilder;
+  private _fetchOptions: RequestInit = {};
   private _loaderId = uuid++;
   private _callbacks = new Map<
     number,
@@ -60,6 +63,7 @@ export class GLTFWorkerLoader extends Loader {
     super(manager);
     this._metadata = options?.metadata ?? true;
     this._materialBuilder = options?.materialBuilder;
+    this._fetchOptions = options?.fetchOptions ?? {};
 
     this.addListeners();
   }
@@ -126,10 +130,7 @@ export class GLTFWorkerLoader extends Loader {
           root: workingPath,
           loaderId: this._loaderId,
           requestId,
-          fetchOptions: {
-            referrer: window.location.href,
-            referrerPolicy: "origin",
-          },
+          fetchOptions: this._fetchOptions,
         },
         [buffer],
       );
