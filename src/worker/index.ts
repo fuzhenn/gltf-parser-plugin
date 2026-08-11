@@ -44,7 +44,7 @@ self.addEventListener("message", (event: MessageEvent) => {
  */
 function fetchSchema(
   url: string,
-  _fetchOptions: RequestInit,
+  fetchOptions: RequestInit,
   urlModifier?: (url: string) => string,
 ): Promise<any> {
   const resolvedUrl = urlModifier ? urlModifier(url) : url;
@@ -63,6 +63,7 @@ function fetchSchema(
       type: "fetchSchema",
       schemaRequestId: id,
       url: resolvedUrl,
+      fetchOptions,
     });
   }).catch((err) => {
     // Remove from local cache on failure so it can be retried

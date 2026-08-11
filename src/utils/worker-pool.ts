@@ -10,6 +10,37 @@ let currentWorkerIndex = 0;
 
 const schemaCache = new Map<string, Promise<any>>();
 
+let globalFetchOptions: RequestInit = {};
+
+/**
+ * 合并并设置全局 fetch 选项（Worker schema 拉取等主线程请求共用）。
+ */
+export function setFetchOptions(options: RequestInit): void {
+  globalFetchOptions = options;
+}
+
+/**
+ * 合并 fetch 选项：默认值 < tiles.fetchOptions < 插件 fetchOptions。
+ */
+export function resolveFetchOptions(
+  ...sources: (RequestInit | undefined)[]
+): RequestInit {
+  const merged: RequestInit = {
+    mode: "cors",
+    referrerPolicy: "origin",
+  };
+  for (const src of sources) {
+    if (src) Object.assign(merged, src);
+  }
+  if (typeof window !== "undefined" && merged.referrer === undefined) {
+    merged.referrer = window.location.href;
+  }
+  if (merged.mode === undefined) {
+    merged.mode = "cors";
+  }
+  return merged;
+}
+
 /**
  * Clear the global schema cache.
  */
@@ -24,12 +55,15 @@ export function clearSchemaCache(): void {
  */
 function setupSchemaHandler(worker: Worker): void {
   worker.addEventListener("message", (event: MessageEvent) => {
-    const { type, schemaRequestId, url } = event.data;
+    const { type, schemaRequestId, url, fetchOptions: reqFetchOptions } =
+      event.data;
     if (type !== "fetchSchema") return;
+
+    const requestInit = resolveFetchOptions(globalFetchOptions, reqFetchOptions);
 
     let promise = schemaCache.get(url);
     if (!promise) {
-      promise = fetch(url)
+      promise = fetch(url, requestInit)
         .then((res) => {
           if (!res.ok) {
             throw new Error(

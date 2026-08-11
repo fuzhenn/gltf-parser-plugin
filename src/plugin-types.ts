@@ -85,4 +85,10 @@ export interface GLTFParserPluginOptions {
    * 在 `init` 内会在已遍历到的瓦片场景就绪后应用；后续瓦片通过 `load-model` / `tiles-load-end` 触发收集器更新并重应用样式。
    */
   style?: StyleConfig | null;
+
+  /**
+   * 网络请求选项，语义与 `TilesRenderer.fetchOptions` 一致。
+   * 用于 Worker 内 GLTF 解析及 schema 拉取（如 Authorization 等 headers）。
+   */
+  fetchOptions?: RequestInit;
 }
