@@ -6,7 +6,6 @@ import {
   Material,
   Matrix4,
   Mesh,
-  MeshStandardMaterial,
   Object3D,
   Vector3,
 } from "three";
@@ -25,6 +24,7 @@ import type {
   StyleShowInput,
   StyleVec3Input,
 } from "./style-appearance-types";
+import { MaterialBuilder } from "../types";
 
 /** 单个 mesh 在样式应用前的原始 TRS 快照，用于取消样式时复位 */
 export type StoredTransform = {
@@ -92,7 +92,7 @@ export function extractStyleMaterialMaps(
  *
  * 同色同透明度多 mesh 共享同一 Material 实例，避免每 mesh `new` 一份。
  */
-const defaultColorMaterialCache = new Map<string, MeshStandardMaterial>();
+const defaultColorMaterialCache = new Map<string, Material>();
 
 /**
  * `material` 实例 + 同级 `color` / `opacity` 的缓存：原始 Material → (复合 key → 克隆体)。
@@ -137,8 +137,9 @@ function overrideMaterialCacheKey(
 
 function getDefaultColorMaterial(
   c: ColorInput,
-  opacity?: number,
-): MeshStandardMaterial {
+  opacity: number,
+  materialBuilder: MaterialBuilder
+): Material {
   const hex = colorHex(c);
   const op = opacity != null ? clampOpacity01(opacity) : 1;
   const key = `${hex}_${op}`;
@@ -146,12 +147,12 @@ function getDefaultColorMaterial(
   if (!m) {
     m =
       op < 1
-        ? new MeshStandardMaterial({
+        ? materialBuilder({
             color: hex,
             opacity: op,
             transparent: true,
           })
-        : new MeshStandardMaterial({ color: hex });
+        : materialBuilder({ color: hex });
     defaultColorMaterialCache.set(key, m);
   }
   return m;
@@ -206,15 +207,16 @@ function applyAppearanceOverridesToMaterialInstance(
 function resolveStyleMaterial(
   appearance: StyleAppearance,
   originalMaterial: Material,
+  materialBuilder: MaterialBuilder,
 ): Material {
   const colorInput = appearance.color;
   const opacityRaw = appearance.opacity;
   const opacityOverride =
-    opacityRaw != null ? clampOpacity01(opacityRaw) : undefined;
+    opacityRaw != null ? clampOpacity01(opacityRaw) : 1;
 
   if (appearance.material === undefined) {
     if (colorInput !== undefined) {
-      return getDefaultColorMaterial(colorInput, opacityOverride);
+      return getDefaultColorMaterial(colorInput, opacityOverride, materialBuilder);
     }
     if (opacityOverride !== undefined) {
       return applyAppearanceOverridesToMaterialInstance(
@@ -518,6 +520,7 @@ export function applyStyleAppearanceToMesh(
   appearance: StyleAppearance,
   scene: Object3D,
   maps: MeshAppearanceMaps,
+  materialBuilder: MaterialBuilder
 ): void {
   if (!mesh.geometry) return;
 
@@ -531,7 +534,7 @@ export function applyStyleAppearanceToMesh(
     );
   }
   const originalMaterial = maps.originalMaterialByMesh.get(anchorMesh.uuid)!;
-  const resolvedMaterial = resolveStyleMaterial(appearance, originalMaterial);
+  const resolvedMaterial = resolveStyleMaterial(appearance, originalMaterial, materialBuilder);
 
   let renderMesh: Mesh = anchorMesh;
 

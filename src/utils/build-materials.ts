@@ -37,9 +37,9 @@ export function buildMaterials(
   return materialMap;
 }
 
-function defaultMaterialBuilder(
+export function defaultMaterialBuilder(
   matData: any,
-  textureMap: Map<number, Texture>,
+  textureMap?: Map<number, Texture>,
 ): Material {
   const material = new MeshStandardMaterial();
 
@@ -60,7 +60,7 @@ function defaultMaterialBuilder(
     }
 
     // Base color texture
-    if (pbr.baseColorTexture && pbr.baseColorTexture.index !== undefined) {
+    if (textureMap && pbr.baseColorTexture && pbr.baseColorTexture.index !== undefined) {
       const tex = textureMap.get(pbr.baseColorTexture.index);
       if (tex) {
         material.map = tex;
@@ -75,6 +75,7 @@ function defaultMaterialBuilder(
 
     // Metallic roughness texture
     if (
+      textureMap &&
       pbr.metallicRoughnessTexture &&
       pbr.metallicRoughnessTexture.index !== undefined
     ) {
@@ -86,7 +87,7 @@ function defaultMaterialBuilder(
   }
 
   // Normal map
-  if (matData.normalTexture && matData.normalTexture.index !== undefined) {
+  if (textureMap && matData.normalTexture && matData.normalTexture.index !== undefined) {
     const tex = textureMap.get(matData.normalTexture.index);
     if (tex) {
       material.normalMap = tex;
@@ -101,6 +102,7 @@ function defaultMaterialBuilder(
 
   // Occlusion map
   if (
+    textureMap &&
     matData.occlusionTexture &&
     matData.occlusionTexture.index !== undefined
   ) {
@@ -111,7 +113,7 @@ function defaultMaterialBuilder(
   }
 
   // Emissive
-  if (matData.emissiveTexture && matData.emissiveTexture.index !== undefined) {
+  if (textureMap && matData.emissiveTexture && matData.emissiveTexture.index !== undefined) {
     const tex = textureMap.get(matData.emissiveTexture.index);
     if (tex) {
       material.emissiveMap = tex;

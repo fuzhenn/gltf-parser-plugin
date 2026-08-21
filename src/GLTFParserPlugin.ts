@@ -54,6 +54,7 @@ import type {
   StructureData,
   StructureNode,
 } from "./plugin-types";
+import { defaultMaterialBuilder } from "./utils/build-materials";
 
 export type {
   GLTFParserPluginOptions,
@@ -164,6 +165,7 @@ export class GLTFParserPlugin {
       this._options.fetchOptions,
     );
 
+    const materialBuilder = this._options.materialBuilder ?? defaultMaterialBuilder;
     const partFx = this._createPartEffectHost();
     this._styleHelper = new StyleHelper({
       getTiles: () => this.tiles,
@@ -180,13 +182,13 @@ export class GLTFParserPlugin {
       clearTileSubsetCache: () => this.meshSplit.clearCache(),
       getRootGroup: partFx.getRootGroup,
       getInternalData: () => this._internalData,
-    });
-    this._partHighlightHelper = new PartHighlightHelper(partFx);
+    }, materialBuilder);
+    this._partHighlightHelper = new PartHighlightHelper(partFx, materialBuilder);
 
     // --- GLTF loader setup ---
     this._loader = new GLTFWorkerLoader(tiles.manager, {
       metadata: this._options.metadata,
-      materialBuilder: this._options.materialBuilder,
+      materialBuilder: materialBuilder,
       fetchOptions: this._fetchOptions,
     });
     tiles.manager.addHandler(this._gltfRegex, this._loader);

@@ -20,6 +20,7 @@ import {
   type MeshAppearanceMaps,
   type StoredTransform,
 } from "./style-appearance-shared";
+import { MaterialBuilder } from "../types";
 
 export type {
   StyleAppearance,
@@ -73,8 +74,11 @@ export class StyleHelper {
   private styleCollectors: MeshCollector[] = [];
   /** 样式代际 uid，每次 applyStyle 递增，用于瓦片级 subset/split 缓存键 */
   private _generationUid = 0;
+  private materialBuilder: MaterialBuilder;
 
-  constructor(private context: StyleHelperContext) {}
+  constructor(private context: StyleHelperContext, materialBuilder: MaterialBuilder) {
+    this.materialBuilder = materialBuilder;
+  }
 
   /**
    * 设置样式
@@ -173,7 +177,7 @@ export class StyleHelper {
 
       const added = collector.appendMeshesForTileScene(scene);
       for (const mesh of added) {
-        applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps);
+        applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps, this.materialBuilder);
       }
     }
   }
@@ -291,7 +295,7 @@ export class StyleHelper {
         const handler = () => {
           if (!rootGroup) return;
           collector.meshes.forEach((mesh) => {
-            applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps);
+            applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps, this.materialBuilder);
           });
         };
         this.meshChangeHandlers.set(groupKey, handler);

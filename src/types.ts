@@ -256,5 +256,5 @@ export interface GLTFNodeData {
 
 export type MaterialBuilder = (
   matData: unknown,
-  textureMap: Map<number, Texture>,
+  textureMap?: Map<number, Texture>,
 ) => Material;
