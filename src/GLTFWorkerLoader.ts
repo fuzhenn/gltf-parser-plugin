@@ -166,7 +166,7 @@ export class GLTFWorkerLoader extends Loader {
     const materialMap = buildMaterials(data, textureMap, this._materialBuilder);
 
     // Create default material
-    const defaultMaterial = this._materialBuilder({ pbrMetallicRoughness: { baseColorFactor: 0xcccccc }});
+    const defaultMaterial = this._materialBuilder({ pbrMetallicRoughness: { baseColorFactor: [0.75, 0.75, 0.75, 1] } });
 
     // Build mesh primitives
     const meshMap = buildMeshPrimitives(data, materialMap, defaultMaterial);
