@@ -145,14 +145,12 @@ function getDefaultColorMaterial(
   const key = `${hex}_${op}`;
   let m = defaultColorMaterialCache.get(key);
   if (!m) {
-    m =
-      op < 1
-        ? materialBuilder({
-            color: hex,
-            opacity: op,
-            transparent: true,
-          })
-        : materialBuilder({ color: hex });
+    const color = new Color(hex);
+    m = materialBuilder({
+      pbrMetallicRoughness: {
+        baseColorFactor: [color.r, color.g, color.b, op]
+      }
+    });
     defaultColorMaterialCache.set(key, m);
   }
   return m;
