@@ -43,6 +43,7 @@ import {
   type MeshAppearanceMaps,
   type StoredTransform,
 } from "./style-appearance-shared";
+import { MaterialBuilder } from "../types";
 
 /** 高亮用材质：与 {@link StyleAppearance.material} 相同，不含内嵌 color/opacity */
 export type HighlightMaterial = Material | StyleMaterialResolver;
@@ -286,8 +287,11 @@ export class PartHighlightHelper {
   private highlightCollectors: MeshCollector[] = [];
   /** 高亮代际 uid，每次 reapplyAll 重建收集器时递增 */
   private _generationUid = 0;
+  materialBuilder: MaterialBuilder;
 
-  constructor(private context: PartEffectHost) {}
+  constructor(private context: PartEffectHost, materialBuilder: MaterialBuilder) {
+    this.materialBuilder = materialBuilder;
+  }
 
   private getMaps(): MeshAppearanceMaps {
     return {
@@ -463,7 +467,7 @@ export class PartHighlightHelper {
 
       const added = collector.appendMeshesForTileScene(scene);
       for (const mesh of added) {
-        applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps);
+        applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps, this.materialBuilder);
       }
     }
   }
@@ -521,7 +525,7 @@ export class PartHighlightHelper {
           const s = this.context.getRootGroup();
           if (!s) return;
           collector.meshes.forEach((mesh) => {
-            applyStyleAppearanceToMesh(mesh, appearance, s, maps);
+            applyStyleAppearanceToMesh(mesh, appearance, s, maps, this.materialBuilder);
           });
         };
         this.meshChangeHandlers.set(groupKey, handler);

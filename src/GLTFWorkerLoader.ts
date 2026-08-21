@@ -4,7 +4,6 @@ import {
   LoadingManager,
   Matrix4,
   Mesh,
-  MeshStandardMaterial,
   Quaternion,
   Scene,
   Texture,
@@ -38,7 +37,7 @@ export interface GLTFWorkerLoaderOptions {
   /** Whether to enable metadata support (EXT_mesh_features, EXT_structural_metadata) */
   metadata?: boolean;
   /** Custom material builder function */
-  materialBuilder?: MaterialBuilder;
+  materialBuilder: MaterialBuilder;
   /** Network request options passed to Worker parsing */
   fetchOptions?: RequestInit;
 }
@@ -50,7 +49,7 @@ let uuid = 0;
  */
 export class GLTFWorkerLoader extends Loader {
   private _metadata: boolean = true;
-  private _materialBuilder?: MaterialBuilder;
+  private _materialBuilder: MaterialBuilder;
   private _fetchOptions: RequestInit = {};
   private _loaderId = uuid++;
   private _callbacks = new Map<
@@ -59,11 +58,11 @@ export class GLTFWorkerLoader extends Loader {
   >();
   private _nextRequestId = 1;
 
-  constructor(manager?: LoadingManager, options?: GLTFWorkerLoaderOptions) {
+  constructor(manager: LoadingManager, options: GLTFWorkerLoaderOptions) {
     super(manager);
-    this._metadata = options?.metadata ?? true;
-    this._materialBuilder = options?.materialBuilder;
-    this._fetchOptions = options?.fetchOptions ?? {};
+    this._metadata = options.metadata ?? true;
+    this._materialBuilder = options.materialBuilder;
+    this._fetchOptions = options.fetchOptions ?? {};
 
     this.addListeners();
   }
@@ -167,7 +166,7 @@ export class GLTFWorkerLoader extends Loader {
     const materialMap = buildMaterials(data, textureMap, this._materialBuilder);
 
     // Create default material
-    const defaultMaterial = new MeshStandardMaterial({ color: 0xcccccc });
+    const defaultMaterial = this._materialBuilder({ pbrMetallicRoughness: { baseColorFactor: 0xcccccc }});
 
     // Build mesh primitives
     const meshMap = buildMeshPrimitives(data, materialMap, defaultMaterial);
@@ -361,7 +360,7 @@ export class GLTFWorkerLoader extends Loader {
     }
 
     // Traverse all meshes in the scene, process mesh-level metadata
-    scene.traverse((child) => {
+    scene.traverse((child: any) => {
       if (child instanceof InstancedMesh) return;
 
       if (!(child instanceof Mesh)) return;
