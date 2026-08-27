@@ -179,8 +179,16 @@ export interface GLTFWorkerData {
           {
             buffer: Uint16Array | Uint32Array;
             map: Record<number, { offset: number; length: number }>;
+            triangleIndices: Uint32Array;
+            triangleIndexMap: Record<number, { offset: number; length: number }>;
           }
         >;
+        /** worker 预计算的特征边 LineSegments position + 源三角形索引 */
+        precomputedEdges?: {
+          positions: Float32Array;
+          triangleIndices: Uint32Array;
+          thresholdAngleDeg: number;
+        };
       }>;
     }
   >;

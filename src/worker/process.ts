@@ -1,12 +1,18 @@
 import { dequantizeAttribute } from "./dequantize";
 import type { AttributeData } from "./types";
 import { decodeTangent } from "./tangent";
+import {
+  buildFeatureEdgePositions,
+  DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
+} from "./edges";
 
 type FeatureIdIndexEntry = { offset: number; length: number };
 
 type FeatureIdIndexData = {
   buffer: Uint16Array | Uint32Array;
   map: Record<number, FeatureIdIndexEntry>;
+  triangleIndices: Uint32Array;
+  triangleIndexMap: Record<number, FeatureIdIndexEntry>;
 };
 
 /**
@@ -27,6 +33,7 @@ function buildFeatureIdIndices(
     if (!fidArray) continue;
 
     const fidChunks = new Map<number, number[]>();
+    const fidTriangleChunks = new Map<number, number[]>();
     for (let i = 0; i < indexArray.length; i += 3) {
       const a = indexArray[i]!;
       const b = indexArray[i + 1]!;
@@ -39,6 +46,13 @@ function buildFeatureIdIndices(
         fidChunks.set(fid, chunk);
       }
       chunk.push(a, b, c);
+
+      let triChunk = fidTriangleChunks.get(fid);
+      if (!triChunk) {
+        triChunk = [];
+        fidTriangleChunks.set(fid, triChunk);
+      }
+      triChunk.push(i / 3);
     }
 
     let total = 0;
@@ -56,8 +70,25 @@ function buildFeatureIdIndices(
       offset += chunk.length;
     }
 
+    let triTotal = 0;
+    for (const chunk of fidTriangleChunks.values()) triTotal += chunk.length;
+    const triangleIndices = new Uint32Array(triTotal);
+    const triangleIndexMap: Record<number, FeatureIdIndexEntry> = {};
+    let triOffset = 0;
+    for (const [fid, chunk] of fidTriangleChunks) {
+      triangleIndices.set(chunk, triOffset);
+      triangleIndexMap[fid] = { offset: triOffset, length: chunk.length };
+      triOffset += chunk.length;
+    }
+
     addTransferable(buffer);
-    (result ||= {})[attrName.toLowerCase()] = { buffer, map };
+    addTransferable(triangleIndices);
+    (result ||= {})[attrName.toLowerCase()] = {
+      buffer,
+      map,
+      triangleIndices,
+      triangleIndexMap,
+    };
   }
 
   return result;
@@ -145,6 +176,27 @@ export function processGLTFData(data: any): {
           );
           if (featureIdIndices) {
             primitive.featureIdIndices = featureIdIndices;
+          }
+        }
+
+        const positionArray = attributes.POSITION?.array as
+          | Float32Array
+          | undefined;
+        if (
+          positionArray &&
+          indexArray &&
+          indexArray.length >= 3 &&
+          positionArray.length >= 9
+        ) {
+          const precomputedEdges = buildFeatureEdgePositions(
+            positionArray,
+            indexArray,
+            DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
+          );
+          if (precomputedEdges.positions.length > 0) {
+            addTransferable(precomputedEdges.positions.buffer);
+            addTransferable(precomputedEdges.triangleIndices.buffer);
+            primitive.precomputedEdges = precomputedEdges;
           }
         }
       }

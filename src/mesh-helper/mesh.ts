@@ -7,6 +7,7 @@ import {
   Mesh,
   Object3D,
   Texture,
+  Vector3,
 } from "three";
 
 import { TilesRenderer } from "3d-tiles-renderer";
@@ -21,6 +22,11 @@ import {
   getRegisteredFeatureIdIndex,
   type FeatureIdIndexData,
 } from "./feature-id-index";
+import {
+  cropPrecomputedEdgesForFids,
+  getPrecomputedEdges,
+  registerPrecomputedEdges,
+} from "./edge-geometry";
 
 /** OID 对应 `_FEATURE_ID_0`，PID 对应 `_FEATURE_ID_1` */
 export type PartIdChannel = "oid" | "pid";
@@ -205,62 +211,20 @@ export function buildVisibleIndexExcludingHiddenFids(
   return result;
 }
 
-/** 合并多个 feature 的三角形为单一 BufferGeometry（共享顶点属性，index 为并集） */
-function createGeometryForFeatureIdSet(
-  originalGeometry: BufferGeometry,
-  featureIdAttr: BufferAttribute,
-  targetFids: Set<number>,
-  sourceIndex: ArrayLike<number>,
-  mesh?: Mesh,
-): BufferGeometry | null {
-  if (targetFids.size === 0 || sourceIndex.length === 0) {
-    return null;
-  }
+type MergedSplitContext = {
+  geometry: BufferGeometry;
+  featureIdAttr: BufferAttribute;
+  targetFids: Set<number>;
+  sourceIndex: ArrayLike<number>;
+  indexCache: FeatureIdIndexData;
+  totalIndexLength: number;
+};
 
-  const newGeometry = new BufferGeometry();
-  const attributes = originalGeometry.attributes;
-  for (const attributeName in attributes) {
-    newGeometry.setAttribute(attributeName, attributes[attributeName]);
-  }
-
-  const { featureIdIndexMap, buffer } = getFeatureIdIndexCache(
-    mesh,
-    sourceIndex,
-    featureIdAttr,
-  );
-
-  let totalLength = 0;
-  for (const fid of targetFids) {
-    const entry = featureIdIndexMap[fid];
-    if (entry) totalLength += entry.length;
-  }
-  if (totalLength === 0) return null;
-
-  const newIndices = createMatchingIndexArray(sourceIndex, totalLength);
-  let writeOffset = 0;
-  for (const fid of targetFids) {
-    const entry = featureIdIndexMap[fid];
-    if (!entry) continue;
-    newIndices.set(
-      buffer.subarray(entry.offset, entry.offset + entry.length),
-      writeOffset,
-    );
-    writeOffset += entry.length;
-  }
-  newGeometry.setIndex(new BufferAttribute(newIndices, 1));
-  return newGeometry;
-}
-
-/**
- * 仅构建合并后的 split 几何（与瓦片共享顶点属性 + 独立 index），供多路 Mesh 复用。
- */
-function buildMergedSplitGeometryForTileMeshByChannel(
+function resolveMergedSplitContext(
   originalMesh: Mesh,
   idSet: ReadonlySet<number>,
   channel: PartIdChannel,
-): BufferGeometry | null {
-  if (idSet.size === 0) return null;
-
+): MergedSplitContext | null {
   const idMap = getPartIdMap(originalMesh, channel);
   if (!idMap) return null;
 
@@ -276,20 +240,147 @@ function buildMergedSplitGeometryForTileMeshByChannel(
       targetFids.add(fid);
     }
   }
-
   if (targetFids.size === 0) return null;
 
   const sourceIndex = getFeatureSplitSourceIndex(originalMesh, geometry);
-  if (!sourceIndex) return null;
+  if (!sourceIndex || sourceIndex.length === 0) return null;
 
-  const newGeometry = createGeometryForFeatureIdSet(
+  const indexCache = getFeatureIdIndexCache(
+    originalMesh,
+    sourceIndex,
+    featureIdAttr,
+  );
+  const { featureIdIndexMap } = indexCache;
+
+  let totalIndexLength = 0;
+  for (const fid of targetFids) {
+    const entry = featureIdIndexMap[fid];
+    if (entry) totalIndexLength += entry.length;
+  }
+  if (totalIndexLength === 0) return null;
+
+  return {
     geometry,
     featureIdAttr,
     targetFids,
     sourceIndex,
-    originalMesh,
-  );
+    indexCache,
+    totalIndexLength,
+  };
+}
 
+function computeLocalBBoxForFeatureIdSubset(
+  geometry: BufferGeometry,
+  indexCache: FeatureIdIndexData,
+  targetFids: Set<number>,
+): Box3 | null {
+  const posAttr = geometry.getAttribute("position");
+  if (!posAttr) return null;
+
+  const positions = posAttr.array as Float32Array;
+  const itemSize = posAttr.itemSize || 3;
+  const { featureIdIndexMap, buffer } = indexCache;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  for (const fid of targetFids) {
+    const entry = featureIdIndexMap[fid];
+    if (!entry) continue;
+    const end = entry.offset + entry.length;
+    for (let i = entry.offset; i < end; i++) {
+      const base = buffer[i]! * itemSize;
+      const x = positions[base]!;
+      const y = positions[base + 1]!;
+      const z = positions[base + 2]!;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
+    }
+  }
+
+  if (minX === Infinity) return null;
+  return new Box3(
+    new Vector3(minX, minY, minZ),
+    new Vector3(maxX, maxY, maxZ),
+  );
+}
+
+/** 合并多个 feature 的三角形为单一 BufferGeometry（共享顶点属性，index 为并集） */
+function createGeometryForFeatureIdSet(
+  context: MergedSplitContext,
+): BufferGeometry | null {
+  const {
+    geometry: originalGeometry,
+    targetFids,
+    sourceIndex,
+    indexCache,
+    totalIndexLength,
+  } = context;
+  const { featureIdIndexMap, buffer } = indexCache;
+
+  const newGeometry = new BufferGeometry();
+  const attributes = originalGeometry.attributes;
+  for (const attributeName in attributes) {
+    newGeometry.setAttribute(attributeName, attributes[attributeName]);
+  }
+
+  const newIndices = createMatchingIndexArray(sourceIndex, totalIndexLength);
+  let writeOffset = 0;
+  for (const fid of targetFids) {
+    const entry = featureIdIndexMap[fid];
+    if (!entry) continue;
+    newIndices.set(
+      buffer.subarray(entry.offset, entry.offset + entry.length),
+      writeOffset,
+    );
+    writeOffset += entry.length;
+  }
+  newGeometry.setIndex(new BufferAttribute(newIndices, 1));
+
+  const sourceEdges = getPrecomputedEdges(originalGeometry);
+  if (sourceEdges) {
+    if (sourceEdges.triangleIndices.length === 0) {
+      registerPrecomputedEdges(newGeometry, sourceEdges);
+    } else if (indexCache.triangleIndexMap && indexCache.triangleIndices) {
+      const cropped = cropPrecomputedEdgesForFids(
+        sourceEdges,
+        indexCache.triangleIndexMap,
+        indexCache.triangleIndices,
+        targetFids,
+      );
+      if (cropped) {
+        registerPrecomputedEdges(newGeometry, {
+          positions: cropped,
+          triangleIndices: new Uint32Array(0),
+          thresholdAngleDeg: sourceEdges.thresholdAngleDeg,
+        });
+      }
+    }
+  }
+
+  return newGeometry;
+}
+
+/**
+ * 仅构建合并后的 split 几何（与瓦片共享顶点属性 + 独立 index），供多路 Mesh 复用。
+ */
+function buildMergedSplitGeometryForTileMeshByChannel(
+  originalMesh: Mesh,
+  idSet: ReadonlySet<number>,
+  channel: PartIdChannel,
+): BufferGeometry | null {
+  const context = resolveMergedSplitContext(originalMesh, idSet, channel);
+  if (!context) return null;
+
+  const newGeometry = createGeometryForFeatureIdSet(context);
   if (!newGeometry || newGeometry.attributes.position.count === 0) {
     return null;
   }
@@ -362,19 +453,19 @@ function measureSplitGeometryForTile(
   idSet: ReadonlySet<number>,
   channel: PartIdChannel,
 ): { triCount: number; bbox: Box3 } | null {
-  const probe =
-    channel === "oid"
-      ? buildMergedSplitGeometryForTileMesh(tileMesh, idSet)
-      : buildMergedSplitGeometryForTileMeshByPids(tileMesh, idSet);
-  if (!probe) return null;
-  const triCount = probe.index?.count ?? 0;
-  if (triCount === 0) {
-    disposeMergedSplitGeometryCacheEntry(probe, tileMesh);
-    return null;
-  }
-  probe.computeBoundingBox();
-  const local = probe.boundingBox?.clone() ?? new Box3();
-  disposeMergedSplitGeometryCacheEntry(probe, tileMesh);
+  const context = resolveMergedSplitContext(tileMesh, idSet, channel);
+  if (!context) return null;
+
+  const triCount = context.totalIndexLength / 3;
+  if (triCount === 0) return null;
+
+  const local = computeLocalBBoxForFeatureIdSubset(
+    context.geometry,
+    context.indexCache,
+    context.targetFids,
+  );
+  if (!local) return null;
+
   return { triCount, bbox: worldSplitBBox(tileMesh, local) };
 }
 

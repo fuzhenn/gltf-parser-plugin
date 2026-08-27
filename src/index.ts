@@ -27,6 +27,15 @@ export type {
 } from "./MeshCollector";
 export type { StyleConditionEvaluator } from "./appearance";
 export type { FeatureInfo } from "./mesh-helper/intersection";
+export {
+  getPrecomputedEdges,
+  registerPrecomputedEdges,
+  type PrecomputedEdgeData,
+} from "./mesh-helper/edge-geometry";
+export {
+  DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
+  buildFeatureEdgePositions,
+} from "./worker/edges";
 export type { ColorInput } from "./utils/color-input";
 export type {
   StyleAppearance,
