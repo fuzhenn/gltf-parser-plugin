@@ -32,35 +32,32 @@ export function cropPrecomputedEdges(
     return data.positions.length > 0 ? data.positions : null;
   }
 
-  let maxTri = 0;
-  for (const tri of visibleTriangleIndices) {
-    if (tri > maxTri) maxTri = tri;
-  }
-  const flags = new Uint8Array(maxTri + 1);
-  for (const tri of visibleTriangleIndices) {
-    flags[tri] = 1;
-  }
-
   const segmentCount = data.triangleIndices.length;
-  const out: number[] = [];
   const triIndices = data.triangleIndices;
   const positions = data.positions;
+
+  let matchCount = 0;
   for (let i = 0; i < segmentCount; i++) {
-    if (!flags[triIndices[i]!]) continue;
-    const base = i * 6;
-    out.push(
-      positions[base]!,
-      positions[base + 1]!,
-      positions[base + 2]!,
-      positions[base + 3]!,
-      positions[base + 4]!,
-      positions[base + 5]!,
-    );
+    if (visibleTriangleIndices.has(triIndices[i]!)) matchCount++;
   }
-  return out.length > 0 ? new Float32Array(out) : null;
+  if (matchCount === 0) return null;
+
+  const result = new Float32Array(matchCount * 6);
+  let writePtr = 0;
+  for (let i = 0; i < segmentCount; i++) {
+    if (!visibleTriangleIndices.has(triIndices[i]!)) continue;
+    const base = i * 6;
+    result[writePtr++] = positions[base]!;
+    result[writePtr++] = positions[base + 1]!;
+    result[writePtr++] = positions[base + 2]!;
+    result[writePtr++] = positions[base + 3]!;
+    result[writePtr++] = positions[base + 4]!;
+    result[writePtr++] = positions[base + 5]!;
+  }
+  return result;
 }
 
-/** 按 targetFids 裁剪预计算边线（位图标记，避免构建 Set） */
+/** 按 targetFids 裁剪预计算边线（Set 标记，一次遍历构建） */
 export function cropPrecomputedEdgesForFids(
   data: PrecomputedEdgeData,
   triangleIndexMap: Record<number, { offset: number; length: number }>,
@@ -71,41 +68,37 @@ export function cropPrecomputedEdgesForFids(
     return data.positions.length > 0 ? data.positions : null;
   }
 
-  let maxTri = 0;
+  const visibleTriangles = new Set<number>();
   for (const fid of targetFids) {
     const entry = triangleIndexMap[fid];
     if (!entry) continue;
     const end = entry.offset + entry.length;
     for (let i = entry.offset; i < end; i++) {
-      const tri = triangleIndices[i]!;
-      if (tri > maxTri) maxTri = tri;
-    }
-  }
-  const flags = new Uint8Array(maxTri + 1);
-  for (const fid of targetFids) {
-    const entry = triangleIndexMap[fid];
-    if (!entry) continue;
-    const end = entry.offset + entry.length;
-    for (let i = entry.offset; i < end; i++) {
-      flags[triangleIndices[i]!] = 1;
+      visibleTriangles.add(triangleIndices[i]!);
     }
   }
 
   const segmentCount = data.triangleIndices.length;
-  const out: number[] = [];
   const edgeTriIndices = data.triangleIndices;
   const positions = data.positions;
+
+  let matchCount = 0;
   for (let i = 0; i < segmentCount; i++) {
-    if (!flags[edgeTriIndices[i]!]) continue;
-    const base = i * 6;
-    out.push(
-      positions[base]!,
-      positions[base + 1]!,
-      positions[base + 2]!,
-      positions[base + 3]!,
-      positions[base + 4]!,
-      positions[base + 5]!,
-    );
+    if (visibleTriangles.has(edgeTriIndices[i]!)) matchCount++;
   }
-  return out.length > 0 ? new Float32Array(out) : null;
+  if (matchCount === 0) return null;
+
+  const result = new Float32Array(matchCount * 6);
+  let writePtr = 0;
+  for (let i = 0; i < segmentCount; i++) {
+    if (!visibleTriangles.has(edgeTriIndices[i]!)) continue;
+    const base = i * 6;
+    result[writePtr++] = positions[base]!;
+    result[writePtr++] = positions[base + 1]!;
+    result[writePtr++] = positions[base + 2]!;
+    result[writePtr++] = positions[base + 3]!;
+    result[writePtr++] = positions[base + 4]!;
+    result[writePtr++] = positions[base + 5]!;
+  }
+  return result;
 }
