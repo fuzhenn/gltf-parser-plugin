@@ -12,6 +12,9 @@ export type FeatureIdIndexData = {
   featureIdIndexMap: Record<number, FeatureIdIndexEntry>;
   /** 按 fid 连续排布的 index（与源 index 同类型） */
   buffer: Uint16Array | Uint32Array;
+  /** fid → 源 mesh 三角形索引（offset/length 指向 triangleIndices 缓冲） */
+  triangleIndexMap?: Record<number, FeatureIdIndexEntry>;
+  triangleIndices?: Uint32Array;
 };
 
 /**
@@ -52,6 +55,7 @@ export function buildFeatureIdIndexMap(
   featureIdAttr: BufferAttribute,
 ): FeatureIdIndexData {
   const fidChunks = new Map<number, number[]>();
+  const fidTriangleChunks = new Map<number, number[]>();
 
   for (let i = 0; i < sourceIndex.length; i += 3) {
     const a = sourceIndex[i]!;
@@ -65,6 +69,13 @@ export function buildFeatureIdIndexMap(
       fidChunks.set(fid, chunk);
     }
     chunk.push(a, b, c);
+
+    let triChunk = fidTriangleChunks.get(fid);
+    if (!triChunk) {
+      triChunk = [];
+      fidTriangleChunks.set(fid, triChunk);
+    }
+    triChunk.push(i / 3);
   }
 
   let totalLength = 0;
@@ -81,5 +92,36 @@ export function buildFeatureIdIndexMap(
     offset += chunk.length;
   }
 
-  return { featureIdIndexMap, buffer };
+  let triTotal = 0;
+  for (const chunk of fidTriangleChunks.values()) triTotal += chunk.length;
+  const triangleIndices = new Uint32Array(triTotal);
+  const triangleIndexMap: Record<number, FeatureIdIndexEntry> = {};
+  let triOffset = 0;
+  for (const [fid, chunk] of fidTriangleChunks) {
+    triangleIndices.set(chunk, triOffset);
+    triangleIndexMap[fid] = { offset: triOffset, length: chunk.length };
+    triOffset += chunk.length;
+  }
+
+  return { featureIdIndexMap, buffer, triangleIndexMap, triangleIndices };
+}
+
+/** 按 targetFids 合并预构建的源 mesh 三角形索引（O(目标 fid 三角数)，不扫全 mesh） */
+export function collectTriangleIndicesForFids(
+  indexData: FeatureIdIndexData,
+  targetFids: Set<number>,
+): Set<number> {
+  const { triangleIndexMap, triangleIndices } = indexData;
+  const triangles = new Set<number>();
+  if (!triangleIndexMap || !triangleIndices) return triangles;
+
+  for (const fid of targetFids) {
+    const entry = triangleIndexMap[fid];
+    if (!entry) continue;
+    const end = entry.offset + entry.length;
+    for (let i = entry.offset; i < end; i++) {
+      triangles.add(triangleIndices[i]!);
+    }
+  }
+  return triangles;
 }

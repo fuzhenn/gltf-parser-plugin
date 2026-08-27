@@ -436,6 +436,8 @@ export function buildAppearanceGroupsFromPropertyMap(
 
 /** 当 `appearance.mesh` 工厂被使用时，把产物 Object3D 暂存到原 mesh 的 userData，便于还原时清理 */
 const STYLE_APPEARANCE_BUILT_KEY = "_gltfParserStyleAppearanceBuilt";
+const STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY =
+  "_gltfParserStyleAppearanceAnchorVisible";
 
 /**
  * 从场景图移除样式 split mesh（及 `appearance.mesh` 工厂产物）。
@@ -448,6 +450,10 @@ export function detachStyledMeshFromScene(mesh: Mesh): void {
   if (built) {
     built.removeFromParent();
     delete mesh.userData[STYLE_APPEARANCE_BUILT_KEY];
+  }
+  if (mesh.userData?.[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] !== undefined) {
+    mesh.visible = mesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] as boolean;
+    delete mesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY];
   }
   mesh.removeFromParent();
 }
@@ -483,6 +489,10 @@ export function restoreMeshAppearanceMaps(
   if (built) {
     built.removeFromParent();
     delete mesh.userData[STYLE_APPEARANCE_BUILT_KEY];
+  }
+  if (mesh.userData?.[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] !== undefined) {
+    mesh.visible = mesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] as boolean;
+    delete mesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY];
   }
 }
 
@@ -548,6 +558,11 @@ export function applyStyleAppearanceToMesh(
     if (anchorMesh instanceof InstancedMesh) {
       built = promoteBuiltMeshForInstancedAnchor(anchorMesh, built);
     }
+    if (anchorMesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] === undefined) {
+      anchorMesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] =
+        anchorMesh.visible;
+    }
+    anchorMesh.visible = false;
     anchorMesh.userData[STYLE_APPEARANCE_BUILT_KEY] = built;
     renderMesh = built;
   } else {
