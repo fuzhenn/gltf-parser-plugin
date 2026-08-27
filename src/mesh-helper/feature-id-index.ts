@@ -49,58 +49,70 @@ export function createMatchingIndexArray(
 /**
  * 按 fid 分组 index 的回退实现（主线程）。
  * 正常情况下 worker 已预构建并注册，仅当某 mesh 几何未携带预构建数据时才走这里。
+ * 采用两遍扫描法：第一遍仅计数，第二遍直接写入预分配 TypedArray，
+ * 消除 number[] 动态数组 + push + set(number[]) 的二次拷贝开销。
  */
 export function buildFeatureIdIndexMap(
   sourceIndex: ArrayLike<number>,
   featureIdAttr: BufferAttribute,
 ): FeatureIdIndexData {
-  const fidChunks = new Map<number, number[]>();
-  const fidTriangleChunks = new Map<number, number[]>();
+  const fidCounts = new Map<number, { indexCount: number; triCount: number }>();
 
+  for (let i = 0; i < sourceIndex.length; i += 3) {
+    const a = sourceIndex[i]!;
+    const fid = featureIdAttr.getX(a);
+    let counts = fidCounts.get(fid);
+    if (!counts) {
+      counts = { indexCount: 0, triCount: 0 };
+      fidCounts.set(fid, counts);
+    }
+    counts.indexCount += 3;
+    counts.triCount++;
+  }
+
+  const featureIdIndexMap: Record<number, FeatureIdIndexEntry> = {};
+  const triangleIndexMap: Record<number, FeatureIdIndexEntry> = {};
+  let totalLength = 0;
+  let triTotal = 0;
+  let offset = 0;
+  let triOffset = 0;
+  for (const [fid, counts] of fidCounts) {
+    featureIdIndexMap[fid] = { offset, length: counts.indexCount };
+    triangleIndexMap[fid] = { offset: triOffset, length: counts.triCount };
+    offset += counts.indexCount;
+    triOffset += counts.triCount;
+    totalLength += counts.indexCount;
+    triTotal += counts.triCount;
+  }
+
+  const buffer = createMatchingIndexArray(sourceIndex, totalLength);
+  const triangleIndices = new Uint32Array(triTotal);
+
+  const writePositions = new Map<number, { idx: number; tri: number }>();
+  let triIndex = 0;
   for (let i = 0; i < sourceIndex.length; i += 3) {
     const a = sourceIndex[i]!;
     const b = sourceIndex[i + 1]!;
     const c = sourceIndex[i + 2]!;
     const fid = featureIdAttr.getX(a);
 
-    let chunk = fidChunks.get(fid);
-    if (!chunk) {
-      chunk = [];
-      fidChunks.set(fid, chunk);
+    let wp = writePositions.get(fid);
+    if (!wp) {
+      wp = { idx: 0, tri: 0 };
+      writePositions.set(fid, wp);
     }
-    chunk.push(a, b, c);
 
-    let triChunk = fidTriangleChunks.get(fid);
-    if (!triChunk) {
-      triChunk = [];
-      fidTriangleChunks.set(fid, triChunk);
-    }
-    triChunk.push(i / 3);
-  }
+    const fidEntry = featureIdIndexMap[fid]!;
+    const triEntry = triangleIndexMap[fid]!;
 
-  let totalLength = 0;
-  for (const chunk of fidChunks.values()) {
-    totalLength += chunk.length;
-  }
+    buffer[fidEntry.offset + wp.idx] = a;
+    buffer[fidEntry.offset + wp.idx + 1] = b;
+    buffer[fidEntry.offset + wp.idx + 2] = c;
+    wp.idx += 3;
 
-  const buffer = createMatchingIndexArray(sourceIndex, totalLength);
-  const featureIdIndexMap: Record<number, FeatureIdIndexEntry> = {};
-  let offset = 0;
-  for (const [fid, chunk] of fidChunks) {
-    buffer.set(chunk, offset);
-    featureIdIndexMap[fid] = { offset, length: chunk.length };
-    offset += chunk.length;
-  }
-
-  let triTotal = 0;
-  for (const chunk of fidTriangleChunks.values()) triTotal += chunk.length;
-  const triangleIndices = new Uint32Array(triTotal);
-  const triangleIndexMap: Record<number, FeatureIdIndexEntry> = {};
-  let triOffset = 0;
-  for (const [fid, chunk] of fidTriangleChunks) {
-    triangleIndices.set(chunk, triOffset);
-    triangleIndexMap[fid] = { offset: triOffset, length: chunk.length };
-    triOffset += chunk.length;
+    triangleIndices[triEntry.offset + wp.tri] = triIndex;
+    wp.tri++;
+    triIndex++;
   }
 
   return { featureIdIndexMap, buffer, triangleIndexMap, triangleIndices };

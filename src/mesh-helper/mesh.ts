@@ -21,6 +21,7 @@ import {
   createMatchingIndexArray,
   getRegisteredFeatureIdIndex,
   type FeatureIdIndexData,
+  type FeatureIdIndexEntry,
 } from "./feature-id-index";
 import {
   cropPrecomputedEdgesForFids,
@@ -191,17 +192,17 @@ export function buildVisibleIndexExcludingHiddenFids(
   );
 
   let totalLength = 0;
-  for (const fidKey in featureIdIndexMap) {
+  const visibleEntries: FeatureIdIndexEntry[] = [];
+  for (const [fidKey, entry] of Object.entries(featureIdIndexMap)) {
     if (!hiddenFids.has(Number(fidKey))) {
-      totalLength += featureIdIndexMap[fidKey]!.length;
+      totalLength += entry.length;
+      visibleEntries.push(entry);
     }
   }
 
   const result = createMatchingIndexArray(sourceIndex, totalLength);
   let writeOffset = 0;
-  for (const fidKey in featureIdIndexMap) {
-    if (hiddenFids.has(Number(fidKey))) continue;
-    const entry = featureIdIndexMap[fidKey]!;
+  for (const entry of visibleEntries) {
     result.set(
       buffer.subarray(entry.offset, entry.offset + entry.length),
       writeOffset,
