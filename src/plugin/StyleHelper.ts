@@ -13,6 +13,7 @@ import type { MeshPartVisibilityConfig } from "../mesh-helper";
 import { buildStyleConditionEvaluatorMap } from "../appearance";
 import { getFeatureIdAttributesFromStyleConfig } from "../appearance";
 import {
+  appearanceGroupKey,
   applyStyleAppearanceToMesh,
   buildAppearanceGroupsFromPropertyMap,
   detachStyledMeshFromScene,
@@ -74,6 +75,8 @@ export class StyleHelper {
   private styleCollectors: MeshCollector[] = [];
   /** 样式代际 uid，每次 applyStyle 递增，用于瓦片级 subset/split 缓存键 */
   private _generationUid = 0;
+  /** 同一代际内下一个 collector 的 condition 序号 */
+  private _nextConditionIndex = 0;
   private materialBuilder: MaterialBuilder;
 
   constructor(private context: StyleHelperContext, materialBuilder: MaterialBuilder) {
@@ -133,6 +136,9 @@ export class StyleHelper {
   /**
    * 属性表或瓦片 mesh 就绪后补建样式收集器。
    * 早于模型加载时 `setStyle` 可能只写入配置、未创建 collector；应在 `load-model` 等时机调用。
+   *
+   * 收集器已存在时，会将新加载瓦片上的 feature id **增量合并**进现有 Collector，
+   * 避免 OID 列表冻结在首批瓦片导致后续构件不可见。
    */
   ensureStyleApplied(): void {
     const style = this.style;
@@ -143,7 +149,6 @@ export class StyleHelper {
     ) {
       return;
     }
-    if (this.styleCollectors.length > 0) return;
 
     const resolved = this.resolveStyleFromTiles();
     if (!resolved) return;
@@ -153,7 +158,12 @@ export class StyleHelper {
     );
     if (!hasGroups) return;
 
-    this.applyStyle();
+    if (this.styleCollectors.length === 0) {
+      this.applyStyle();
+      return;
+    }
+
+    this.mergeStyleCollectorsFromTiles(resolved);
   }
 
   /**
@@ -229,6 +239,114 @@ export class StyleHelper {
     return { channelGroups };
   }
 
+  private buildStyleGroupLookupKey(
+    featureIdAttribute: number,
+    appearance: StyleAppearance,
+  ): string {
+    return `${featureIdAttribute}:${appearanceGroupKey(appearance)}`;
+  }
+
+  private buildStyleCollectorLookup(): Map<string, MeshCollector> {
+    const lookup = new Map<string, MeshCollector>();
+    for (const collector of this.styleCollectors) {
+      const appearance = this.collectorAppearanceByKey.get(
+        collector.getInteractionGroupKey(),
+      );
+      if (!appearance) continue;
+      lookup.set(
+        this.buildStyleGroupLookupKey(
+          collector.getFeatureIdAttribute(),
+          appearance,
+        ),
+        collector,
+      );
+    }
+    return lookup;
+  }
+
+  /**
+   * 将当前已加载瓦片解析出的 appearance 分组合并进现有 Collector（仅追加新 OID / 新分组）。
+   */
+  private mergeStyleCollectorsFromTiles(resolved: {
+    channelGroups: Array<{
+      featureIdAttribute: number;
+      groups: ReturnType<typeof buildAppearanceGroupsFromPropertyMap>["groups"];
+    }>;
+  }): void {
+    const rootGroup = this.context.getRootGroup();
+    if (!rootGroup) return;
+
+    const maps: MeshAppearanceMaps = {
+      originalMaterialByMesh: this.originalMaterialByMesh,
+      originalTransformByMesh: this.originalTransformByMesh,
+    };
+    const lookup = this.buildStyleCollectorLookup();
+    const generationUid = this._generationUid;
+
+    for (const { featureIdAttribute, groups } of resolved.channelGroups) {
+      for (const { appearance, featureIds } of groups.values()) {
+        const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
+        const lookupKey = this.buildStyleGroupLookupKey(
+          featureIdAttribute,
+          appearance,
+        );
+        const existing = lookup.get(lookupKey);
+
+        if (existing) {
+          existing.mergeFeatureIds(sortedIds);
+          continue;
+        }
+
+        const collector = this.registerStyleCollector(
+          appearance,
+          sortedIds,
+          featureIdAttribute,
+          generationUid,
+          rootGroup,
+          maps,
+        );
+        lookup.set(lookupKey, collector);
+      }
+    }
+  }
+
+  private registerStyleCollector(
+    appearance: StyleAppearance,
+    sortedIds: number[],
+    featureIdAttribute: number,
+    generationUid: number,
+    rootGroup: Object3D,
+    maps: MeshAppearanceMaps,
+  ): MeshCollector {
+    const collector = this.context.getMeshCollectorByCondition({
+      featureIds: sortedIds,
+      featureIdAttribute,
+      meshCacheNamespace: MESH_CACHE_NAMESPACE_STYLE,
+      generationUid,
+      conditionIndex: this._nextConditionIndex++,
+    });
+    this.styleCollectors.push(collector);
+
+    const groupKey = collector.getInteractionGroupKey();
+    this.collectorAppearanceByKey.set(groupKey, appearance);
+    const handler = () => {
+      if (!rootGroup) return;
+      collector.meshes.forEach((mesh) => {
+        applyStyleAppearanceToMesh(
+          mesh,
+          appearance,
+          rootGroup,
+          maps,
+          this.materialBuilder,
+        );
+      });
+    };
+    this.meshChangeHandlers.set(groupKey, handler);
+    collector.addEventListener("mesh-change", handler);
+    handler();
+    return collector;
+  }
+
   private applyStyle(): void {
     const style = this.style;
     if (!style) return;
@@ -276,31 +394,19 @@ export class StyleHelper {
     };
 
     const generationUid = ++this._generationUid;
-    let conditionIndex = 0;
+    this._nextConditionIndex = 0;
 
     for (const { featureIdAttribute, groups } of resolved.channelGroups) {
       for (const { appearance, featureIds } of groups.values()) {
         const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
-        const collector = this.context.getMeshCollectorByCondition({
-          featureIds: sortedIds,
+        this.registerStyleCollector(
+          appearance,
+          sortedIds,
           featureIdAttribute,
-          meshCacheNamespace: MESH_CACHE_NAMESPACE_STYLE,
           generationUid,
-          conditionIndex: conditionIndex++,
-        });
-        this.styleCollectors.push(collector);
-
-        const groupKey = collector.getInteractionGroupKey();
-        this.collectorAppearanceByKey.set(groupKey, appearance);
-        const handler = () => {
-          if (!rootGroup) return;
-          collector.meshes.forEach((mesh) => {
-            applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps, this.materialBuilder);
-          });
-        };
-        this.meshChangeHandlers.set(groupKey, handler);
-        collector.addEventListener("mesh-change", handler);
-        handler();
+          rootGroup,
+          maps,
+        );
       }
     }
   }
