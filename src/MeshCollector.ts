@@ -578,6 +578,30 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   }
 
   /**
+   * 将新 feature id 合并进收集器查询（去重、排序）。
+   * 不触发全量 `_updateMeshes`；后续由 `appendMeshesForTileScene` 增量补 mesh。
+   * @returns 本次新增的 feature id 列表
+   */
+  mergeFeatureIds(incoming: readonly number[]): number[] {
+    if (this._disposed || incoming.length === 0) return [];
+
+    const current = new Set(this.resolvedQuery.featureIds);
+    const added: number[] = [];
+    for (const id of incoming) {
+      if (!current.has(id)) {
+        current.add(id);
+        added.push(id);
+      }
+    }
+    if (added.length === 0) return [];
+
+    this.resolvedQuery.featureIds = normalizeMeshCollectorFeatureIds([
+      ...current,
+    ]);
+    return added;
+  }
+
+  /**
    * 全量重建 split mesh（仅在样式/高亮整体更新或收集器首次注册时调用）。
    */
   _updateMeshes(): void {
