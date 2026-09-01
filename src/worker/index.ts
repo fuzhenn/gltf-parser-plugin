@@ -93,7 +93,7 @@ function load(root: string, data: any, options: any) {
  * Worker message handler
  */
 self.onmessage = function (event: MessageEvent) {
-  const { method, fetchOptions, loaderId, requestId, buffer, root } =
+  const { method, fetchOptions, loaderId, requestId, buffer, root, edges } =
     event.data;
 
   if (method === "parseTile") {
@@ -121,7 +121,9 @@ self.onmessage = function (event: MessageEvent) {
 
         // Complete dequantization and decoding in Worker
         try {
-          const { data: processedData, transferables } = processGLTFData(data);
+          const { data: processedData, transferables } = processGLTFData(data, {
+            edges: edges === true,
+          });
           self.postMessage(
             {
               type: "success",

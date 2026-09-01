@@ -99,7 +99,15 @@ function buildFeatureIdIndices(
  * @param data - Raw GLTF data from loader
  * @returns Processed data with transferables array
  */
-export function processGLTFData(data: any): {
+export type ProcessGLTFDataOptions = {
+  /** Precompute feature edges for wireframe highlight / split cropping */
+  edges?: boolean;
+};
+
+export function processGLTFData(
+  data: any,
+  options: ProcessGLTFDataOptions = {},
+): {
   data: any;
   transferables: ArrayBuffer[];
 } {
@@ -183,6 +191,7 @@ export function processGLTFData(data: any): {
           | Float32Array
           | undefined;
         if (
+          options.edges &&
           positionArray &&
           indexArray &&
           indexArray.length >= 3 &&

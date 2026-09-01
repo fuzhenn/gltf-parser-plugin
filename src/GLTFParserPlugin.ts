@@ -138,6 +138,7 @@ export class GLTFParserPlugin {
       metadata: true,
       maxWorkers: navigator.hardwareConcurrency || 4,
       useIndexedDB: false,
+      edges: false,
       ...options,
     };
 
@@ -190,6 +191,7 @@ export class GLTFParserPlugin {
       metadata: this._options.metadata,
       materialBuilder: materialBuilder,
       fetchOptions: this._fetchOptions,
+      edges: this._options.edges,
     });
     tiles.manager.addHandler(this._gltfRegex, this._loader);
 

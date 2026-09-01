@@ -40,6 +40,8 @@ export interface GLTFWorkerLoaderOptions {
   materialBuilder: MaterialBuilder;
   /** Network request options passed to Worker parsing */
   fetchOptions?: RequestInit;
+  /** Precompute feature edges in Worker during tile parsing */
+  edges?: boolean;
 }
 
 let uuid = 0;
@@ -51,6 +53,7 @@ export class GLTFWorkerLoader extends Loader {
   private _metadata: boolean = true;
   private _materialBuilder: MaterialBuilder;
   private _fetchOptions: RequestInit = {};
+  private _edges: boolean = false;
   private _loaderId = uuid++;
   private _callbacks = new Map<
     number,
@@ -63,6 +66,7 @@ export class GLTFWorkerLoader extends Loader {
     this._metadata = options.metadata ?? true;
     this._materialBuilder = options.materialBuilder;
     this._fetchOptions = options.fetchOptions ?? {};
+    this._edges = options.edges ?? false;
 
     this.addListeners();
   }
@@ -130,6 +134,7 @@ export class GLTFWorkerLoader extends Loader {
           loaderId: this._loaderId,
           requestId,
           fetchOptions: this._fetchOptions,
+          edges: this._edges,
         },
         [buffer],
       );
