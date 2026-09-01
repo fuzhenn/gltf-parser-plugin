@@ -4,7 +4,7 @@ import { resolve } from "path";
 import { readFileSync } from "fs";
 
 const pkg = JSON.parse(
-  readFileSync(resolve(__dirname, "package.json"), "utf-8"),
+  readFileSync(resolve(import.meta.dirname, "package.json"), "utf-8"),
 );
 
 export default defineConfig({
@@ -32,7 +32,7 @@ export default defineConfig({
   build: {
     outDir: "build",
     lib: {
-      entry: resolve(__dirname, "src/index.ts"),
+      entry: resolve(import.meta.dirname, "src/index.ts"),
       name: "MaptalksTilerPlugin",
       formats: ["es"],
       fileName: () => `${pkg.name}.module.js`,
