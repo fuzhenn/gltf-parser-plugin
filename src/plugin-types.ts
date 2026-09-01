@@ -87,6 +87,13 @@ export interface GLTFParserPluginOptions {
   style?: StyleConfig | null;
 
   /**
+   * 是否在 Worker 解析 tile 时预计算特征边（供线框高亮等 split 裁剪使用）。
+   * 开启会增加 tile 加载耗时；默认关闭。
+   * @default false
+   */
+  edges?: boolean;
+
+  /**
    * 网络请求选项，语义与 `TilesRenderer.fetchOptions` 一致。
    * 用于 Worker 内 GLTF 解析及 schema 拉取（如 Authorization 等 headers）。
    */
