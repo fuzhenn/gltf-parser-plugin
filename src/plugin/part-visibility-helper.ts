@@ -57,40 +57,6 @@ export class PartVisibilityHelper {
     this.applyToAllTiles();
   }
 
-  /**
-   * @deprecated 当前不支持 imperative 按 id 隐藏，请使用 show/conditions 规则层
-   */
-  hidePartsByFeatureAttribute(
-    _featureIds: number[],
-    _featureIdAttribute: number,
-  ): void {}
-
-  /** @deprecated 当前不支持 imperative 按 id 显示 */
-  showPartsByFeatureAttribute(
-    _featureIds: number[],
-    _featureIdAttribute: number,
-  ): void {}
-
-  /** @deprecated 请使用 hidePartsByFeatureAttribute(ids, 0) */
-  hidePartsByOids(oids: number[]): void {
-    this.hidePartsByFeatureAttribute(oids, 0);
-  }
-
-  /** @deprecated 请使用 showPartsByFeatureAttribute(ids, 0) */
-  showPartsByOids(oids: number[]): void {
-    this.showPartsByFeatureAttribute(oids, 0);
-  }
-
-  /** @deprecated 请使用 hidePartsByFeatureAttribute(ids, 1) */
-  hidePartsByPids(pids: number[]): void {
-    this.hidePartsByFeatureAttribute(pids, 1);
-  }
-
-  /** @deprecated 请使用 showPartsByFeatureAttribute(ids, 1) */
-  showPartsByPids(pids: number[]): void {
-    this.showPartsByFeatureAttribute(pids, 1);
-  }
-
   reapplyHidden(): void {
     this.syncToIndexVisibility();
     this.applyToAllTiles();

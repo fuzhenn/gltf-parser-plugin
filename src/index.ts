@@ -12,11 +12,8 @@ export {
   MESH_CACHE_NAMESPACE_STYLE,
   MeshSplitResolver,
   disposeTileMeshSplitGeometryCache,
-  meshCollectorGroupKey,
   meshCollectorQueryCacheKey,
   normalizeMeshCollectorFeatureIds,
-  normalizeMeshCollectorOids,
-  normalizeMeshCollectorPids,
   resolveMeshCollectorQuery,
 } from "./MeshCollector";
 export type {

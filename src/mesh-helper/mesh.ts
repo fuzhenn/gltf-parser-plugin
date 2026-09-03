@@ -110,7 +110,7 @@ function getPartIdMap(
 
 /**
  * split 必须从「隐藏原片前」的完整 index 抽取三角形。
- * `hidePartsByOids` 会改写 `geometry.index`；若用当前 index，被高亮 OID 的三角已被删掉 → split 为空。
+ * 显隐规则会改写 `geometry.index`；若用当前 index，被隐藏构件的三角已被删掉 → split 为空。
  */
 /** 完整 index（优先 userData 备份），供 split / hide 使用 */
 export function getFeatureSplitSourceIndex(

@@ -40,7 +40,7 @@ export interface ModelInfo {
  */
 export interface GLTFParserPluginOptions {
   /**
-   * WebGLRenderer instance, required for mesh helper features (hidePartsByOids, etc.)
+   * WebGLRenderer instance, required for mesh helper features (part visibility, style, highlight, etc.)
    */
   renderer?: WebGLRenderer;
   /**

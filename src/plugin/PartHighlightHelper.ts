@@ -76,10 +76,6 @@ export interface HighlightOptions {
   featureIds?: number[];
   /** 顶点属性索引，0 → `_FEATURE_ID_0`，1 → `_FEATURE_ID_1`；默认 0 */
   featureIdAttribute?: number;
-  /** @deprecated 请使用 featureIds + featureIdAttribute: 0 */
-  oids?: number[];
-  /** @deprecated 请使用 featureIds + featureIdAttribute: 1 */
-  pids?: number[];
 }
 
 /** @deprecated 请使用 HighlightOptions */
@@ -103,35 +99,12 @@ export interface ResolvedHighlightOptions {
 function resolveHighlightOptions(
   options: HighlightOptions,
 ): ResolvedHighlightOptions {
-  const hasFeatureIds =
-    normalizeMeshCollectorFeatureIds(options.featureIds ?? []).length > 0;
-  const hasOids =
-    normalizeMeshCollectorFeatureIds(options.oids ?? []).length > 0;
-  const hasPids =
-    normalizeMeshCollectorFeatureIds(options.pids ?? []).length > 0;
-  const legacyCount = [hasFeatureIds, hasOids, hasPids].filter(Boolean).length;
-  if (legacyCount > 1) {
-    throw new Error(
-      "HighlightOptions cannot specify more than one of featureIds, oids, and pids",
-    );
-  }
-
-  let featureIds: number[] = [];
+  const featureIds = normalizeMeshCollectorFeatureIds(options.featureIds ?? []);
   let featureIdAttribute = normalizeFeatureIdAttribute(
     options.featureIdAttribute,
   );
 
-  if (hasFeatureIds) {
-    featureIds = normalizeMeshCollectorFeatureIds(options.featureIds!);
-  } else if (hasOids) {
-    featureIds = normalizeMeshCollectorFeatureIds(options.oids!);
-    featureIdAttribute = 0;
-  } else if (hasPids) {
-    featureIds = normalizeMeshCollectorFeatureIds(options.pids!);
-    featureIdAttribute = 1;
-  }
-
-  if (legacyCount === 0 && options.featureIdAttribute === undefined) {
+  if (featureIds.length === 0 && options.featureIdAttribute === undefined) {
     const attrs = getFeatureIdAttributesFromStyleConfig({
       show: options.show,
       conditions: options.conditions,
@@ -187,7 +160,7 @@ function toStyleAppearance(ha: HighlightAppearance): StyleAppearance {
 
 function cloneHighlightOptions(options: HighlightOptions): HighlightOptions {
   const resolved = resolveHighlightOptions(options);
-  const cloned: HighlightOptions = {
+  return {
     name: resolved.name,
     show: resolved.show,
     featureIdAttribute: resolved.featureIdAttribute,
@@ -196,13 +169,6 @@ function cloneHighlightOptions(options: HighlightOptions): HighlightOptions {
       ([c, h]): HighlightCondition => [c, { ...h }],
     ),
   };
-  if (resolved.featureIdAttribute === 0 && resolved.featureIds.length > 0) {
-    cloned.oids = resolved.featureIds.slice();
-  }
-  if (resolved.featureIdAttribute === 1 && resolved.featureIds.length > 0) {
-    cloned.pids = resolved.featureIds.slice();
-  }
-  return cloned;
 }
 
 function highlightAppearanceNeedsTransform(ha: HighlightAppearance): boolean {
@@ -564,8 +530,6 @@ export class PartHighlightHelper {
     this.highlight({
       ...options,
       featureIdAttribute: options.featureIdAttribute ?? 1,
-      featureIds: options.featureIds ?? options.pids,
-      pids: options.pids,
     });
   }
 

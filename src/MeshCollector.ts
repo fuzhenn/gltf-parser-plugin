@@ -1,4 +1,10 @@
-import { BufferGeometry, EventDispatcher, InstancedMesh, Mesh, Object3D } from "three";
+import {
+  BufferGeometry,
+  EventDispatcher,
+  InstancedMesh,
+  Mesh,
+  Object3D,
+} from "three";
 import { TilesRenderer } from "3d-tiles-renderer";
 import {
   buildMergedSplitGeometryForTileMesh,
@@ -78,7 +84,9 @@ function collectCandidateFeatureSourcesInScene(
   const candidateTiles = new Set<Mesh>();
   scene.traverse((child) => {
     if (!isTileFeatureSource(child)) return;
-    const idMap = child.userData?.[mapKey] as Record<number, number> | undefined;
+    const idMap = child.userData?.[mapKey] as
+      | Record<number, number>
+      | undefined;
     if (!idMap) return;
     for (const partId of idSet) {
       if (idMap[partId] !== undefined) {
@@ -163,14 +171,6 @@ export interface MeshCollectorQuery {
    */
   featureIdAttribute?: number;
   /**
-   * @deprecated 请使用 `featureIds` + `featureIdAttribute: 0`
-   */
-  oids?: readonly number[];
-  /**
-   * @deprecated 请使用 `featureIds` + `featureIdAttribute: 1`
-   */
-  pids?: readonly number[];
-  /**
    * 属性表达式，如 `type === "wall"`；也支持 `{ content, featureIdAttribute }`
    */
   condition?: string | StyleConditionDescriptor;
@@ -209,16 +209,6 @@ export function normalizeMeshCollectorFeatureIds(
   return [...new Set(featureIds)].sort((a, b) => a - b);
 }
 
-/** @deprecated 请使用 normalizeMeshCollectorFeatureIds */
-export function normalizeMeshCollectorOids(oids: readonly number[]): number[] {
-  return normalizeMeshCollectorFeatureIds(oids);
-}
-
-/** @deprecated 请使用 normalizeMeshCollectorFeatureIds */
-export function normalizeMeshCollectorPids(pids: readonly number[]): number[] {
-  return normalizeMeshCollectorFeatureIds(pids);
-}
-
 function resolveConditionString(
   condition?: string | StyleConditionDescriptor,
 ): string | undefined {
@@ -232,36 +222,14 @@ function resolveConditionString(
   return trimmed || undefined;
 }
 
-/** 解析 MeshCollectorQuery，兼容 oids / pids 旧字段 */
+/** 解析 MeshCollectorQuery */
 export function resolveMeshCollectorQuery(
   query: MeshCollectorQuery,
 ): ResolvedMeshCollectorQuery {
-  const hasFeatureIds =
-    normalizeMeshCollectorFeatureIds(query.featureIds ?? []).length > 0;
-  const hasOids = normalizeMeshCollectorFeatureIds(query.oids ?? []).length > 0;
-  const hasPids = normalizeMeshCollectorFeatureIds(query.pids ?? []).length > 0;
-
-  const legacyCount = [hasFeatureIds, hasOids, hasPids].filter(Boolean).length;
-  if (legacyCount > 1) {
-    throw new Error(
-      "MeshCollectorQuery cannot specify more than one of featureIds, oids, and pids",
-    );
-  }
-
-  let featureIds: number[] = [];
+  const featureIds = normalizeMeshCollectorFeatureIds(query.featureIds ?? []);
   let featureIdAttribute = normalizeFeatureIdAttribute(
     query.featureIdAttribute,
   );
-
-  if (hasFeatureIds) {
-    featureIds = normalizeMeshCollectorFeatureIds(query.featureIds!);
-  } else if (hasOids) {
-    featureIds = normalizeMeshCollectorFeatureIds(query.oids!);
-    featureIdAttribute = 0;
-  } else if (hasPids) {
-    featureIds = normalizeMeshCollectorFeatureIds(query.pids!);
-    featureIdAttribute = 1;
-  }
 
   const conditionFromQuery = resolveConditionString(query.condition);
   const conditionAttr =
@@ -269,7 +237,7 @@ export function resolveMeshCollectorQuery(
       ? normalizeFeatureIdAttribute(query.condition.featureIdAttribute)
       : undefined;
 
-  if (conditionAttr !== undefined && legacyCount === 0) {
+  if (conditionAttr !== undefined && featureIds.length === 0) {
     featureIdAttribute = conditionAttr;
   }
 
@@ -310,14 +278,6 @@ export const MESH_CACHE_NAMESPACE_STYLE = "style";
 /** PartHighlightHelper 传入 `meshCollectorQueryCacheKey` 等语义区分 */
 export const MESH_CACHE_NAMESPACE_HIGHLIGHT = "highlight";
 
-/** @deprecated 请使用 meshCollectorQueryCacheKey({ featureIds, featureIdAttribute: 0 }) */
-export function meshCollectorGroupKey(oids: readonly number[]): string {
-  return meshCollectorQueryCacheKey({
-    featureIds: oids,
-    featureIdAttribute: 0,
-  });
-}
-
 /**
  * 瓦片级 split mesh 缓存与按 feature id / 条件查询（原 GLTFParserPlugin 内 mesh 合并逻辑）
  */
@@ -338,16 +298,6 @@ export class MeshSplitResolver {
     forEachLoadedFeatureSource(tiles, (source) => {
       disposeTileMeshSplitGeometryCache(source);
     });
-  }
-
-  /** @deprecated 请使用 getMeshesByFeatureIds(featureIds, 0) */
-  getMeshesByOids(oids: readonly number[]): Mesh[] {
-    return this.getMeshesByFeatureIds(oids, 0);
-  }
-
-  /** @deprecated 请使用 getMeshesByFeatureIds(featureIds, 1) */
-  getMeshesByPids(pids: readonly number[]): Mesh[] {
-    return this.getMeshesByFeatureIds(pids, 1);
   }
 
   getMeshesByFeatureIds(
@@ -532,49 +482,8 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     return this._interactionGroupKey;
   }
 
-  getFeatureIds(): readonly number[] {
-    return this.resolvedQuery.featureIds;
-  }
-
-  getFeatureIdAttribute(): number {
-    return this.resolvedQuery.featureIdAttribute;
-  }
-
-  /** @deprecated 请使用 getFeatureIds()（featureIdAttribute 为 0 时） */
-  getOids(): readonly number[] {
-    return this.resolvedQuery.featureIdAttribute === 0
-      ? this.resolvedQuery.featureIds
-      : [];
-  }
-
-  /** @deprecated 请使用 getFeatureIds()[0]（featureIdAttribute 为 0 时） */
-  getOid(): number | undefined {
-    return this.getOids()[0];
-  }
-
-  /** @deprecated 请使用 getFeatureIds()（featureIdAttribute 为 1 时） */
-  getPids(): readonly number[] {
-    return this.resolvedQuery.featureIdAttribute === 1
-      ? this.resolvedQuery.featureIds
-      : [];
-  }
-
-  /** @deprecated 请使用 getFeatureIds()[0]（featureIdAttribute 为 1 时） */
-  getPid(): number | undefined {
-    return this.getPids()[0];
-  }
-
-  /** @deprecated 请使用 getFeatureIdAttribute() */
-  getPartIdChannel(): PartIdChannel {
-    return featureIdAttributeToChannel(this.resolvedQuery.featureIdAttribute);
-  }
-
   get meshes(): Mesh[] {
     return this._meshes;
-  }
-
-  getCondition(): string | undefined {
-    return this.resolvedQuery.condition;
   }
 
   /**

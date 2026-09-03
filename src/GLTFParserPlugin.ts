@@ -109,7 +109,7 @@ export class GLTFParserPlugin {
   private _partHighlightHelper: PartHighlightHelper | null = null;
 
   // --- Mesh helper properties ---
-  /** 构件显隐（原 `hidePartsByOids` / `showPartsByOids` 逻辑） */
+  /** 构件显隐（按 show/conditions 规则层驱动） */
   readonly partVisibility = new PartVisibilityHelper(
     () => this.tiles,
     () => this._internalData,
@@ -227,18 +227,6 @@ export class GLTFParserPlugin {
         ),
       removePartVisibilityConfigLayer: (layerId, attr) =>
         this.partVisibility.removePartVisibilityConfigLayer(layerId, attr),
-      hidePartsByFeatureAttribute: (ids, attr) =>
-        this.partVisibility.hidePartsByFeatureAttribute(ids, attr),
-      showPartsByFeatureAttribute: (ids, attr) =>
-        this.partVisibility.showPartsByFeatureAttribute(ids, attr),
-      hidePartsByOids: (oids) =>
-        this.partVisibility.hidePartsByFeatureAttribute(oids, 0),
-      showPartsByOids: (oids) =>
-        this.partVisibility.showPartsByFeatureAttribute(oids, 0),
-      hidePartsByPids: (pids) =>
-        this.partVisibility.hidePartsByFeatureAttribute(pids, 1),
-      showPartsByPids: (pids) =>
-        this.partVisibility.showPartsByFeatureAttribute(pids, 1),
       getMeshCollectorByCondition: (q) => this.getMeshCollectorByCondition(q),
       releaseMeshCollector: (c) => this.releaseMeshCollector(c),
       clearTileSubsetCache: () => this.meshSplit.clearCache(),
@@ -755,7 +743,7 @@ export class GLTFParserPlugin {
       return union.getCenter(new Vector3());
     }
 
-    const meshes = this.meshSplit.getMeshesByOids(oids);
+    const meshes = this.meshSplit.getMeshesByFeatureIds(oids, 0);
     if (meshes.length === 0) return null;
 
     const meshBox = new Box3();
