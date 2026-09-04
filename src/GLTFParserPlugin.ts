@@ -22,12 +22,12 @@ import {
   MeshSplitResolver,
   resolveMeshCollectorQuery,
   type MeshCollectorQuery,
-} from "./MeshCollector";
+} from "./MeshCollector-deleted";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
 } from "./appearance";
-import { GLTFWorkerLoader } from "./GLTFWorkerLoader";
+import { GLTFWorkerLoader } from "./loader";
 import type { PartEffectHost } from "./plugin/part-effect-host";
 import { StyleHelper, type StyleConfig } from "./plugin/StyleHelper";
 import {
@@ -47,6 +47,7 @@ import {
 import { tileCache } from "./db";
 import { parseEmbeddedStructureDataFromTilesSync } from "./utils/tileset-structure-uri";
 import { TilesRenderer } from "3d-tiles-renderer";
+import { StyleHelper as ConditionStyleHelper } from "./style-helper";
 
 import type {
   GLTFParserPluginOptions,
@@ -55,6 +56,27 @@ import type {
   StructureNode,
 } from "./plugin-types";
 import { defaultMaterialBuilder } from "./utils/build-materials";
+
+class MeshCollectorManager {
+  private readonly helper = new ConditionStyleHelper();
+
+  constructor(style: StyleConfig) {
+    this.helper.setStyle(style, []);
+  }
+
+  setStyleConfig(style: StyleConfig): void {
+    this.helper.setStyle(style, []);
+  }
+
+  getSplitMeshes(scene: Object3D): Mesh[] {
+    this.helper.applyStyle(scene);
+    return this.helper.getSplitMeshes(scene);
+  }
+
+  disposeTileScene(scene: Object3D): void {
+    this.helper.disposeTileScene(scene);
+  }
+}
 
 export type {
   GLTFParserPluginOptions,
@@ -127,6 +149,8 @@ export class GLTFParserPlugin {
     () => this._internalData,
   );
   private collectors: Set<MeshCollector> = new Set();
+  /** meshcc：collectors 由 MeshCollectorManager 内部管理 */
+  private _meshCollectorManager: MeshCollectorManager | null = null;
   private _fetchOptions: RequestInit = {};
 
   /**
@@ -165,25 +189,32 @@ export class GLTFParserPlugin {
       this._options.fetchOptions,
     );
 
-    const materialBuilder = this._options.materialBuilder ?? defaultMaterialBuilder;
+    const materialBuilder =
+      this._options.materialBuilder ?? defaultMaterialBuilder;
     const partFx = this._createPartEffectHost();
-    this._styleHelper = new StyleHelper({
-      getTiles: () => this.tiles,
-      setPartVisibilityConfigLayer: (layerId, attr, configs) =>
-        this.partVisibility.setPartVisibilityConfigLayer(
-          layerId,
-          attr,
-          configs,
-        ),
-      removePartVisibilityConfigLayer: (layerId, attr) =>
-        this.partVisibility.removePartVisibilityConfigLayer(layerId, attr),
-      getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
-      releaseMeshCollector: partFx.releaseMeshCollector,
-      clearTileSubsetCache: () => this.meshSplit.clearCache(),
-      getRootGroup: partFx.getRootGroup,
-      getInternalData: () => this._internalData,
-    }, materialBuilder);
-    this._partHighlightHelper = new PartHighlightHelper(partFx, materialBuilder);
+    this._styleHelper = new StyleHelper(
+      {
+        getTiles: () => this.tiles,
+        setPartVisibilityConfigLayer: (layerId, attr, configs) =>
+          this.partVisibility.setPartVisibilityConfigLayer(
+            layerId,
+            attr,
+            configs,
+          ),
+        removePartVisibilityConfigLayer: (layerId, attr) =>
+          this.partVisibility.removePartVisibilityConfigLayer(layerId, attr),
+        getMeshCollectorByCondition: partFx.getMeshCollectorByCondition,
+        releaseMeshCollector: partFx.releaseMeshCollector,
+        clearTileSubsetCache: () => this.meshSplit.clearCache(),
+        getRootGroup: partFx.getRootGroup,
+        getInternalData: () => this._internalData,
+      },
+      materialBuilder,
+    );
+    this._partHighlightHelper = new PartHighlightHelper(
+      partFx,
+      materialBuilder,
+    );
 
     // --- GLTF loader setup ---
     this._loader = new GLTFWorkerLoader(tiles.manager, {
@@ -212,7 +243,7 @@ export class GLTFParserPlugin {
 
     // 构造选项里的初始样式（需在场景已有 mesh 后，属性表与 setStyle 才可靠）
     if (this._options.style !== undefined) {
-      this._styleHelper?.setStyle(this._options.style ?? null);
+      this.setStyle(this._options.style ?? null);
     }
   }
 
@@ -569,6 +600,7 @@ export class GLTFParserPlugin {
     this._styleHelper?.applyStyleToTileScene(event.scene);
     this._partHighlightHelper?.applyHighlightToTileScene(event.scene);
     this._appendOtherCollectorsForTileScene(event.scene);
+    this._applySplitMeshesToRootGroupAll();
     this._clippingPlanesHelper.applyToScene(event.scene);
   };
 
@@ -595,6 +627,7 @@ export class GLTFParserPlugin {
     for (const collector of this.collectors) {
       collector.releaseSplitMeshesForTileScene(scene);
     }
+    this._meshCollectorManager?.disposeTileScene(scene);
     scene.traverse((obj) => {
       if (obj instanceof Mesh) {
         this.meshSplit.disposeSplitMeshesByTile(obj);
@@ -617,11 +650,56 @@ export class GLTFParserPlugin {
       this.partVisibility.applyVisibilityToScene(scene);
     }
 
-    this._styleHelper?.ensureStyleApplied();
-    this._styleHelper?.applyStyleToTileScene(scene);
     this._partHighlightHelper?.applyHighlightToTileScene(scene);
     this._appendOtherCollectorsForTileScene(scene);
     this._clippingPlanesHelper.applyToScene(scene);
+  }
+
+  private _applySplitMeshesToRootGroupAll(): void {
+    const rootGroup = this.tiles?.group;
+    if (!rootGroup || !this._meshCollectorManager || !this.tiles) return;
+
+    for (const tile of this.tiles.visibleTiles) {
+      const scene = (tile as TileWithCache).engineData?.scene;
+      if (!scene) continue;
+
+      const splitMeshes = this._meshCollectorManager.getSplitMeshes(scene);
+      for (const mesh of splitMeshes) {
+        if (mesh.parent !== rootGroup) {
+          rootGroup.add(mesh);
+        }
+      }
+    }
+  }
+
+  _setMeshCollectorManagerStyleConfig(style: StyleConfig | null): void {
+    if (!style) {
+      this._disposeMeshCollectorManager();
+      return;
+    }
+
+    if (!this._meshCollectorManager) {
+      this._meshCollectorManager = new MeshCollectorManager(style);
+    } else {
+      this._meshCollectorManager.setStyleConfig(style);
+    }
+
+    this._applySplitMeshesToRootGroupAll();
+  }
+
+  private _disposeMeshCollectorManager(): void {
+    if (!this._meshCollectorManager) return;
+
+    if (this.tiles) {
+      for (const tile of this.tiles.activeTiles) {
+        const scene = (tile as TileWithCache).engineData?.scene;
+        if (scene) {
+          this._meshCollectorManager.disposeTileScene(scene);
+        }
+      }
+    }
+
+    this._meshCollectorManager = null;
   }
 
   /**
@@ -798,6 +876,7 @@ export class GLTFParserPlugin {
    */
   setStyle(style: StyleConfig | null): void {
     this._styleHelper?.setStyle(style);
+    this._setMeshCollectorManagerStyleConfig(style);
   }
 
   /**
@@ -816,6 +895,7 @@ export class GLTFParserPlugin {
    */
   clearStyle(): void {
     this._styleHelper?.clearStyle();
+    this._setMeshCollectorManagerStyleConfig(null);
   }
 
   /**
@@ -933,6 +1013,8 @@ export class GLTFParserPlugin {
     this._interactionFilter.dispose();
 
     this.meshSplit.clearCache();
+
+    this._disposeMeshCollectorManager();
 
     this._structureData = null;
     this._oidNodeMap.clear();

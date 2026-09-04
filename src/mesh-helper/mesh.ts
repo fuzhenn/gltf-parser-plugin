@@ -13,15 +13,13 @@ import {
 import { TilesRenderer } from "3d-tiles-renderer";
 
 import type { InstanceFeatures } from "../mesh/types";
-import { measureInstanceSubsetForTile } from "./instance-split";
-import { disposeSubsetInstancedMeshResources } from "./instance-split";
+import { measureInstanceSplitForTile } from "./instance-split";
+import { disposeSplitInstancedMeshResources } from "./instance-split";
 
 import {
-  buildFeatureIdIndexMap,
-  createMatchingIndexArray,
-  getRegisteredFeatureIdIndex,
+  createIndexArray,
   type FeatureIdIndexData,
-  type FeatureIdIndexEntry,
+  type IndexRange,
 } from "./feature-id-index";
 import {
   cropPrecomputedEdgesForFids,
@@ -117,97 +115,68 @@ export function getFeatureSplitSourceIndex(
   tileMesh: Mesh,
   geometry: BufferGeometry,
 ): ArrayLike<number> | null {
-  const stored = (tileMesh.userData as { _originalIndex?: ArrayLike<number> })
-    ._originalIndex;
-  if (stored && stored.length > 0) return stored;
+  const stored = tileMesh.userData._originalIndex;
+  if (stored instanceof BufferAttribute) {
+    const arr = stored.array;
+    if (arr && arr.length > 0) return arr;
+  }
   return geometry.index?.array ?? null;
 }
 
-/** 首次隐藏前拷贝完整 index，避免在已过滤的 index 上备份 */
-export function snapshotOriginalIndexForMesh(
+/**
+ * 首次过滤前把 geometry.index 的属性对象引用备份到 userData._originalIndex，
+ */
+export function snapshotOriginalIndex(
   mesh: Mesh,
   geometry: BufferGeometry,
-): Uint16Array | Uint32Array | null {
-  const src = getFeatureSplitSourceIndex(mesh, geometry);
-  if (!src || src.length === 0) return null;
-  if (src instanceof Uint32Array) return new Uint32Array(src);
-  if (src instanceof Uint16Array) return new Uint16Array(src);
-  return new Uint32Array(Array.from(src));
+): BufferAttribute | null {
+  const stored = mesh.userData._originalIndex;
+  if (stored instanceof BufferAttribute) return stored;
+  const current = geometry.index;
+  if (!current) return null;
+  mesh.userData._originalIndex = current;
+  return current;
 }
 
-type FeatureIdIndexCache = FeatureIdIndexData & {
-  sourceIndex: ArrayLike<number>;
-  featureIdAttr: BufferAttribute;
-};
-
 /**
- * 取按 fid 分组的 index：
- * 1. 优先用 worker 解析时预构建、并按 BufferAttribute 注册的结果（主线程零遍历）；
- * 2. 仅当某几何未携带预构建数据时，才回退到主线程现场构建（按 mesh.userData 缓存）。
+ * 取 worker 预构建并挂在 mesh.userData 上的按 fid 分组 index。
  */
 function getFeatureIdIndexCache(
-  mesh: Mesh | undefined,
-  sourceIndex: ArrayLike<number>,
-  featureIdAttr: BufferAttribute,
-): FeatureIdIndexData {
-  const precomputed = getRegisteredFeatureIdIndex(featureIdAttr);
-  if (precomputed) return precomputed;
-
-  if (mesh) {
-    const userData = mesh.userData as {
-      _featureIdIndexCache?: FeatureIdIndexCache;
-    };
-    const cached = userData._featureIdIndexCache;
-    if (
-      cached &&
-      cached.sourceIndex === sourceIndex &&
-      cached.featureIdAttr === featureIdAttr
-    ) {
-      return cached;
-    }
-
-    const built = buildFeatureIdIndexMap(sourceIndex, featureIdAttr);
-    userData._featureIdIndexCache = {
-      sourceIndex,
-      featureIdAttr,
-      ...built,
-    };
-    return userData._featureIdIndexCache;
-  }
-
-  return buildFeatureIdIndexMap(sourceIndex, featureIdAttr);
+  mesh: Mesh,
+  attrName: string,
+): FeatureIdIndexData | undefined {
+  return mesh.userData._featureIdIndexCaches?.[attrName];
 }
 
 /** 排除 hiddenFids 后，按 fid 索引表拼接可见 index */
-export function buildVisibleIndexExcludingHiddenFids(
+export function buildVisibleIndex(
   mesh: Mesh,
   sourceIndex: ArrayLike<number>,
-  featureIdAttr: BufferAttribute,
+  attrName: string,
   hiddenFids: Set<number>,
 ): Uint16Array | Uint32Array {
-  const { featureIdIndexMap, buffer } = getFeatureIdIndexCache(
-    mesh,
-    sourceIndex,
-    featureIdAttr,
-  );
+  const cache = getFeatureIdIndexCache(mesh, attrName);
+  if (!cache) return createIndexArray(sourceIndex, 0);
+
+  const { featureIdIndexMap, buffer } = cache;
 
   let totalLength = 0;
-  const visibleEntries: FeatureIdIndexEntry[] = [];
+  const indexRanges: IndexRange[] = [];
   for (const [fidKey, entry] of Object.entries(featureIdIndexMap)) {
     if (!hiddenFids.has(Number(fidKey))) {
       totalLength += entry.length;
-      visibleEntries.push(entry);
+      indexRanges.push(entry);
     }
   }
 
-  const result = createMatchingIndexArray(sourceIndex, totalLength);
+  const result = createIndexArray(sourceIndex, totalLength);
   let writeOffset = 0;
-  for (const entry of visibleEntries) {
+  for (const range of indexRanges) {
     result.set(
-      buffer.subarray(entry.offset, entry.offset + entry.length),
+      buffer.subarray(range.offset, range.offset + range.length),
       writeOffset,
     );
-    writeOffset += entry.length;
+    writeOffset += range.length;
   }
   return result;
 }
@@ -232,7 +201,8 @@ function resolveMergedSplitContext(
   const resolved = resolveFeatureChannelOnMesh(originalMesh, channel);
   if (!resolved) return null;
 
-  const { geometry, featureIdAttr } = resolved;
+  const { geometry, featureIdAttr, featureIdConfig } = resolved;
+  const attrName = `_feature_id_${featureIdConfig?.attribute ?? (channel === "pid" ? 1 : 0)}`;
 
   const targetFids = new Set<number>();
   for (const partId of idSet) {
@@ -246,11 +216,8 @@ function resolveMergedSplitContext(
   const sourceIndex = getFeatureSplitSourceIndex(originalMesh, geometry);
   if (!sourceIndex || sourceIndex.length === 0) return null;
 
-  const indexCache = getFeatureIdIndexCache(
-    originalMesh,
-    sourceIndex,
-    featureIdAttr,
-  );
+  const indexCache = getFeatureIdIndexCache(originalMesh, attrName);
+  if (!indexCache) return null;
   const { featureIdIndexMap } = indexCache;
 
   let totalIndexLength = 0;
@@ -308,10 +275,7 @@ function computeLocalBBoxForFeatureIdSubset(
   }
 
   if (minX === Infinity) return null;
-  return new Box3(
-    new Vector3(minX, minY, minZ),
-    new Vector3(maxX, maxY, maxZ),
-  );
+  return new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
 }
 
 /** 合并多个 feature 的三角形为单一 BufferGeometry（共享顶点属性，index 为并集） */
@@ -333,7 +297,7 @@ function createGeometryForFeatureIdSet(
     newGeometry.setAttribute(attributeName, attributes[attributeName]);
   }
 
-  const newIndices = createMatchingIndexArray(sourceIndex, totalIndexLength);
+  const newIndices = createIndexArray(sourceIndex, totalIndexLength);
   let writeOffset = 0;
   for (const fid of targetFids) {
     const entry = featureIdIndexMap[fid];
@@ -499,12 +463,9 @@ function selectDominantTileMeshesForIdSet(
     if (idsOnMesh.size === 0) continue;
 
     let measured: { size: number; bbox: Box3 } | null = null;
-    if (
-      tileMesh instanceof InstancedMesh &&
-      isFeatureSourceInstancedMesh(tileMesh)
-    ) {
+    if (tileMesh instanceof InstancedMesh && isTileInstancedMesh(tileMesh)) {
       const featureIdAttribute = channel === "pid" ? 1 : 0;
-      const instanced = measureInstanceSubsetForTile(
+      const instanced = measureInstanceSplitForTile(
         tileMesh,
         idSet,
         featureIdAttribute,
@@ -635,9 +596,9 @@ function createMergedSplitMeshFromGeometryByChannel(
     featureId: idMap[primaryId],
     [cfg.idKey]: primaryId,
     [cfg.collectorKey]: idsOnMesh,
-    originalMesh: originalMesh,
+    _originalMesh: originalMesh,
     propertyData,
-    isSplit: true,
+    _isSplit: true,
     isMergedSplit: true,
     partIdChannel: channel,
   };
@@ -759,47 +720,6 @@ function disposeSplitMaterialVsTile(
   mat.dispose();
 }
 
-/** 合并 split 与 buildMergedSplitGeometryForTileMesh 的来源一致，可能与 mesh.geometry 非同一引用 */
-function getGeometrySourcesForTileFeatureMesh(
-  tileMesh: Mesh,
-): BufferGeometry[] {
-  const out: BufferGeometry[] = [];
-  const gMesh = tileMesh.geometry as BufferGeometry | undefined;
-  if (gMesh) out.push(gMesh);
-  const mf = tileMesh.userData?.meshFeatures as
-    | { geometry?: BufferGeometry }
-    | undefined;
-  const gMf = mf?.geometry;
-  if (gMf && gMf !== gMesh) out.push(gMf);
-  return out;
-}
-
-function splitIndexIsSharedWithAnySource(
-  splitGeom: BufferGeometry,
-  sources: BufferGeometry[],
-): boolean {
-  const idx = splitGeom.index;
-  if (!idx) return false;
-  for (const src of sources) {
-    if (src.index && idx === src.index) return true;
-  }
-  return false;
-}
-
-function attributeIsSharedWithAnySource(
-  splitGeom: BufferGeometry,
-  sources: BufferGeometry[],
-  name: string,
-): boolean {
-  const a = splitGeom.getAttribute(name);
-  if (!a) return false;
-  for (const src of sources) {
-    const t = src.getAttribute(name);
-    if (t && a === t) return true;
-  }
-  return false;
-}
-
 /**
  * 释放 tileMesh.userData 上缓存的合并 split BufferGeometry。
  * 合并几何与瓦片共享顶点属性引用；直接 `dispose()` 会从 WebGL 移除共享 BufferAttribute，瓦片会发瘪/缺面。
@@ -809,45 +729,51 @@ export function disposeMergedSplitGeometryCacheEntry(
   mergedGeom: BufferGeometry,
   tileMesh: Mesh,
 ): void {
-  const sources = getGeometrySourcesForTileFeatureMesh(tileMesh);
-  if (sources.length === 0) {
+  const tileGeom = tileMesh.geometry;
+  if (!tileGeom) {
     mergedGeom.dispose();
     return;
   }
-  const names = Object.keys(mergedGeom.attributes);
-  for (const name of names) {
-    if (attributeIsSharedWithAnySource(mergedGeom, sources, name)) {
+  for (const name of Object.keys(mergedGeom.attributes)) {
+    if (mergedGeom.getAttribute(name) === tileGeom.getAttribute(name)) {
       mergedGeom.deleteAttribute(name);
     }
   }
-  if (splitIndexIsSharedWithAnySource(mergedGeom, sources)) {
+  if (mergedGeom.index && mergedGeom.index === tileGeom.index) {
     mergedGeom.setIndex(null);
   }
   mergedGeom.dispose();
 }
 
-/** 仅释放与瓦片非共享的顶点属性（同引用则保留，避免误伤瓦片几何） */
-function disposeSplitGeometryAttributesNotSharedWithSources(
-  geom: BufferGeometry,
-  sources: BufferGeometry[],
-): void {
-  if (sources.length === 0) return;
+/**
+ * 仅释放不与瓦片 `geometry` 共享的 index / attributes。
+ */
+export function disposeSplitGeometry(mesh: Mesh): void {
+  const geom = mesh.geometry;
+  if (!geom) return;
 
-  const names = Object.keys(geom.attributes);
-  for (const name of names) {
-    if (attributeIsSharedWithAnySource(geom, sources, name)) {
-      continue;
-    }
-    const attr = geom.getAttribute(name);
+  const tileGeom = mesh.userData?._originalMesh?.geometry as
+    | BufferGeometry
+    | undefined;
+  const idx = geom.index;
+  if (idx && idx !== tileGeom?.index) {
+    idx.dispose();
+    geom.setIndex(null);
+  }
+
+  if (!tileGeom) return;
+  for (const name of Object.keys(geom.attributes)) {
+    const attr = geom.attributes[name];
+    if (!attr || attr === tileGeom.getAttribute(name)) continue;
     geom.deleteAttribute(name);
-    (attr as unknown as { dispose(): void }).dispose();
+    if (attr instanceof BufferAttribute) attr.dispose();
   }
 }
 
 /**
  * 释放 {@link splitMeshByOidsMerged} 生成 mesh 的独占资源。
  * - 材质：clone 与瓦片逐贴图比对引用；非共享贴图 dispose，共享贴图先 detach 再 `material.dispose()`，避免误伤瓦片。
- * - 几何：不得对整块 `geometry.dispose()`（会波及共享缓冲）；仅释放与瓦片非共享的 index 与 attributes。
+ * - 几何：见 {@link disposeSplitGeometry}。
  * - **不要**对 `THREE.Mesh` 调用 `dispose()`：核心库中 `Mesh` 无此方法。
  */
 export function disposeMergedSplitMeshResources(mesh: Mesh): void {
@@ -859,7 +785,7 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
   }
   mesh.removeFromParent();
 
-  const tileMesh = mesh.userData?.originalMesh as Mesh | undefined;
+  const tileMesh = mesh.userData?._originalMesh as Mesh | undefined;
   const tileMats = getMeshMaterials(tileMesh);
 
   const mats = mesh.material;
@@ -872,64 +798,36 @@ export function disposeMergedSplitMeshResources(mesh: Mesh): void {
     disposeSplitMaterialVsTile(mat, tileMat);
   }
 
-  /**
-   * splitGeometryManagedByCache为true时,只释放材质
-   * mesh.geometry 不是 split mesh 独占的，而是挂在 瓦片源 mesh 的 userData 缓存里（按 OID 集合键复用），
-   * 所以需要从 userData 缓存里删除，避免后续释放瓦片几何缓存时仍被 split Mesh 引用
-   */
-  if (mesh.userData?.splitGeometryManagedByCache) {
-    (mesh as unknown as { geometry: BufferGeometry | null }).geometry = null;
-    return;
-  }
-
-  const geom = mesh.geometry;
-  if (!geom) return;
-
-  const sources = tileMesh
-    ? getGeometrySourcesForTileFeatureMesh(tileMesh)
-    : [];
-
-  if (!splitIndexIsSharedWithAnySource(geom, sources)) {
-    const idx = geom.index;
-    if (idx) {
-      (idx as unknown as { dispose(): void }).dispose();
-      geom.setIndex(null);
-    }
-  }
-
-  disposeSplitGeometryAttributesNotSharedWithSources(geom, sources);
+  disposeSplitGeometry(mesh);
 }
 
-/** 释放样式/高亮产生的 split mesh 或 subset InstancedMesh */
+/** 释放样式/高亮产生的 split mesh 或 instanced split */
 export function disposeStyledMeshResources(mesh: Mesh): void {
   if (mesh.userData?.isInstancedSplit) {
-    disposeSubsetInstancedMeshResources(mesh);
+    disposeSplitInstancedMeshResources(mesh);
     return;
   }
   disposeMergedSplitMeshResources(mesh);
 }
 
-/** 瓦片内原始 feature mesh（非 split 子网格） */
-export function isFeatureSourceMesh(mesh: Mesh): boolean {
-  const u = mesh.userData;
-  return Boolean(u?.meshFeatures && u?.structuralMetadata && !u?.isSplit);
-}
-
-export function isFeatureSourceInstancedMesh(
-  obj: Object3D,
-): obj is InstancedMesh {
-  const userData = obj.userData;
+/** 瓦片内原始普通 mesh（非 InstancedMesh、非 split） */
+export function isTileMesh(obj: Object3D): obj is Mesh {
   return (
-    obj instanceof InstancedMesh &&
-    Boolean(userData?.instanceFeatures && userData?.structuralMetadata) &&
-    !userData?.isSplit
+    obj instanceof Mesh &&
+    !(obj instanceof InstancedMesh) &&
+    !!obj.userData.meshFeatures &&
+    !!obj.userData.structuralMetadata &&
+    !obj.userData._isSplit
   );
 }
 
-export function isTileFeatureSource(obj: Object3D): obj is Mesh | InstancedMesh {
-  if (!(obj instanceof Mesh)) return false;
-  if (obj instanceof InstancedMesh) return isFeatureSourceInstancedMesh(obj);
-  return isFeatureSourceMesh(obj);
+export function isTileInstancedMesh(obj: Object3D): obj is InstancedMesh {
+  return (
+    obj instanceof InstancedMesh &&
+    !!obj.userData.instanceFeatures &&
+    !!obj.userData.structuralMetadata &&
+    !obj.userData._isSplit
+  );
 }
 
 /**
@@ -942,7 +840,11 @@ export function forEachLoadedFeatureSource(
   const seen = new Set<string>();
   const visitRoot = (root: Object3D) => {
     root.traverse((child) => {
-      if (!isTileFeatureSource(child) || seen.has(child.uuid)) return;
+      if (
+        (!isTileMesh(child) && !isTileInstancedMesh(child)) ||
+        seen.has(child.uuid)
+      )
+        return;
       seen.add(child.uuid);
       fn(child);
     });
@@ -1028,7 +930,7 @@ export function forEachLoadedFeatureMesh(
   fn: (mesh: Mesh) => void,
 ): void {
   forEachLoadedFeatureSource(tiles, (source) => {
-    if (isFeatureSourceMesh(source)) fn(source);
+    if (isTileMesh(source)) fn(source);
   });
 }
 
@@ -1083,12 +985,7 @@ export function getPropertyDataByOid(
 
   forEachLoadedFeatureSource(tiles, (source) => {
     if (result) return;
-    result = getPropertyDataFromUserData(
-      source.userData,
-      oid,
-      0,
-      internalData,
-    );
+    result = getPropertyDataFromUserData(source.userData, oid, 0, internalData);
   });
 
   return result;
@@ -1225,7 +1122,9 @@ export function getPartIdMapForFeatureAttribute(
   featureIdAttribute: number,
 ): Record<number, number> | undefined {
   const userData =
-    source instanceof Mesh ? source.userData : (source as Record<string, unknown>);
+    source instanceof Mesh
+      ? source.userData
+      : (source as Record<string, unknown>);
   const channel = featureIdAttributeToChannel(featureIdAttribute);
   return userData[PART_ID_CHANNEL_CONFIG[channel].mapKey] as
     | Record<number, number>

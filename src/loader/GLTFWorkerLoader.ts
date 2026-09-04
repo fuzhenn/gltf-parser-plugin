@@ -17,14 +17,14 @@ import {
   buildMeshPrimitives,
   type PrimitiveData,
   getWorkers,
-} from "./utils";
-import type { GLTFNodeData, GLTFWorkerData, MaterialBuilder } from "./types";
+} from "../utils";
+import type { GLTFNodeData, GLTFWorkerData, MaterialBuilder } from "../types";
 import { StructuralMetadata, MeshFeatures } from "3d-tiles-renderer/plugins";
 import {
   buildInstanceOidMap,
   buildInstanceStructuralMetadata,
   buildInstanceFeatures,
-} from "./mesh";
+} from "../mesh";
 
 // Extension names
 const EXT_STRUCTURAL_METADATA = "EXT_structural_metadata";
@@ -166,7 +166,9 @@ export class GLTFWorkerLoader extends Loader {
     const materialMap = buildMaterials(data, textureMap, this._materialBuilder);
 
     // Create default material
-    const defaultMaterial = this._materialBuilder({ pbrMetallicRoughness: { baseColorFactor: [0.75, 0.75, 0.75, 1] } });
+    const defaultMaterial = this._materialBuilder({
+      pbrMetallicRoughness: { baseColorFactor: [0.75, 0.75, 0.75, 1] },
+    });
 
     // Build mesh primitives
     const meshMap = buildMeshPrimitives(data, materialMap, defaultMaterial);
@@ -192,6 +194,7 @@ export class GLTFWorkerLoader extends Loader {
             geometry,
             material,
             primitiveIndex,
+            featureIdIndices,
           } of primitiveDataList) {
             const instancedMesh = new InstancedMesh(geometry, material, count);
 
@@ -235,6 +238,9 @@ export class GLTFWorkerLoader extends Loader {
             instancedMesh.instanceMatrix.needsUpdate = true;
             instancedMesh.userData._gltfMeshIndex = nodeData.mesh;
             instancedMesh.userData._gltfPrimitiveIndex = primitiveIndex;
+            if (featureIdIndices) {
+              instancedMesh.userData._featureIdIndexCaches = featureIdIndices;
+            }
             if (instanceStructuralMetadata) {
               instancedMesh.userData.structuralMetadata =
                 instanceStructuralMetadata;
@@ -252,10 +258,14 @@ export class GLTFWorkerLoader extends Loader {
             geometry,
             material,
             primitiveIndex,
+            featureIdIndices,
           } of primitiveDataList) {
             const mesh = new Mesh(geometry, material);
             mesh.userData._gltfMeshIndex = nodeData.mesh;
             mesh.userData._gltfPrimitiveIndex = primitiveIndex;
+            if (featureIdIndices) {
+              mesh.userData._featureIdIndexCaches = featureIdIndices;
+            }
             node.add(mesh);
           }
         }

@@ -3,7 +3,7 @@ import {
   normalizeMeshCollectorFeatureIds,
   type MeshCollector,
   type MeshCollectorQuery,
-} from "../MeshCollector";
+} from "../MeshCollector-deleted";
 import type { TilesRenderer } from "3d-tiles-renderer";
 import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/mesh";
 import { Object3D } from "three";
@@ -14,6 +14,7 @@ import { buildStyleConditionEvaluatorMap } from "../appearance";
 import { getFeatureIdAttributesFromStyleConfig } from "../appearance";
 import {
   applyStyleAppearanceToMesh,
+  appearanceGroupKey,
   buildAppearanceGroupsFromPropertyMap,
   detachStyledMeshFromScene,
   restoreMeshAppearanceMaps,
@@ -281,12 +282,19 @@ export class StyleHelper {
     for (const { featureIdAttribute, groups } of resolved.channelGroups) {
       for (const { appearance, featureIds } of groups.values()) {
         const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
+        const gkey = appearanceGroupKey(appearance);
         const collector = this.context.getMeshCollectorByCondition({
           featureIds: sortedIds,
           featureIdAttribute,
           meshCacheNamespace: MESH_CACHE_NAMESPACE_STYLE,
           generationUid,
           conditionIndex: conditionIndex++,
+          matchRule: {
+            featureIdAttribute,
+            show: style.show,
+            styleConditions: style.conditions ?? [],
+            appearanceGroupKey: gkey,
+          },
         });
         this.styleCollectors.push(collector);
 

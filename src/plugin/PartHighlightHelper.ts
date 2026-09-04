@@ -1,8 +1,9 @@
 import {
   MESH_CACHE_NAMESPACE_HIGHLIGHT,
   normalizeMeshCollectorFeatureIds,
+  type CollectorMatchRule,
   type MeshCollector,
-} from "../MeshCollector";
+} from "../MeshCollector-deleted";
 import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/mesh";
 import type { MeshPartVisibilityConfig } from "../mesh-helper";
 import type {
@@ -238,6 +239,46 @@ function localMatrix16FromHighlightAppearance(
 }
 
 const HIGHLIGHT_VISIBILITY_LAYER = "highlight";
+
+function buildHighlightMatchRule(
+  gkey: string,
+  featureIdAttribute: number,
+  highlightGroups: Map<string, HighlightGroupConfig>,
+): CollectorMatchRule {
+  const entries: NonNullable<CollectorMatchRule["highlightEntries"]> =
+    [];
+  const idFilterParts: number[] = [];
+
+  for (const hl of highlightGroups.values()) {
+    if (!highlightGroupAppliesToAttribute(hl, featureIdAttribute)) continue;
+    if (hl.featureIds?.length) {
+      idFilterParts.push(...hl.featureIds);
+    }
+    for (const [cond, ha] of hl.conditions ?? []) {
+      if (
+        resolveStyleConditionFeatureIdAttribute(cond) !== featureIdAttribute
+      ) {
+        continue;
+      }
+      if (appearanceGroupKey(toStyleAppearance(ha)) !== gkey) continue;
+      entries.push({
+        show: hl.show,
+        condition: cond,
+        appearanceGroupKey: gkey,
+      });
+    }
+  }
+
+  const rule: CollectorMatchRule = {
+    featureIdAttribute,
+    appearanceGroupKey: gkey,
+    highlightEntries: entries,
+  };
+  if (idFilterParts.length > 0) {
+    rule.idFilter = normalizeMeshCollectorFeatureIds(idFilterParts);
+  }
+  return rule;
+}
 
 /**
  * 构件高亮辅助器
@@ -476,12 +517,18 @@ export class PartHighlightHelper {
 
       for (const { appearance, featureIds } of groups.values()) {
         const sortedIds = normalizeMeshCollectorFeatureIds(featureIds);
+        const gkey = appearanceGroupKey(appearance);
         const collector = this.context.getMeshCollectorByCondition({
           featureIds: sortedIds,
           featureIdAttribute,
           meshCacheNamespace: MESH_CACHE_NAMESPACE_HIGHLIGHT,
           generationUid,
           conditionIndex: conditionIndex++,
+          matchRule: buildHighlightMatchRule(
+            gkey,
+            featureIdAttribute,
+            this.highlightGroups,
+          ),
         });
         this.highlightCollectors.push(collector);
 

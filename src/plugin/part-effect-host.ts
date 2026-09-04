@@ -1,6 +1,6 @@
 import type { Object3D } from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
-import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector";
+import type { MeshCollector, MeshCollectorQuery } from "../MeshCollector-deleted";
 import type { InternalData } from "../mesh-helper/mesh";
 import type { MeshPartVisibilityConfig } from "../mesh-helper";
 

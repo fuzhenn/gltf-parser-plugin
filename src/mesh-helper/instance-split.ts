@@ -12,7 +12,7 @@ import {
 } from "./mesh";
 
 /** 挂在源 InstancedMesh.userData：按 feature id 集缓存命中的 instance 下标 */
-export const TILE_INSTANCE_SUBSET_CACHE_KEY =
+export const TILE_INSTANCE_SPLIT_CACHE_KEY =
   "_gltfParserMergedSplitInstanceIndicesCache";
 
 const CHANNEL_META = {
@@ -30,25 +30,25 @@ const CHANNEL_META = {
 
 const tmpInstanceMatrix = new Matrix4();
 
-export function getTileInstanceSubsetCache(
+export function getTileInstanceSplitCache(
   source: InstancedMesh,
 ): Map<string, number[]> {
-  const existing = source.userData[TILE_INSTANCE_SUBSET_CACHE_KEY] as
+  const existing = source.userData[TILE_INSTANCE_SPLIT_CACHE_KEY] as
     | Map<string, number[]>
     | undefined;
   if (existing) return existing;
   const map = new Map<string, number[]>();
-  source.userData[TILE_INSTANCE_SUBSET_CACHE_KEY] = map;
+  source.userData[TILE_INSTANCE_SPLIT_CACHE_KEY] = map;
   return map;
 }
 
-export function disposeTileMeshInstanceSubsetCache(source: InstancedMesh): void {
-  const map = source.userData[TILE_INSTANCE_SUBSET_CACHE_KEY] as
+export function disposeTileMeshInstanceSplitCache(source: InstancedMesh): void {
+  const map = source.userData[TILE_INSTANCE_SPLIT_CACHE_KEY] as
     | Map<string, number[]>
     | undefined;
   if (!map) return;
   map.clear();
-  delete source.userData[TILE_INSTANCE_SUBSET_CACHE_KEY];
+  delete source.userData[TILE_INSTANCE_SPLIT_CACHE_KEY];
 }
 
 export function getMatchingInstanceIndices(
@@ -82,7 +82,7 @@ export function getMatchingInstanceIndices(
   return indices;
 }
 
-export function measureInstanceSubsetForTile(
+export function measureInstanceSplitForTile(
   source: InstancedMesh,
   idSet: ReadonlySet<number>,
   featureIdAttribute: number,
@@ -106,7 +106,7 @@ export function measureInstanceSubsetForTile(
   return { instanceCount: indices.length, bbox };
 }
 
-function createSubsetInstancedMesh(
+function createSplitInstancedMesh(
   originalMesh: InstancedMesh,
   instanceIndices: readonly number[],
   idSet: ReadonlySet<number>,
@@ -172,20 +172,19 @@ function createSubsetInstancedMesh(
     featureId: idMap[primaryId],
     [cfg.idKey]: primaryId,
     [cfg.collectorKey]: idsOnMesh,
-    originalMesh: originalMesh,
+    _originalMesh: originalMesh,
     propertyData,
-    isSplit: true,
+    _isSplit: true,
     isMergedSplit: true,
     isInstancedSplit: true,
     partIdChannel: channel,
-    subsetInstanceIndices: [...instanceIndices],
-    splitGeometryManagedByCache: true,
+    splitInstanceIndices: [...instanceIndices],
   };
   newMesh.name = `${cfg.namePrefix}_inst_${idsOnMesh.length}_${primaryId}`;
   return newMesh;
 }
 
-export function buildSubsetInstancedMeshForTileMesh(
+export function buildSplitInstancedMeshForTileMesh(
   source: InstancedMesh,
   idSet: ReadonlySet<number>,
   featureIdAttribute: number,
@@ -195,7 +194,7 @@ export function buildSubsetInstancedMeshForTileMesh(
 
   let indices: number[] | undefined;
   if (cacheKey) {
-    const cache = getTileInstanceSubsetCache(source);
+    const cache = getTileInstanceSplitCache(source);
     indices = cache.get(cacheKey);
     if (!indices) {
       indices = getMatchingInstanceIndices(source, idSet, featureIdAttribute);
@@ -207,11 +206,11 @@ export function buildSubsetInstancedMeshForTileMesh(
     if (indices.length === 0) return null;
   }
 
-  return createSubsetInstancedMesh(source, indices, idSet, featureIdAttribute);
+  return createSplitInstancedMesh(source, indices, idSet, featureIdAttribute);
 }
 
-/** 释放 subset InstancedMesh 的独占资源（几何与源共享，仅释放 clone 材质） */
-export function disposeSubsetInstancedMeshResources(mesh: Mesh): void {
+/** 释放 instanced split 的独占资源（几何与源共享，仅释放 clone 材质） */
+export function disposeSplitInstancedMeshResources(mesh: Mesh): void {
   const builtKey = "_gltfParserStyleAppearanceBuilt";
   const built = mesh.userData?.[builtKey] as Mesh | undefined;
   if (built) {
@@ -220,7 +219,7 @@ export function disposeSubsetInstancedMeshResources(mesh: Mesh): void {
   }
   mesh.removeFromParent();
 
-  const tileMesh = mesh.userData?.originalMesh as InstancedMesh | undefined;
+  const tileMesh = mesh.userData?._originalMesh as InstancedMesh | undefined;
   const tileMats = tileMesh?.material;
   const tileMat = Array.isArray(tileMats) ? tileMats[0] : tileMats;
 

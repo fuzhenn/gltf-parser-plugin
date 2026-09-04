@@ -17,29 +17,40 @@ import {
   forEachLoadedFeatureSource,
   getAllFeatureIdsFromTiles,
   getPropertyDataByFeatureAttribute,
+  getPropertyDataFromUserData,
   getTileMeshesByFeatureAttribute,
-  isFeatureSourceInstancedMesh,
-  isFeatureSourceMesh,
-  isTileFeatureSource,
+  isTileInstancedMesh,
+  isTileMesh,
   selectDominantTileMeshesForOidSet,
   selectDominantTileMeshesForPidSet,
   type InternalData,
   type PartIdChannel,
 } from "./mesh-helper";
 import {
-  buildSubsetInstancedMeshForTileMesh,
-  disposeTileMeshInstanceSubsetCache,
+  buildSplitInstancedMeshForTileMesh,
+  disposeTileMeshInstanceSplitCache,
 } from "./mesh-helper/instance-split";
-import type { StyleConditionDescriptor } from "./plugin/style-appearance-types";
+import type {
+  StyleCondition,
+  StyleConditionDescriptor,
+  StyleConditionInput,
+  StyleShowInput,
+} from "./plugin/style-appearance-types";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
 } from "./appearance";
 import {
   normalizeFeatureIdAttribute,
+  resolveShowFeatureIdAttribute,
   resolveStyleConditionContent,
+  resolveStyleConditionFeatureIdAttribute,
 } from "./appearance";
-import { detachStyledMeshFromScene } from "./plugin/style-appearance-shared";
+import {
+  appearanceGroupKey,
+  detachStyledMeshFromScene,
+  resolveConditionsAppearance,
+} from "./plugin/style-appearance-shared";
 
 /** 挂在瓦片 feature mesh 的 userData 上：按「排序后 feature id 集 + 通道」复用合并 split 的 BufferGeometry */
 const TILE_SPLIT_GEOMETRY_CACHE_KEY = "_gltfParserMergedSplitGeometryCache";
@@ -69,11 +80,14 @@ export function disposeTileMeshSplitGeometryCache(tileMesh: Mesh): void {
     delete tileMesh.userData[TILE_SPLIT_GEOMETRY_CACHE_KEY];
   }
   if (tileMesh instanceof InstancedMesh) {
-    disposeTileMeshInstanceSubsetCache(tileMesh);
+    disposeTileMeshInstanceSplitCache(tileMesh);
   }
 }
 
-/** 收集器查询：feature id 范围 + 可选属性条件（语义同 setStyle 的 show / conditions） */
+function isTileFeatureSource(obj: Object3D): obj is Mesh {
+  return isTileMesh(obj) || isTileInstancedMesh(obj);
+}
+
 /** 在单个瓦片 scene 内查找包含给定 part id 的 feature 源 */
 function collectCandidateFeatureSourcesInScene(
   scene: Object3D,
@@ -110,9 +124,9 @@ function buildStyledMeshesForSources(
   for (const tileMesh of tileMeshes) {
     if (
       tileMesh instanceof InstancedMesh &&
-      isFeatureSourceInstancedMesh(tileMesh)
+      isTileInstancedMesh(tileMesh)
     ) {
-      const instanced = buildSubsetInstancedMeshForTileMesh(
+      const instanced = buildSplitInstancedMeshForTileMesh(
         tileMesh,
         idSet,
         featureIdAttribute,
@@ -122,7 +136,7 @@ function buildStyledMeshesForSources(
       continue;
     }
 
-    if (!isFeatureSourceMesh(tileMesh)) continue;
+    if (!isTileMesh(tileMesh)) continue;
 
     let geometry: BufferGeometry | undefined;
     if (cacheKey) {
@@ -161,6 +175,198 @@ function buildStyledMeshesForSources(
   return result;
 }
 
+/** 单瓦片 scene 增量路径：在 mesh 本地 OID 上 re-evaluate 规则（不依赖全局 featureIds 快照） */
+export interface CollectorMatchRule {
+  featureIdAttribute: number;
+  /** 显式限定 id；与 condition / appearance 分组组合使用 */
+  idFilter?: readonly number[];
+  /** setStyle：show + conditions first-match，命中指定 appearance 分组 */
+  show?: StyleShowInput;
+  styleConditions?: StyleCondition[];
+  appearanceGroupKey?: string;
+  /** 单条 condition（自建 collector 等） */
+  matchCondition?: string;
+  /** highlight all-match：任一 entry 命中且 appearance 分组一致 */
+  highlightEntries?: Array<{
+    show?: StyleShowInput;
+    condition: StyleConditionInput;
+    appearanceGroupKey: string;
+  }>;
+}
+
+function collectTileMeshesFromScene(scene: Object3D): Mesh[] {
+  const tileMeshes: Mesh[] = [];
+  scene.traverse((child) => {
+    if (isTileFeatureSource(child)) {
+      tileMeshes.push(child as Mesh);
+    }
+  });
+  return tileMeshes;
+}
+
+function collectPartIdsFromTileMesh(
+  tileMesh: Mesh,
+  channel: PartIdChannel,
+): number[] {
+  const mapKey = channel === "pid" ? "_tile_pidMap" : "_tile_oidMap";
+  const idMap = tileMesh.userData?.[mapKey] as
+    | Record<number, number>
+    | undefined;
+  if (!idMap) return [];
+  return Object.keys(idMap).map((k) => Number(k));
+}
+
+function resolveMatchedPartIdsOnTileMesh(
+  tileMesh: Mesh,
+  params: ResolvedMeshCollectorQuery,
+  internalData?: InternalData,
+): Set<number> {
+  const { featureIdAttribute, featureIds, condition, matchRule } = params;
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  const idFilter =
+    matchRule?.idFilter != null
+      ? new Set(matchRule.idFilter)
+      : featureIds.length > 0
+        ? new Set(featureIds)
+        : null;
+
+  const localPartIds = collectPartIdsFromTileMesh(tileMesh, channel);
+  if (localPartIds.length === 0) return new Set();
+
+  const matchedPartIds = new Set<number>();
+
+  if (matchRule?.styleConditions && matchRule.appearanceGroupKey) {
+    const showForChannel =
+      matchRule.show != null &&
+      resolveShowFeatureIdAttribute(matchRule.show) === featureIdAttribute
+        ? matchRule.show
+        : undefined;
+    const evaluators = buildStyleConditionEvaluatorMap({
+      show: matchRule.show,
+      conditions: matchRule.styleConditions,
+    });
+    for (const partId of localPartIds) {
+      if (idFilter && !idFilter.has(partId)) continue;
+      const propertyData = getPropertyDataFromUserData(
+        tileMesh.userData,
+        partId,
+        featureIdAttribute,
+        internalData,
+      );
+      if (propertyData == null) continue;
+      if (
+        showForChannel &&
+        !evaluateStyleCondition(showForChannel, propertyData, evaluators)
+      ) {
+        continue;
+      }
+      const appearance = resolveConditionsAppearance(
+        matchRule.styleConditions,
+        propertyData,
+        evaluators,
+        featureIdAttribute,
+      );
+      if (!appearance) continue;
+      if (appearanceGroupKey(appearance) !== matchRule.appearanceGroupKey) continue;
+      matchedPartIds.add(partId);
+    }
+    return matchedPartIds;
+  }
+
+  if (matchRule?.highlightEntries?.length && matchRule.appearanceGroupKey) {
+    for (const partId of localPartIds) {
+      if (idFilter && !idFilter.has(partId)) continue;
+      const propertyData = getPropertyDataFromUserData(
+        tileMesh.userData,
+        partId,
+        featureIdAttribute,
+        internalData,
+      );
+      if (propertyData == null && !idFilter) continue;
+
+      for (const entry of matchRule.highlightEntries) {
+        const evaluators = buildStyleConditionEvaluatorMap({
+          show: entry.show,
+          conditions: [[entry.condition, {}]] as StyleCondition[],
+        });
+        const showForChannel =
+          entry.show != null &&
+          resolveShowFeatureIdAttribute(entry.show) === featureIdAttribute
+            ? entry.show
+            : undefined;
+        if (
+          showForChannel &&
+          !evaluateStyleCondition(showForChannel, propertyData, evaluators)
+        ) {
+          continue;
+        }
+        if (
+          resolveStyleConditionFeatureIdAttribute(entry.condition) !==
+          featureIdAttribute
+        ) {
+          continue;
+        }
+        if (
+          !evaluateStyleCondition(entry.condition, propertyData, evaluators)
+        ) {
+          continue;
+        }
+        if (entry.appearanceGroupKey !== matchRule.appearanceGroupKey) continue;
+        matchedPartIds.add(partId);
+        break;
+      }
+    }
+    return matchedPartIds;
+  }
+
+  const matchCondition = matchRule?.matchCondition ?? condition;
+  const showInput = matchRule?.show;
+  if (matchCondition || showInput) {
+    const evaluators = buildStyleConditionEvaluatorMap({
+      show: showInput,
+      conditions: matchCondition
+        ? ([[matchCondition, {}]] as StyleCondition[])
+        : [],
+    });
+    const showForChannel =
+      showInput != null &&
+      resolveShowFeatureIdAttribute(showInput) === featureIdAttribute
+        ? showInput
+        : undefined;
+    for (const partId of localPartIds) {
+      if (idFilter && !idFilter.has(partId)) continue;
+      const propertyData = getPropertyDataFromUserData(
+        tileMesh.userData,
+        partId,
+        featureIdAttribute,
+        internalData,
+      );
+      if (propertyData == null && !idFilter) continue;
+      if (
+        showForChannel &&
+        !evaluateStyleCondition(showForChannel, propertyData, evaluators)
+      ) {
+        continue;
+      }
+      if (
+        matchCondition &&
+        !evaluateStyleCondition(matchCondition, propertyData, evaluators)
+      ) {
+        continue;
+      }
+      matchedPartIds.add(partId);
+    }
+    return matchedPartIds;
+  }
+
+  if (idFilter) {
+    for (const partId of localPartIds) {
+      if (idFilter.has(partId)) matchedPartIds.add(partId);
+    }
+  }
+  return matchedPartIds;
+}
+
 export interface MeshCollectorQuery {
   /**
    * 限定在这些 feature id 内收集；不传或空数组时，若提供 condition 则从全场景对应通道中筛选
@@ -175,6 +381,10 @@ export interface MeshCollectorQuery {
    */
   condition?: string | StyleConditionDescriptor;
   /**
+   * 单瓦片 scene 增量时在本 mesh OID 上 re-evaluate；全量路径仍可用 featureIds 快照。
+   */
+  matchRule?: CollectorMatchRule;
+  /**
    * 区分样式 / 高亮等（参与 `meshCollectorQueryCacheKey` 等语义），与几何缓存无关。
    */
   meshCacheNamespace?: string;
@@ -188,6 +398,7 @@ export interface ResolvedMeshCollectorQuery {
   featureIds: number[];
   featureIdAttribute: number;
   condition?: string;
+  matchRule?: CollectorMatchRule;
   /** 瓦片级 split / instance subset 缓存键（由 generationUid + conditionIndex 生成） */
   tileSubsetCacheKey?: string;
 }
@@ -241,6 +452,14 @@ export function resolveMeshCollectorQuery(
     featureIdAttribute = conditionAttr;
   }
 
+  const matchRule = query.matchRule
+    ? {
+        ...query.matchRule,
+        featureIdAttribute:
+          query.matchRule.featureIdAttribute ?? featureIdAttribute,
+      }
+    : undefined;
+
   let tileSubsetCacheKey: string | undefined;
   if (query.generationUid != null && query.conditionIndex != null) {
     const ns = query.meshCacheNamespace?.trim() || "default";
@@ -256,6 +475,7 @@ export function resolveMeshCollectorQuery(
     featureIds,
     featureIdAttribute,
     condition: conditionFromQuery,
+    matchRule,
     tileSubsetCacheKey,
   };
 }
@@ -350,6 +570,62 @@ export class MeshSplitResolver {
       featureIdAttribute,
       cacheKey,
     );
+  }
+
+  /**
+   * 在单个瓦片 scene 内按规则现场 evaluate 本地 OID，再 split（流式加载增量路径）。
+   */
+  getMergedSplitMeshesForRuleInScene(
+    scene: Object3D,
+    params: ResolvedMeshCollectorQuery,
+  ): Mesh[] {
+    const sceneTileMeshes = collectTileMeshesFromScene(scene);
+    if (sceneTileMeshes.length === 0) return [];
+
+    const channel = featureIdAttributeToChannel(params.featureIdAttribute);
+    const internalData = this.getInternalData();
+    const meshHits = new Map<Mesh, Set<number>>();
+
+    for (const tileMesh of sceneTileMeshes) {
+      const matchedPartIds = resolveMatchedPartIdsOnTileMesh(
+        tileMesh,
+        params,
+        internalData,
+      );
+      if (matchedPartIds.size > 0) {
+        meshHits.set(tileMesh, matchedPartIds);
+      }
+    }
+
+    if (meshHits.size === 0) return [];
+
+    const unionHits = new Set<number>();
+    for (const hits of meshHits.values()) {
+      for (const id of hits) unionHits.add(id);
+    }
+
+    const tileMeshes =
+      channel === "pid"
+        ? selectDominantTileMeshesForPidSet(new Set(meshHits.keys()), unionHits)
+        : selectDominantTileMeshesForOidSet(
+            new Set(meshHits.keys()),
+            unionHits,
+          );
+
+    const result: Mesh[] = [];
+    for (const tileMesh of tileMeshes) {
+      const matchedPartIds = meshHits.get(tileMesh);
+      if (!matchedPartIds || matchedPartIds.size === 0) continue;
+      result.push(
+        ...buildStyledMeshesForSources(
+          [tileMesh],
+          matchedPartIds,
+          params.featureIdAttribute,
+          params.tileSubsetCacheKey,
+        ),
+      );
+    }
+    return result;
   }
 
   private resolveTargetIdsForCollectorQuery(
@@ -458,9 +734,13 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   constructor(query: MeshCollectorQuery) {
     super();
     const resolved = resolveMeshCollectorQuery(query);
-    if (resolved.featureIds.length === 0 && !resolved.condition) {
+    if (
+      resolved.featureIds.length === 0 &&
+      !resolved.condition &&
+      !resolved.matchRule
+    ) {
       throw new Error(
-        "MeshCollector requires at least one feature id and/or a non-empty condition",
+        "MeshCollector requires at least one feature id, a non-empty condition, and/or matchRule",
       );
     }
     this.resolvedQuery = resolved;
@@ -507,30 +787,33 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
   }
 
   /**
-   * 为单个瓦片 scene 增量追加 split mesh（tile-visibility-change 路径，不全局遍历）。
+   * 为单个瓦片 scene 增量追加 split mesh。
    * @returns 本次新创建的 split mesh
    */
   appendMeshesForTileScene(scene: Object3D): Mesh[] {
     if (this._disposed) return [];
     if (!this.meshSplit) return [];
-    if (this.resolvedQuery.featureIds.length === 0) return [];
 
-    const idSet = new Set(this.resolvedQuery.featureIds);
-    const newMeshes = this.meshSplit.getMergedSplitMeshesForIdSetInScene(
-      idSet,
-      this.resolvedQuery.featureIdAttribute,
-      scene,
-      this.resolvedQuery.tileSubsetCacheKey,
-    );
+    const useRulePath =
+      this.resolvedQuery.matchRule != null ||
+      (this.resolvedQuery.condition != null &&
+        this.resolvedQuery.featureIds.length === 0);
+
+    const newMeshes = useRulePath
+      ? this.meshSplit.getMergedSplitMeshesForRuleInScene(
+          scene,
+          this.resolvedQuery,
+        )
+      : this.appendMeshesByExplicitFeatureIds(scene);
     if (newMeshes.length === 0) return [];
 
     const existingOrigins = new Set(
       this._meshes
-        .map((m) => (m.userData?.originalMesh as Mesh | undefined)?.uuid)
+        .map((m) => (m.userData?._originalMesh as Mesh | undefined)?.uuid)
         .filter(Boolean),
     );
     const toAdd = newMeshes.filter((m) => {
-      const orig = m.userData?.originalMesh as Mesh | undefined;
+      const orig = m.userData?._originalMesh as Mesh | undefined;
       return orig && !existingOrigins.has(orig.uuid);
     });
     if (toAdd.length === 0) return [];
@@ -540,8 +823,21 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
     return toAdd;
   }
 
+  /** 显式 featureIds 列表的增量路径（无 matchRule / condition 规则时） */
+  private appendMeshesByExplicitFeatureIds(scene: Object3D): Mesh[] {
+    if (this.resolvedQuery.featureIds.length === 0) return [];
+
+    const idSet = new Set(this.resolvedQuery.featureIds);
+    return this.meshSplit!.getMergedSplitMeshesForIdSetInScene(
+      idSet,
+      this.resolvedQuery.featureIdAttribute,
+      scene,
+      this.resolvedQuery.tileSubsetCacheKey,
+    );
+  }
+
   /**
-   * 3d-tiles `dispose-model` 时调用：释放 `userData.originalMesh` 落在该瓦片 scene 内的 split mesh，
+   * 3d-tiles `dispose-model` 时调用：释放 `userData._originalMesh` 落在该瓦片 scene 内的 split mesh，
    * 避免随后释放瓦片几何缓存时仍被 split Mesh 引用。
    */
   releaseSplitMeshesForTileScene(scene: Object3D): void {
@@ -556,7 +852,7 @@ export class MeshCollector extends EventDispatcher<MeshCollectorEventMap> {
 
     const kept: Mesh[] = [];
     for (const sm of this._meshes) {
-      const orig = sm.userData?.originalMesh as Mesh | undefined;
+      const orig = sm.userData?._originalMesh as Mesh | undefined;
       if (orig && sourceMeshes.has(orig)) {
         detachStyledMeshFromScene(sm);
         disposeStyledMeshResources(sm);

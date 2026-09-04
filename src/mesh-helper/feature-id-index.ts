@@ -1,6 +1,6 @@
 import type { BufferAttribute } from "three";
 
-export type FeatureIdIndexEntry = { offset: number; length: number };
+export type IndexRange = { offset: number; length: number };
 
 /**
  * 按 featureId 分组后的 index 数据。
@@ -9,35 +9,15 @@ export type FeatureIdIndexEntry = { offset: number; length: number };
  */
 export type FeatureIdIndexData = {
   /** featureId → buffer 中的 {offset,length}（普通对象，省去 Map 的构造与遍历开销） */
-  featureIdIndexMap: Record<number, FeatureIdIndexEntry>;
+  featureIdIndexMap: Record<number, IndexRange>;
   /** 按 fid 连续排布的 index（与源 index 同类型） */
   buffer: Uint16Array | Uint32Array;
   /** fid → 源 mesh 三角形索引（offset/length 指向 triangleIndices 缓冲） */
-  triangleIndexMap?: Record<number, FeatureIdIndexEntry>;
+  triangleIndexMap?: Record<number, IndexRange>;
   triangleIndices?: Uint32Array;
 };
 
-/**
- * 以 `_feature_id_n` 顶点属性的 BufferAttribute 为 key 的预构建分组 index 表。
- * 主线程从 worker 数据建几何时注册（见 build-mesh-primitives）。
- * 用 WeakMap：geometry 释放后对应条目自动回收。
- */
-const registry = new WeakMap<BufferAttribute, FeatureIdIndexData>();
-
-export function registerFeatureIdIndex(
-  attr: BufferAttribute,
-  data: FeatureIdIndexData,
-): void {
-  registry.set(attr, data);
-}
-
-export function getRegisteredFeatureIdIndex(
-  attr: BufferAttribute,
-): FeatureIdIndexData | undefined {
-  return registry.get(attr);
-}
-
-export function createMatchingIndexArray(
+export function createIndexArray(
   sourceIndex: ArrayLike<number>,
   length: number,
 ): Uint16Array | Uint32Array {
@@ -70,8 +50,8 @@ export function buildFeatureIdIndexMap(
     counts.triCount++;
   }
 
-  const featureIdIndexMap: Record<number, FeatureIdIndexEntry> = {};
-  const triangleIndexMap: Record<number, FeatureIdIndexEntry> = {};
+  const featureIdIndexMap: Record<number, IndexRange> = {};
+  const triangleIndexMap: Record<number, IndexRange> = {};
   let totalLength = 0;
   let triTotal = 0;
   let offset = 0;
@@ -85,7 +65,7 @@ export function buildFeatureIdIndexMap(
     triTotal += counts.triCount;
   }
 
-  const buffer = createMatchingIndexArray(sourceIndex, totalLength);
+  const buffer = createIndexArray(sourceIndex, totalLength);
   const triangleIndices = new Uint32Array(triTotal);
 
   const writePositions = new Map<number, { idx: number; tri: number }>();

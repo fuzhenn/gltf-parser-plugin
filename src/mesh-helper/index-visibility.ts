@@ -21,12 +21,14 @@ import {
   resolveStyleConditionFeatureIdAttribute,
 } from "../appearance";
 import {
-  buildVisibleIndexExcludingHiddenFids,
+  buildVisibleIndex,
   forEachLoadedFeatureSource,
   getPartIdMapForFeatureAttribute,
   getPropertyDataFromUserData,
-  isTileFeatureSource,
+  isTileInstancedMesh,
+  isTileMesh,
   resolveFeatureChannelOnMesh,
+  snapshotOriginalIndex,
   type InternalData,
   type PartIdChannel,
 } from "./mesh";
@@ -376,10 +378,6 @@ function applyMeshIndexVisibility(mesh: Mesh): void {
   const oidFeatureAttr = oidResolved?.featureIdAttr ?? null;
   const pidFeatureAttr = pidResolved?.featureIdAttr ?? null;
 
-  const index = geometry.index;
-
-  if (!index) return;
-
   const hiddenOidFids = getHiddenFeatureIdsForChannel(mesh, hiddenOids, "oid");
   const hiddenPidFids = getHiddenFeatureIdsForChannel(mesh, hiddenPids, "pid");
 
@@ -393,16 +391,10 @@ function applyMeshIndexVisibility(mesh: Mesh): void {
     return;
   }
 
-  if (!mesh.userData._originalIndex) {
-    const src = index.array;
-    mesh.userData._originalIndex =
-      src instanceof Uint32Array
-        ? new Uint32Array(src)
-        : src instanceof Uint16Array
-          ? new Uint16Array(src)
-          : new Uint32Array(Array.from(src));
-  }
-  const originalArray = mesh.userData._originalIndex;
+  const original = snapshotOriginalIndex(mesh, geometry);
+  if (!original) return;
+  // glTF 索引只可能是 Uint16 / Uint32
+  const originalArray = original.array as Uint16Array | Uint32Array;
 
   let filteredArray: Uint16Array | Uint32Array;
   if (needsOidHide && needsPidHide) {
@@ -414,17 +406,17 @@ function applyMeshIndexVisibility(mesh: Mesh): void {
       ],
     );
   } else if (needsOidHide) {
-    filteredArray = buildVisibleIndexExcludingHiddenFids(
+    filteredArray = buildVisibleIndex(
       mesh,
       originalArray,
-      oidFeatureAttr!,
+      `_feature_id_${oidResolved!.featureIdConfig?.attribute ?? 0}`,
       hiddenOidFids,
     );
   } else {
-    filteredArray = buildVisibleIndexExcludingHiddenFids(
+    filteredArray = buildVisibleIndex(
       mesh,
       originalArray,
-      pidFeatureAttr!,
+      `_feature_id_${pidResolved!.featureIdConfig?.attribute ?? 1}`,
       hiddenPidFids,
     );
   }
@@ -468,23 +460,22 @@ export function applyVisibilityToMesh(mesh: Mesh): void {
   applyMeshIndexVisibility(mesh);
 }
 
-/** 恢复 mesh 的原始 index */
+/** 恢复 mesh 的原始 index；备份保留在 userData 上，供其他系统 / 再次过滤复用 */
 export function restoreMeshIndex(mesh: Mesh): void {
   const original = mesh.userData?._originalIndex;
-  if (!original) return;
+  if (!(original instanceof BufferAttribute)) return;
 
   const geometry = getVisibilityGeometry(mesh);
   if (!geometry) return;
 
-  setGeometryIndexFromArray(geometry, original);
-  delete mesh.userData._originalIndex;
+  geometry.setIndex(original);
 }
 
 /** 遍历 scene 子树中所有 tile mesh，应用可见性过滤 */
 export function applyVisibilityToScene(scene: Object3D): void {
   const hasRules = hasMeshPartVisibilityRules();
   scene.traverse((obj) => {
-    if (!isTileFeatureSource(obj)) return;
+    if (!isTileMesh(obj) && !isTileInstancedMesh(obj)) return;
     if (hasRules) {
       applyVisibilityToSource(obj);
     } else {

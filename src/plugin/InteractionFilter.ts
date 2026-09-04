@@ -1,5 +1,5 @@
 import { Mesh } from "three";
-import type { MeshCollector } from "../MeshCollector";
+import type { MeshCollector } from "../MeshCollector-deleted";
 
 export interface InteractionFilterContext {
   getCollectors(): ReadonlySet<MeshCollector>;

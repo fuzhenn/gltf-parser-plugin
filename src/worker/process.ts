@@ -6,13 +6,13 @@ import {
   DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
 } from "./edges";
 
-type FeatureIdIndexEntry = { offset: number; length: number };
+type IndexRange = { offset: number; length: number };
 
 type FeatureIdIndexData = {
   buffer: Uint16Array | Uint32Array;
-  map: Record<number, FeatureIdIndexEntry>;
+  map: Record<number, IndexRange>;
   triangleIndices: Uint32Array;
-  triangleIndexMap: Record<number, FeatureIdIndexEntry>;
+  triangleIndexMap: Record<number, IndexRange>;
 };
 
 /**
@@ -62,7 +62,7 @@ function buildFeatureIdIndices(
       indexArray instanceof Uint16Array
         ? new Uint16Array(total)
         : new Uint32Array(total);
-    const map: Record<number, FeatureIdIndexEntry> = {};
+    const map: Record<number, IndexRange> = {};
     let offset = 0;
     for (const [fid, chunk] of fidChunks) {
       buffer.set(chunk, offset);
@@ -73,7 +73,7 @@ function buildFeatureIdIndices(
     let triTotal = 0;
     for (const chunk of fidTriangleChunks.values()) triTotal += chunk.length;
     const triangleIndices = new Uint32Array(triTotal);
-    const triangleIndexMap: Record<number, FeatureIdIndexEntry> = {};
+    const triangleIndexMap: Record<number, IndexRange> = {};
     let triOffset = 0;
     for (const [fid, chunk] of fidTriangleChunks) {
       triangleIndices.set(chunk, triOffset);

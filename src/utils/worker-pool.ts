@@ -25,8 +25,12 @@ export function clearSchemaCache(): void {
  */
 function setupSchemaHandler(worker: Worker): void {
   worker.addEventListener("message", (event: MessageEvent) => {
-    const { type, schemaRequestId, url, fetchOptions: reqFetchOptions } =
-      event.data;
+    const {
+      type,
+      schemaRequestId,
+      url,
+      fetchOptions: reqFetchOptions,
+    } = event.data;
     if (type !== "fetchSchema") return;
 
     const requestInit = resolveFetchOptions(reqFetchOptions);
@@ -67,8 +71,9 @@ function setupSchemaHandler(worker: Worker): void {
 /**
  * Set the maximum number of Workers (must be called before initialization)
  */
-export function setMaxWorkers(count: number): void {
-  maxWorkers = Math.max(1, Math.min(count, navigator.hardwareConcurrency || 4));
+export function setMaxWorkers(count?: number): void {
+  const cap = navigator.hardwareConcurrency || 4;
+  maxWorkers = Math.max(1, Math.min(count ?? cap, cap));
 }
 
 /**

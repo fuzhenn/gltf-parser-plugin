@@ -1,4 +1,5 @@
 export { GLTFParserPlugin } from "./GLTFParserPlugin";
+export { GLTFParserPlugin as Plugin } from "./Plugin";
 export * from "./PMI";
 export type {
   GLTFParserPluginOptions,
@@ -15,13 +16,13 @@ export {
   meshCollectorQueryCacheKey,
   normalizeMeshCollectorFeatureIds,
   resolveMeshCollectorQuery,
-} from "./MeshCollector";
+} from "./MeshCollector-deleted";
 export type {
   MeshChangeEvent,
   MeshCollectorEventMap,
   MeshCollectorQuery,
   ResolvedMeshCollectorQuery,
-} from "./MeshCollector";
+} from "./MeshCollector-deleted";
 export type { StyleConditionEvaluator } from "./appearance";
 export type { FeatureInfo } from "./mesh-helper/intersection";
 export {

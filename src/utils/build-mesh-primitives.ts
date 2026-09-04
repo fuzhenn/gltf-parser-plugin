@@ -1,6 +1,6 @@
 import { BufferAttribute, BufferGeometry, Material } from "three";
 import type { GLTFWorkerData, PrimitiveExtensions } from "../types";
-import { registerFeatureIdIndex } from "../mesh-helper/feature-id-index";
+import type { FeatureIdIndexData } from "../mesh-helper/feature-id-index";
 import { registerPrecomputedEdges } from "../mesh-helper/edge-geometry";
 
 export interface PrimitiveData {
@@ -8,6 +8,7 @@ export interface PrimitiveData {
   material: Material;
   primitiveIndex: number;
   extensions?: PrimitiveExtensions;
+  featureIdIndices?: Record<string, FeatureIdIndexData>;
 }
 
 type WorkerMeshData = NonNullable<GLTFWorkerData["meshes"]>[string];
@@ -98,17 +99,6 @@ export function buildMeshPrimitives(
                 featureIdData.itemSize || 1,
               );
               geometry.setAttribute(normalizedName, featureIdAttr);
-
-              // 直接复用 worker 预构建好的分组 index（以该属性为 key 注册）
-              const precomputed = primitive.featureIdIndices?.[normalizedName];
-              if (precomputed) {
-                registerFeatureIdIndex(featureIdAttr, {
-                  featureIdIndexMap: precomputed.map,
-                  buffer: precomputed.buffer,
-                  triangleIndexMap: precomputed.triangleIndexMap,
-                  triangleIndices: precomputed.triangleIndices,
-                });
-              }
             }
           }
         }
@@ -143,6 +133,19 @@ export function buildMeshPrimitives(
         material,
         primitiveIndex,
         extensions: primitive.extensions,
+        featureIdIndices: primitive.featureIdIndices
+          ? Object.fromEntries(
+              Object.entries(primitive.featureIdIndices).map(([name, d]) => [
+                name,
+                {
+                  featureIdIndexMap: d.map,
+                  buffer: d.buffer,
+                  triangleIndexMap: d.triangleIndexMap,
+                  triangleIndices: d.triangleIndices,
+                },
+              ]),
+            )
+          : undefined,
       });
     }
 
