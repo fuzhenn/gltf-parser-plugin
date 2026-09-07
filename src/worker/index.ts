@@ -123,6 +123,7 @@ self.onmessage = function (event: MessageEvent) {
         try {
           const { data: processedData, transferables } = processGLTFData(data, {
             edges: edges === true,
+            url: root,
           });
           self.postMessage(
             {
