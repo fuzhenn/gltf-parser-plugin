@@ -99,9 +99,16 @@ function buildFeatureIdIndices(
  * @param data - Raw GLTF data from loader
  * @returns Processed data with transferables array
  */
+/** 判断 URL 是否为顶级瓦片（如 _0_0_0.glb） */
+function isRootTile(url?: string): boolean {
+  return !!url && url.includes("_0_0_0.glb");
+}
+
 export type ProcessGLTFDataOptions = {
   /** Precompute feature edges for wireframe highlight / split cropping */
   edges?: boolean;
+  /** Source URL of the glTF asset; top-level tiles (e.g. _0_0_0.glb) skip edge computation */
+  url?: string;
 };
 
 export function processGLTFData(
@@ -195,7 +202,8 @@ export function processGLTFData(
           positionArray &&
           indexArray &&
           indexArray.length >= 3 &&
-          positionArray.length >= 9
+          positionArray.length >= 9 &&
+          !isRootTile(options.url)
         ) {
           const precomputedEdges = buildFeatureEdgePositions(
             positionArray,
