@@ -61,8 +61,11 @@ export class StyleHelper {
     const hiddenFids = new Set<number>();
     scene.traverse((child) => {
       hiddenFids.clear();
-      // InstancedMesh 的隐藏 = 压缩可见 instance，与普通 mesh 的 index 过滤不同路径
       if (isTileInstancedMesh(child)) {
+        for (const collector of this._collectors.values()) {
+          collector.addMatchedFeatureIds(child, hiddenFids);
+        }
+        // InstancedMesh 的隐藏 = 压缩可见 instance，与普通 mesh 的 index 过滤不同路径
         hideMatchedFeaturesOnInstancedMesh(
           child,
           featureIdAttribute,
@@ -226,6 +229,7 @@ function hideMatchedFeaturesOnInstancedMesh(
     instanceFeatures,
     featureIdAttribute,
   );
+
   if (featureIndex === null || hiddenFids.size === 0) {
     restoreInstancedVisibility(mesh);
     return;

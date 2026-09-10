@@ -1,5 +1,6 @@
 import {
   Box3,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   Material,
@@ -51,6 +52,52 @@ export function disposeTileMeshInstanceSplitCache(source: InstancedMesh): void {
   delete source.userData[TILE_INSTANCE_SPLIT_CACHE_KEY];
 }
 
+/** split 不得继承源瓦片的运行时状态键（过滤快照 / 缓存只属于源） */
+const EXCLUDED_SPLIT_USER_DATA_KEYS = new Set<string>([
+  "_originalIndex",
+  "_styleFilteredIndex",
+  "_originalInstanceMatrix",
+  "_originalInstanceCount",
+  "_originalInstanceColor",
+  "_originalInstanceMatrices",
+  TILE_INSTANCE_SPLIT_CACHE_KEY,
+]);
+
+function buildSplitUserData(source: InstancedMesh): Record<string, unknown> {
+  const userData: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source.userData)) {
+    if (!EXCLUDED_SPLIT_USER_DATA_KEYS.has(key)) userData[key] = value;
+  }
+  return userData;
+}
+
+/**
+ * split 必须从「按 feature 隐藏前」的完整实例数据构建：显隐系统可能已压缩
+ * instanceMatrix 并下调 count（样式系统），或原地零缩放矩阵（显隐规则系统）。
+ * 优先读引用快照（带原始 count），其次读零缩放方案的原始矩阵拷贝，最后退回当前状态。
+ */
+function resolveOriginalInstanceSource(
+  source: InstancedMesh,
+): { matrices: Float32Array; count: number } {
+  const attr = source.userData._originalInstanceMatrix;
+  if (attr instanceof InstancedBufferAttribute) {
+    const count = source.userData._originalInstanceCount;
+    return {
+      matrices: attr.array as Float32Array,
+      count: typeof count === "number" ? count : source.count,
+    };
+  }
+  const raw = source.userData._originalInstanceMatrices;
+  if (raw instanceof Float32Array) {
+    // 零缩放方案不下调 count，当前 count 即原始数量
+    return { matrices: raw, count: source.count };
+  }
+  return {
+    matrices: source.instanceMatrix.array as Float32Array,
+    count: source.count,
+  };
+}
+
 export function getMatchingInstanceIndices(
   source: InstancedMesh,
   idSet: ReadonlySet<number>,
@@ -74,8 +121,10 @@ export function getMatchingInstanceIndices(
   const featureIndex = needsPidChannel ? 1 : 0;
   if (featureIdAttribute === 1 && !needsPidChannel) return [];
 
+  // fid 数组按原始实例下标存储，必须遍历原始数量；压缩后 source.count 已变小
+  const { count } = resolveOriginalInstanceSource(source);
   const indices: number[] = [];
-  for (let i = 0; i < source.count; i++) {
+  for (let i = 0; i < count; i++) {
     const fid = instanceFeatures.getFeatureId(featureIndex, i);
     if (targetFids.has(fid)) indices.push(i);
   }
@@ -94,10 +143,11 @@ export function measureInstanceSplitForTile(
   if (!geometry.boundingBox) geometry.computeBoundingBox();
   const localBox = geometry.boundingBox?.clone() ?? new Box3();
 
+  const { matrices } = resolveOriginalInstanceSource(source);
   const bbox = new Box3();
   source.updateWorldMatrix(true, false);
   for (const index of indices) {
-    source.getMatrixAt(index, tmpInstanceMatrix);
+    tmpInstanceMatrix.fromArray(matrices, index * 16);
     const instanceBox = localBox.clone().applyMatrix4(tmpInstanceMatrix);
     instanceBox.applyMatrix4(source.matrixWorld);
     bbox.union(instanceBox);
@@ -142,8 +192,10 @@ function createSplitInstancedMesh(
   newMesh.rotation.copy(originalMesh.rotation);
   newMesh.scale.copy(originalMesh.scale);
 
+  // 从原始矩阵读：压缩隐藏后 originalMesh.getMatrixAt 读到的是错位的压缩数组
+  const { matrices } = resolveOriginalInstanceSource(originalMesh);
   for (let j = 0; j < instanceIndices.length; j++) {
-    originalMesh.getMatrixAt(instanceIndices[j]!, tmpInstanceMatrix);
+    tmpInstanceMatrix.fromArray(matrices, instanceIndices[j]! * 16);
     newMesh.setMatrixAt(j, tmpInstanceMatrix);
   }
   newMesh.instanceMatrix.needsUpdate = true;
@@ -168,7 +220,7 @@ function createSplitInstancedMesh(
   }
 
   newMesh.userData = {
-    ...originalMesh.userData,
+    ...buildSplitUserData(originalMesh),
     featureId: idMap[primaryId],
     [cfg.idKey]: primaryId,
     [cfg.collectorKey]: idsOnMesh,

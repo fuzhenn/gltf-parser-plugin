@@ -1180,10 +1180,22 @@ function getPropertyDataOnMeshByPartId(
   }
 
   try {
-    const data = structuralMetadata.getPropertyTableData(
-      propertyTableIndex,
-      fid,
-    ) as Record<string, unknown>;
+    const cacheKey = `${propertyTableIndex}-${fid}`;
+    let data;
+    let cache = mesh.userData["_propertyCache"]
+    if (!cache){
+      mesh.userData["_propertyCache"] = new Map();
+      cache = mesh.userData["_propertyCache"];
+    }
+    if (cache.has(cacheKey)) {
+      data = cache.get(cacheKey)!;
+    } else {
+      data = structuralMetadata.getPropertyTableData(
+        propertyTableIndex,
+        fid,
+      ) as Record<string, unknown>;
+      cache.set(cacheKey, data);
+    }
     return channel === "oid" && internalData
       ? internalData(partId, data)
       : data;
