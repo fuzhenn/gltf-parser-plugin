@@ -1,4 +1,11 @@
-import { Material, Mesh, Object3D } from "three";
+import {
+  BufferGeometry,
+  Euler,
+  Material,
+  Mesh,
+  Object3D,
+  Vector3,
+} from "three";
 import {
   resolveStyleConditionContent,
   resolveStyleConditionFeatureIdAttribute,
@@ -7,6 +14,15 @@ import {
   type StyleConditionInput,
 } from "../appearance";
 import {
+  applyEuler,
+  applyVec3,
+  buildPivotStyleMatrix,
+  resolveStyleMaterial,
+} from "../plugin/style-appearance-shared";
+import type { MaterialBuilder } from "../types";
+import { defaultMaterialBuilder } from "../utils/build-materials";
+import {
+  disposeMergedSplitGeometryCacheEntry,
   disposeSplitGeometry,
   isTileInstancedMesh,
   isTileMesh,
@@ -38,6 +54,111 @@ export function buildAppearanceCacheKey(appearance?: StyleAppearance): string {
         ? "fn"
         : "";
   return `m${matKey}:c${color ?? ""}:o${opacity ?? ""}`;
+}
+
+/**
+ * 把完整的 {@link StyleAppearance} 应用到 split mesh（由 MeshCollector 在创建
+ * split mesh 后一次性调用；split mesh 走缓存复用，不存在重复叠加变换的问题）。
+ *
+ * - material / color / opacity：经 {@link resolveStyleMaterial} 解析终态材质，
+ *   与 highlight 等系统共享底层材质缓存；
+ * - mesh 工厂：按 {@link StyleMeshFactory} 约定把返回 Mesh 的 geometry / material
+ *   写回当前 split mesh（uuid 不变），被替换的原 split geometry 随之释放；
+ * - translation / scale / rotation / origin：split mesh 创建后 TRS 为初始态，
+ *   按 origin 做"绕枢轴的 S/R"后 decompose 回 TRS，translation 直接覆盖 position。
+ */
+export function applyStyleAppearanceToSplitMesh(
+  mesh: Mesh,
+  appearance: StyleAppearance,
+  materialBuilder?: MaterialBuilder,
+): void {
+  const resolvedMaterial = resolveStyleMaterial(
+    appearance,
+    mesh.material as Material,
+    materialBuilder ?? defaultMaterialBuilder,
+  );
+
+  if (appearance.mesh) {
+    const built = appearance.mesh(mesh.geometry, resolvedMaterial);
+    if (built) {
+      if (built.geometry !== mesh.geometry) {
+        const oldGeometry = mesh.geometry;
+        mesh.geometry = built.geometry;
+        disposeReplacedSplitGeometry(mesh, oldGeometry);
+      }
+      mesh.material = built.material;
+    } else {
+      mesh.material = resolvedMaterial;
+    }
+  } else {
+    mesh.material = resolvedMaterial;
+  }
+
+  const needTransform =
+    appearance.translation !== undefined ||
+    appearance.scale !== undefined ||
+    appearance.rotation !== undefined;
+  if (!needTransform) return;
+
+  const hasScaleOrRotation =
+    appearance.scale !== undefined || appearance.rotation !== undefined;
+
+  if (hasScaleOrRotation) {
+    const pivot = new Vector3();
+    if (appearance.origin !== undefined) {
+      applyVec3(pivot, appearance.origin);
+    }
+
+    let sx = 1;
+    let sy = 1;
+    let sz = 1;
+    if (appearance.scale !== undefined) {
+      if (Array.isArray(appearance.scale)) {
+        sx = appearance.scale[0] ?? 1;
+        sy = appearance.scale[1] ?? 1;
+        sz = appearance.scale[2] ?? 1;
+      } else {
+        const sc = appearance.scale as Vector3;
+        sx = sc.x;
+        sy = sc.y;
+        sz = sc.z;
+      }
+    }
+
+    const euler = new Euler();
+    if (appearance.rotation !== undefined) {
+      applyEuler(euler, appearance.rotation);
+    } else {
+      euler.set(0, 0, 0);
+    }
+
+    const styleM = buildPivotStyleMatrix(pivot, sx, sy, sz, euler);
+    mesh.updateMatrix();
+    mesh.matrix.multiply(styleM);
+    mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+  }
+
+  if (appearance.translation !== undefined) {
+    applyVec3(mesh.position, appearance.translation);
+  }
+}
+
+/**
+ * 释放被 mesh 工厂替换下来的 split geometry：
+ * - instanced split 与源瓦片共享同一 geometry，绝不能 dispose；
+ * - 合并 split 与瓦片共享顶点属性，需先摘除共享引用再释放（见 disposeMergedSplitGeometryCacheEntry）。
+ */
+function disposeReplacedSplitGeometry(
+  mesh: Mesh,
+  oldGeometry: BufferGeometry,
+): void {
+  const originalMesh = mesh.userData._originalMesh as Mesh | undefined;
+  if (!originalMesh) {
+    oldGeometry.dispose();
+    return;
+  }
+  if (oldGeometry === originalMesh.geometry) return;
+  disposeMergedSplitGeometryCacheEntry(oldGeometry, originalMesh);
 }
 
 export function buildSplitCacheKey(condition: StyleCondition): string {

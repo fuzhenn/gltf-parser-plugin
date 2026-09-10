@@ -137,7 +137,7 @@ function overrideMaterialCacheKey(
 
 function getDefaultColorMaterial(
   c: ColorInput,
-  opacity: number,
+  opacity: number | undefined,
   materialBuilder: MaterialBuilder
 ): Material {
   const hex = colorHex(c);
@@ -202,15 +202,17 @@ function applyAppearanceOverridesToMaterialInstance(
  * 改写实例材质靠 {@link colorOverrideMaterialCache}。回调返回的材质在提供 `color` /
  * `opacity` 时**直接 mutate**（约定每次返回新实例）。
  */
-function resolveStyleMaterial(
+export function resolveStyleMaterial(
   appearance: StyleAppearance,
   originalMaterial: Material,
   materialBuilder: MaterialBuilder,
 ): Material {
   const colorInput = appearance.color;
   const opacityRaw = appearance.opacity;
+  // 未声明 opacity 时保持 undefined（不改写透明度），不能规范化成 1，
+  // 否则下方"是否需要改写"的判断永远成立，材质实例会被 clone 并强制 transparent=false
   const opacityOverride =
-    opacityRaw != null ? clampOpacity01(opacityRaw) : 1;
+    opacityRaw != null ? clampOpacity01(opacityRaw) : undefined;
 
   if (appearance.material === undefined) {
     if (colorInput !== undefined) {

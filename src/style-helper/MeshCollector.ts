@@ -3,7 +3,7 @@
 //                 dispose();
 //                 getSplitMesh(tileMesh); 返回该瓦片上本 collector 的 split mesh
 
-import { InstancedMesh, Material, Mesh, Object3D } from "three";
+import { InstancedMesh, Mesh, Object3D } from "three";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
@@ -22,8 +22,10 @@ import {
 } from "../mesh-helper";
 import { buildSplitInstancedMeshForTileMesh } from "../mesh-helper/instance-split";
 import type { StyleCondition } from "../appearance";
+import type { MaterialBuilder } from "../types";
 
 import {
+  applyStyleAppearanceToSplitMesh,
   buildMatchCacheKey,
   buildSplitCacheKey,
   getCachedSplitMeshFromTileMesh,
@@ -47,11 +49,16 @@ function collectPartIdsFromTileMesh(
 export class MeshCollector {
   readonly featureIdAttribute: number;
   private _condition: StyleCondition;
+  private readonly _materialBuilder?: MaterialBuilder;
   private readonly _matchCacheKey: string;
   private readonly _splitCacheKey: string;
 
-  constructor(params: { condition: StyleCondition }) {
+  constructor(params: {
+    condition: StyleCondition;
+    materialBuilder?: MaterialBuilder;
+  }) {
     this._condition = params.condition;
+    this._materialBuilder = params.materialBuilder;
     this._matchCacheKey = buildMatchCacheKey(params.condition[0]);
     this._splitCacheKey = buildSplitCacheKey(params.condition);
     this.featureIdAttribute = resolveStyleConditionFeatureIdAttribute(
@@ -191,8 +198,6 @@ export class MeshCollector {
   private _applyStyle(mesh: Mesh): void {
     const appearance = this._condition[1];
     if (!appearance) return;
-    if (appearance.material) {
-      mesh.material = appearance.material as Material;
-    }
+    applyStyleAppearanceToSplitMesh(mesh, appearance, this._materialBuilder);
   }
 }

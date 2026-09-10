@@ -143,7 +143,9 @@ export class GLTFParserPlugin {
     if (!this._tiles) return;
     if (!this._styleHelper) {
       if (!style) return;
-      this._styleHelper = new StyleHelper();
+      this._styleHelper = new StyleHelper(
+        this._options.materialBuilder ?? defaultMaterialBuilder,
+      );
     }
 
     const scenes: Object3D[] = [];
