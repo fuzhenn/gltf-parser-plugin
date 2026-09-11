@@ -21,11 +21,11 @@ import {
   type FeatureIdIndexData,
   type IndexRange,
 } from "./feature-id-index";
-import {
-  cropPrecomputedEdgesForFids,
-  getPrecomputedEdges,
-  registerPrecomputedEdges,
-} from "./edge-geometry";
+// import {
+//   cropPrecomputedEdgesForFids,
+//   getPrecomputedEdges,
+//   registerPrecomputedEdges,
+// } from "./edge-geometry";
 
 /** OID 对应 `_FEATURE_ID_0`，PID 对应 `_FEATURE_ID_1` */
 export type PartIdChannel = "oid" | "pid";
@@ -310,26 +310,26 @@ function createGeometryForFeatureIdSet(
   }
   newGeometry.setIndex(new BufferAttribute(newIndices, 1));
 
-  const sourceEdges = getPrecomputedEdges(originalGeometry);
-  if (sourceEdges) {
-    if (sourceEdges.triangleIndices.length === 0) {
-      registerPrecomputedEdges(newGeometry, sourceEdges);
-    } else if (indexCache.triangleIndexMap && indexCache.triangleIndices) {
-      const cropped = cropPrecomputedEdgesForFids(
-        sourceEdges,
-        indexCache.triangleIndexMap,
-        indexCache.triangleIndices,
-        targetFids,
-      );
-      if (cropped) {
-        registerPrecomputedEdges(newGeometry, {
-          positions: cropped,
-          triangleIndices: new Uint32Array(0),
-          thresholdAngleDeg: sourceEdges.thresholdAngleDeg,
-        });
-      }
-    }
-  }
+  // const sourceEdges = getPrecomputedEdges(originalGeometry);
+  // if (sourceEdges) {
+  //   if (sourceEdges.triangleIndices.length === 0) {
+  //     registerPrecomputedEdges(newGeometry, sourceEdges);
+  //   } else if (indexCache.triangleIndexMap && indexCache.triangleIndices) {
+  //     const cropped = cropPrecomputedEdgesForFids(
+  //       sourceEdges,
+  //       indexCache.triangleIndexMap,
+  //       indexCache.triangleIndices,
+  //       targetFids,
+  //     );
+  //     if (cropped) {
+  //       registerPrecomputedEdges(newGeometry, {
+  //         positions: cropped,
+  //         triangleIndices: new Uint32Array(0),
+  //         thresholdAngleDeg: sourceEdges.thresholdAngleDeg,
+  //       });
+  //     }
+  //   }
+  // }
 
   return newGeometry;
 }
@@ -1155,6 +1155,8 @@ export function getPropertyDataFromMeshUserData(
   );
 }
 
+const propertyCache = new Map()
+
 function getPropertyDataOnMeshByPartId(
   mesh: Mesh,
   partId: number,
@@ -1180,13 +1182,14 @@ function getPropertyDataOnMeshByPartId(
   }
 
   try {
-    const cacheKey = `${propertyTableIndex}-${fid}`;
+    const cacheKey = `${propertyTableIndex}-${partId}`;
     let data;
-    let cache = mesh.userData["_propertyCache"]
+    let cache = mesh.userData["_propertyCache"] as Map<string, Record<string, unknown>>;
     if (!cache){
-      mesh.userData["_propertyCache"] = new Map();
-      cache = mesh.userData["_propertyCache"];
+      cache = new Map();
+      mesh.userData["_propertyCache"] = cache;
     }
+
     if (cache.has(cacheKey)) {
       data = cache.get(cacheKey)!;
     } else {

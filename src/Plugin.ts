@@ -53,6 +53,7 @@ export class GLTFParserPlugin {
 
     tiles.addEventListener("load-model", this._onLoadModelCB);
     tiles.addEventListener("dispose-model", this._onDisposeModelCB);
+    tiles.addEventListener("update-after", this._onUpdateAfterCB);
   }
 
   /**
@@ -127,12 +128,29 @@ export class GLTFParserPlugin {
    */
   private _onLoadModelCB = ({ scene }: { scene: Object3D }) => {
     buildOidToFeatureIdMap(scene);
-    this._styleHelper?.applyTileMeshVisibility(scene);
-    this._styleHelper?.applyStyle(scene);
+    // 新瓦片首处理：幂等应用当前样式并盖章当前代数
+    this._styleHelper?.applySceneIfStale(scene);
   };
 
   private _onDisposeModelCB = ({ scene }: { scene: Object3D }) => {
     this._styleHelper?.disposeTileScene(scene);
+  };
+
+  /**
+   * 只补处理"可见且样式代数落后"的瓦片；
+   * 不可见的过期瓦片留到变可见时再处理。
+   */
+  private _onUpdateAfterCB = () => {
+    const styleHelper = this._styleHelper;
+    const visibleTiles = this._tiles?.visibleTiles as
+      | Set<{ cached?: { scene?: Object3D } }>
+      | undefined;
+    if (!styleHelper || !visibleTiles) return;
+
+    for (const tile of visibleTiles) {
+      const scene = tile?.cached?.scene;
+      if (scene) styleHelper.applySceneIfStale(scene);
+    }
   };
 
   /**
@@ -149,14 +167,21 @@ export class GLTFParserPlugin {
     }
 
     const scenes: Object3D[] = [];
-    this._tiles.forEachLoadedModel((scene) => {
+    this._tiles.forEachLoadedModel((scene: Object3D) => {
       scenes.push(scene);
     });
 
-    const added = this._styleHelper.setStyle(style, scenes);
-    for (const scene of scenes) {
-      this._styleHelper.applyTileMeshVisibility(scene);
-      for (const collector of added) collector.applyStyle(scene);
+    // 被移除的条件必须立即从所有瓦片摘除（split 卸载），全量处理不能延后
+    this._styleHelper.setStyle(style, scenes);
+
+    // 新增/变更的样式只立即应用到当前可见瓦片；不可见瓦片由 update-after 按需补齐
+    const visibleTiles = this._tiles.visibleTiles as
+      | Set<{ cached?: { scene?: Object3D } }>
+      | undefined;
+    if (!visibleTiles) return;
+    for (const tile of visibleTiles) {
+      const scene = tile?.cached?.scene;
+      if (scene) this._styleHelper.applySceneIfStale(scene);
     }
   }
 
@@ -186,6 +211,7 @@ export class GLTFParserPlugin {
       this._tiles.manager.removeHandler(GLTF_REGEX);
       this._tiles.removeEventListener("load-model", this._onLoadModelCB);
       this._tiles.removeEventListener("dispose-model", this._onDisposeModelCB);
+      this._tiles.removeEventListener("update-after", this._onUpdateAfterCB);
     }
   }
 }

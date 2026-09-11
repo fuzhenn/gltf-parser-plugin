@@ -18,13 +18,22 @@ import {
   snapshotOriginalIndex,
 } from "../mesh-helper";
 
+/** scene 级样式代数标记（挂在 scene.userData，随瓦片释放自动清理） */
+const STYLE_GENERATION_KEY = "_gltfParserStyleGeneration";
+
 export class StyleHelper {
   style: StyleConfig | null = null;
   private readonly _collectors = new Map<string, MeshCollector>();
   private readonly _materialBuilder?: MaterialBuilder;
+  private _generation = 0;
 
   constructor(materialBuilder?: MaterialBuilder) {
     this._materialBuilder = materialBuilder;
+  }
+
+  /** 样式代数：每次 setStyle 递增，scene 上的标记落后即为"过期" */
+  get generation(): number {
+    return this._generation;
   }
 
   setStyle(style: StyleConfig | null, scenes: Object3D[]): MeshCollector[] {
@@ -50,6 +59,8 @@ export class StyleHelper {
       this._collectors.set(key, collector);
       added.push(collector);
     }
+
+    this._generation++;
     return added;
   }
 
@@ -86,6 +97,15 @@ export class StyleHelper {
     for (const collector of this._collectors.values()) {
       collector.applyStyle(scene);
     }
+  }
+
+  applySceneIfStale(scene: Object3D): void {
+    if (scene.userData[STYLE_GENERATION_KEY] === this._generation) {
+      return;
+    }
+    this.applyTileMeshVisibility(scene);
+    this.applyStyle(scene);
+    scene.userData[STYLE_GENERATION_KEY] = this._generation;
   }
 
   getSplitMeshes(scene: Object3D): Mesh[] {

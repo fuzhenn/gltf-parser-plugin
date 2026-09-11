@@ -23,6 +23,8 @@ function extractPartIdFromPropertyData(
   return undefined;
 }
 
+const idMapCache = new Map();
+
 function buildIdToFeatureIdMapForChannel(
   meshObject: Object3D,
   featureIndex: number,
@@ -72,6 +74,12 @@ function buildIdToFeatureIdMapForChannel(
 
       idToFeatureIdMap[partId] = currentFeatureId;
       processedFeatureIds.add(currentFeatureId);
+      let propertyCache = meshObject.userData["_propertyCache"] as Map<string, Record<string, unknown>>;
+      if (!propertyCache){
+        propertyCache = new Map();
+      }
+      propertyCache.set(`${propertyTableIndex}-${partId}`, featureData);
+      meshObject.userData["_propertyCache"] = propertyCache;
     } catch {
       continue;
     }
