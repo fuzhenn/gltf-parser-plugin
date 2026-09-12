@@ -43,9 +43,9 @@ import {
   bboxArrayToBox3,
   selectByBoxFromOidMap,
   selectByPolygonFromOidMap,
-} from "./utils/spatial-query";
+} from "./utils/spatial-selection";
 import { tileCache } from "./db";
-import { parseEmbeddedStructureDataFromTilesSync } from "./utils/tileset-structure-uri";
+import { parseStructureDataFromTilesSync } from "./utils/tileset-structure";
 import { TilesRenderer } from "3d-tiles-renderer";
 import { StyleHelper as ConditionStyleHelper } from "./style-helper";
 
@@ -54,8 +54,8 @@ import type {
   ModelInfo,
   StructureData,
   StructureNode,
-} from "./plugin-types";
-import { defaultMaterialBuilder } from "./utils/build-materials";
+} from "./types";
+import { defaultMaterialBuilder } from "./loader";
 
 class MeshCollectorManager {
   private readonly helper = new ConditionStyleHelper();
@@ -69,7 +69,7 @@ class MeshCollectorManager {
   }
 
   getSplitMeshes(scene: Object3D): Mesh[] {
-    this.helper.applyStyle(scene);
+    // this.helper.applyStyle(scene);
     return this.helper.getSplitMeshes(scene);
   }
 
@@ -410,7 +410,7 @@ export class GLTFParserPlugin {
       return null;
     }
 
-    const structureData = parseEmbeddedStructureDataFromTilesSync(this.tiles);
+    const structureData = parseStructureDataFromTilesSync(this.tiles);
     if (!structureData) {
       return null;
     }

@@ -1,6 +1,6 @@
 // Import inline Worker (Vite will compile and bundle the worker code into a base64 data URL)
 import GLTFWorkerClass from "../worker/index?worker&inline";
-import { resolveFetchOptions } from "./apply-fetch-options";
+import { resolveFetchOptions } from "./fetch-options";
 
 // Worker pool management
 let workerPool: Worker[] = [];

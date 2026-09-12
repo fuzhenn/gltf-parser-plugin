@@ -1,31 +1,5 @@
-export { buildTextures, type TextureBuildResult } from "./build-textures";
-export { buildMaterials } from "./build-materials";
-export {
-  buildMeshPrimitives,
-  type PrimitiveData,
-} from "./build-mesh-primitives";
-export {
-  acquireWorker,
-  setMaxWorkers,
-  getWorkers,
-  clearSchemaCache,
-} from "./worker-pool";
-export {
-  applyFetchOptionsToLoader,
-  resolveFetchOptions,
-} from "./apply-fetch-options";
-export {
-  bboxArrayToBox3,
-  pointInPolygon,
-  segmentsIntersect,
-  polygonIntersectsRect,
-  selectByBoxFromOidMap,
-  selectByPolygonFromOidMap,
-} from "./spatial-query";
-export { toColor, type ColorInput } from "./color-input";
-export {
-  decodeGzipBase64DataUriSync,
-  getStructureDataUriFromTileset,
-  parseEmbeddedStructureDataFromTilesSync,
-  type TilesetWithStructureUri,
-} from "./tileset-structure-uri";
+export * from "./color-input";
+export * from "./fetch-options";
+export * from "./spatial-selection";
+export * from "./tileset-structure";
+export * from "./worker-pool";

@@ -1,5 +1,22 @@
 import { Material, Texture } from "three";
 
+export type IndexRange = { offset: number; length: number };
+
+/**
+ * 按 featureId 分组后的 index 数据。
+ * worker 解析 tile 时预构建（键为小写顶点属性名，如 `_feature_id_0`），主线程直接取用；
+ * split / 显隐无需再遍历 sourceIndex 即可按 fid 拼接三角形。
+ */
+export type FeatureIdIndexData = {
+  /** featureId → buffer 中的 {offset,length}（普通对象，省去 Map 的构造与遍历开销） */
+  featureIdIndexMap: Record<number, IndexRange>;
+  /** 按 fid 连续排布的 index（与源 index 同类型） */
+  buffer: Uint16Array | Uint32Array;
+  /** fid → 源 mesh 三角形索引（offset/length 指向 triangleIndices 缓冲） */
+  triangleIndexMap?: Record<number, IndexRange>;
+  triangleIndices?: Uint32Array;
+};
+
 // EXT_mesh_features extension data
 interface MeshFeaturesExtension {
   featureIds: Array<{
@@ -174,15 +191,7 @@ export interface GLTFWorkerData {
          * worker 解析后预构建的「按 featureId 分组的 index」，键为小写顶点属性名（如 `_feature_id_0`）。
          * 主线程建几何时直接取用，避免在主线程遍历 sourceIndex。
          */
-        featureIdIndices?: Record<
-          string,
-          {
-            buffer: Uint16Array | Uint32Array;
-            map: Record<number, { offset: number; length: number }>;
-            triangleIndices: Uint32Array;
-            triangleIndexMap: Record<number, { offset: number; length: number }>;
-          }
-        >;
+        featureIdIndices?: Record<string, FeatureIdIndexData>;
         /** worker 预计算的特征边 LineSegments position + 源三角形索引 */
         precomputedEdges?: {
           positions: Float32Array;

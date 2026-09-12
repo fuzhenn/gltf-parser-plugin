@@ -6,14 +6,12 @@ import {
 } from "../MeshCollector-deleted";
 import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/mesh";
 import type { MeshPartVisibilityConfig } from "../mesh-helper";
-import type {
-  StyleCondition,
-  StyleConditionInput,
-  StyleShowInput,
-} from "./style-appearance-types";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
+  type StyleCondition,
+  type StyleConditionInput,
+  type StyleShowInput,
 } from "../appearance";
 import {
   getFeatureIdAttributesFromStyleConfig,
@@ -30,7 +28,7 @@ import type {
   StyleMaterialResolver,
   StyleMeshFactory,
   StyleVec3Input,
-} from "./style-appearance-types";
+} from "../appearance/types";
 import {
   appearanceGroupKey,
   applyEuler,
@@ -245,8 +243,7 @@ function buildHighlightMatchRule(
   featureIdAttribute: number,
   highlightGroups: Map<string, HighlightGroupConfig>,
 ): CollectorMatchRule {
-  const entries: NonNullable<CollectorMatchRule["highlightEntries"]> =
-    [];
+  const entries: NonNullable<CollectorMatchRule["highlightEntries"]> = [];
   const idFilterParts: number[] = [];
 
   for (const hl of highlightGroups.values()) {
@@ -296,7 +293,10 @@ export class PartHighlightHelper {
   private _generationUid = 0;
   materialBuilder: MaterialBuilder;
 
-  constructor(private context: PartEffectHost, materialBuilder: MaterialBuilder) {
+  constructor(
+    private context: PartEffectHost,
+    materialBuilder: MaterialBuilder,
+  ) {
     this.materialBuilder = materialBuilder;
   }
 
@@ -474,7 +474,13 @@ export class PartHighlightHelper {
 
       const added = collector.appendMeshesForTileScene(scene);
       for (const mesh of added) {
-        applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps, this.materialBuilder);
+        applyStyleAppearanceToMesh(
+          mesh,
+          appearance,
+          rootGroup,
+          maps,
+          this.materialBuilder,
+        );
       }
     }
   }
@@ -538,7 +544,13 @@ export class PartHighlightHelper {
           const s = this.context.getRootGroup();
           if (!s) return;
           collector.meshes.forEach((mesh) => {
-            applyStyleAppearanceToMesh(mesh, appearance, s, maps, this.materialBuilder);
+            applyStyleAppearanceToMesh(
+              mesh,
+              appearance,
+              s,
+              maps,
+              this.materialBuilder,
+            );
           });
         };
         this.meshChangeHandlers.set(groupKey, handler);

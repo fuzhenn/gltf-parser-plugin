@@ -8,10 +8,13 @@ import type { TilesRenderer } from "3d-tiles-renderer";
 import { getPropertyDataMapFromTilesByFeatureAttribute } from "../mesh-helper/mesh";
 import { Object3D } from "three";
 import type { Material } from "three";
-import type { StyleConfig, StyleAppearance } from "./style-appearance-types";
 import type { MeshPartVisibilityConfig } from "../mesh-helper";
-import { buildStyleConditionEvaluatorMap } from "../appearance";
-import { getFeatureIdAttributesFromStyleConfig } from "../appearance";
+import {
+  buildStyleConditionEvaluatorMap,
+  getFeatureIdAttributesFromStyleConfig,
+  type StyleConfig,
+  type StyleAppearance,
+} from "../appearance";
 import {
   applyStyleAppearanceToMesh,
   appearanceGroupKey,
@@ -35,7 +38,7 @@ export type {
   StyleMeshFactory,
   StyleShowInput,
   StyleVec3Input,
-} from "./style-appearance-types";
+} from "../appearance/types";
 
 const STYLE_VISIBILITY_LAYER = "style";
 
@@ -77,7 +80,10 @@ export class StyleHelper {
   private _generationUid = 0;
   private materialBuilder: MaterialBuilder;
 
-  constructor(private context: StyleHelperContext, materialBuilder: MaterialBuilder) {
+  constructor(
+    private context: StyleHelperContext,
+    materialBuilder: MaterialBuilder,
+  ) {
     this.materialBuilder = materialBuilder;
   }
 
@@ -138,10 +144,7 @@ export class StyleHelper {
   ensureStyleApplied(): void {
     const style = this.style;
     if (!style) return;
-    if (
-      !style.show &&
-      (!style.conditions || style.conditions.length === 0)
-    ) {
+    if (!style.show && (!style.conditions || style.conditions.length === 0)) {
       return;
     }
     if (this.styleCollectors.length > 0) return;
@@ -178,7 +181,13 @@ export class StyleHelper {
 
       const added = collector.appendMeshesForTileScene(scene);
       for (const mesh of added) {
-        applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps, this.materialBuilder);
+        applyStyleAppearanceToMesh(
+          mesh,
+          appearance,
+          rootGroup,
+          maps,
+          this.materialBuilder,
+        );
       }
     }
   }
@@ -303,7 +312,13 @@ export class StyleHelper {
         const handler = () => {
           if (!rootGroup) return;
           collector.meshes.forEach((mesh) => {
-            applyStyleAppearanceToMesh(mesh, appearance, rootGroup, maps, this.materialBuilder);
+            applyStyleAppearanceToMesh(
+              mesh,
+              appearance,
+              rootGroup,
+              maps,
+              this.materialBuilder,
+            );
           });
         };
         this.meshChangeHandlers.set(groupKey, handler);

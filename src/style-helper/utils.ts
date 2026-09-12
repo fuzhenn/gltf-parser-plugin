@@ -1,12 +1,17 @@
 import {
+  BufferAttribute,
   BufferGeometry,
   Euler,
+  InstancedBufferAttribute,
+  InstancedMesh,
   Material,
   Mesh,
   Object3D,
   Vector3,
 } from "three";
 import {
+  buildStyleConditionEvaluatorMap,
+  evaluateStyleCondition,
   resolveStyleConditionContent,
   resolveStyleConditionFeatureIdAttribute,
   type StyleCondition,
@@ -20,13 +25,21 @@ import {
   resolveStyleMaterial,
 } from "../plugin/style-appearance-shared";
 import type { MaterialBuilder } from "../types";
-import { defaultMaterialBuilder } from "../utils/build-materials";
+import { defaultMaterialBuilder } from "../loader";
 import {
-  disposeMergedSplitGeometryCacheEntry,
-  disposeSplitGeometry,
+  addMeshUserData,
+  buildMergedSplitGeometryForTileMesh,
+  buildMergedSplitGeometryForTileMeshByPids,
+  buildVisibleIndex,
+  featureIdAttributeToChannel,
+  getPartIdMapForFeatureAttribute,
+  getPropertyDataFromUserData,
   isTileInstancedMesh,
   isTileMesh,
+  snapshotOriginalIndex,
 } from "../mesh-helper";
+import type { InstanceFeatures } from "../mesh/types";
+import { buildSplitInstancedMeshForTileMesh } from "../mesh-helper/instance-split";
 
 type SplitMeshCache = Map<string, Mesh>;
 type MatchedFeatureIdsCache = Map<string, Set<number>>;
@@ -68,37 +81,26 @@ export function buildAppearanceCacheKey(appearance?: StyleAppearance): string {
  *   按 origin 做"绕枢轴的 S/R"后 decompose 回 TRS，translation 直接覆盖 position。
  */
 export function applyStyleAppearanceToSplitMesh(
-  mesh: Mesh,
+  geometry: BufferGeometry,
+  material: Material,
   appearance: StyleAppearance,
   materialBuilder?: MaterialBuilder,
-): void {
+): Mesh | null {
   const resolvedMaterial = resolveStyleMaterial(
     appearance,
-    mesh.material as Material,
+    material,
     materialBuilder ?? defaultMaterialBuilder,
   );
 
-  if (appearance.mesh) {
-    const built = appearance.mesh(mesh.geometry, resolvedMaterial);
-    if (built) {
-      if (built.geometry !== mesh.geometry) {
-        const oldGeometry = mesh.geometry;
-        mesh.geometry = built.geometry;
-        disposeReplacedSplitGeometry(mesh, oldGeometry);
-      }
-      mesh.material = built.material;
-    } else {
-      mesh.material = resolvedMaterial;
-    }
-  } else {
-    mesh.material = resolvedMaterial;
-  }
+  const mesh = appearance.mesh
+    ? appearance.mesh(geometry, resolvedMaterial)
+    : new Mesh(geometry, resolvedMaterial);
 
   const needTransform =
     appearance.translation !== undefined ||
     appearance.scale !== undefined ||
     appearance.rotation !== undefined;
-  if (!needTransform) return;
+  if (!needTransform) return mesh;
 
   const hasScaleOrRotation =
     appearance.scale !== undefined || appearance.rotation !== undefined;
@@ -141,24 +143,8 @@ export function applyStyleAppearanceToSplitMesh(
   if (appearance.translation !== undefined) {
     applyVec3(mesh.position, appearance.translation);
   }
-}
 
-/**
- * 释放被 mesh 工厂替换下来的 split geometry：
- * - instanced split 与源瓦片共享同一 geometry，绝不能 dispose；
- * - 合并 split 与瓦片共享顶点属性，需先摘除共享引用再释放（见 disposeMergedSplitGeometryCacheEntry）。
- */
-function disposeReplacedSplitGeometry(
-  mesh: Mesh,
-  oldGeometry: BufferGeometry,
-): void {
-  const originalMesh = mesh.userData._originalMesh as Mesh | undefined;
-  if (!originalMesh) {
-    oldGeometry.dispose();
-    return;
-  }
-  if (oldGeometry === originalMesh.geometry) return;
-  disposeMergedSplitGeometryCacheEntry(oldGeometry, originalMesh);
+  return mesh;
 }
 
 export function buildSplitCacheKey(condition: StyleCondition): string {
@@ -252,6 +238,31 @@ export function attachSplitMeshToTileMeshParent(
   tileMesh.parent?.add(splitMesh);
 }
 
+/**
+ * 仅释放不与瓦片 `geometry` 共享的 index / attributes。
+ */
+export function disposeSplitGeometry(mesh: Mesh): void {
+  const geom = mesh.geometry;
+  if (!geom) return;
+
+  const tileGeom = mesh.userData?._originalMesh?.geometry as
+    | BufferGeometry
+    | undefined;
+  const idx = geom.index;
+  if (idx && idx !== tileGeom?.index) {
+    idx.dispose();
+    geom.setIndex(null);
+  }
+
+  if (!tileGeom) return;
+  for (const name of Object.keys(geom.attributes)) {
+    const attr = geom.attributes[name];
+    if (!attr || attr === tileGeom.getAttribute(name)) continue;
+    geom.deleteAttribute(name);
+    if (attr instanceof BufferAttribute) attr.dispose();
+  }
+}
+
 export function releaseConditionCache(
   tileMesh: Mesh,
   matchKey: string,
@@ -266,6 +277,104 @@ export function releaseConditionCache(
   removeMatchedFeatureIdsCache(tileMesh, matchKey);
 }
 
+function collectPartIdsFromTileMesh(
+  tileMesh: Mesh,
+  featureIdAttribute: number,
+): number[] {
+  const idMap = getPartIdMapForFeatureAttribute(tileMesh, featureIdAttribute);
+  if (!idMap) return [];
+  return Object.keys(idMap).map((k) => Number(k));
+}
+
+/**
+ * 解析某条件在 tile mesh 上命中的 partId 集合（按 cacheKey 缓存）。
+ * featureIdAttribute 由调用方传入（MeshCollector 构造时已解析），避免重复计算。
+ */
+export function resolveMatchedPartIdsOnTileMesh(
+  tileMesh: Mesh,
+  condition: StyleCondition,
+  cacheKey: string,
+  featureIdAttribute: number,
+): Set<number> {
+  const cached = getCachedMatchedFeatureIds(tileMesh, cacheKey);
+  if (cached) return cached;
+
+  const [condInput] = condition;
+  const idMap = getPartIdMapForFeatureAttribute(tileMesh, featureIdAttribute);
+  const matchedPartIds = new Set<number>();
+  if (!idMap) {
+    setCachedMatchedFeatureIds(tileMesh, cacheKey, matchedPartIds);
+    return matchedPartIds;
+  }
+
+  const evaluators = buildStyleConditionEvaluatorMap({
+    conditions: [condition],
+  });
+
+  for (const partId of collectPartIdsFromTileMesh(
+    tileMesh,
+    featureIdAttribute,
+  )) {
+    const propertyData = getPropertyDataFromUserData(
+      tileMesh.userData,
+      partId,
+      featureIdAttribute,
+    );
+    if (propertyData == null) continue;
+    if (!evaluateStyleCondition(condInput, propertyData, evaluators)) {
+      continue;
+    }
+    if (idMap[partId] === undefined) continue;
+    matchedPartIds.add(partId);
+  }
+
+  setCachedMatchedFeatureIds(tileMesh, cacheKey, matchedPartIds);
+  return matchedPartIds;
+}
+
+/**
+ * 按 matchedPartIds 从 tile mesh 构建拆分 mesh（普通网格走合并几何，实例网格走实例拆分），
+ * 并应用 appearance；未命中或构建失败返回 null。
+ */
+export function buildSplitMeshForTileMesh(
+  tileMesh: Mesh,
+  matchedPartIds: Set<number>,
+  featureIdAttribute: number,
+  appearance: StyleAppearance,
+  materialBuilder?: MaterialBuilder,
+): Mesh | null {
+  if (matchedPartIds.size === 0) return null;
+
+  if (tileMesh instanceof InstancedMesh && isTileInstancedMesh(tileMesh)) {
+    const instanced = buildSplitInstancedMeshForTileMesh(
+      tileMesh,
+      matchedPartIds,
+      featureIdAttribute,
+    );
+    return instanced ? instanced : null;
+  }
+
+  if (!isTileMesh(tileMesh)) return null;
+
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  const geometry =
+    channel === "pid"
+      ? buildMergedSplitGeometryForTileMeshByPids(tileMesh, matchedPartIds)
+      : buildMergedSplitGeometryForTileMesh(tileMesh, matchedPartIds);
+  if (!geometry) return null;
+
+  const splitMesh = applyStyleAppearanceToSplitMesh(
+    geometry,
+    tileMesh.material as Material,
+    appearance,
+    materialBuilder,
+  );
+  addMeshUserData(tileMesh, splitMesh!, matchedPartIds, channel, {
+    splitGeometryManagedByCache: true,
+  });
+  return splitMesh ? splitMesh : null;
+}
+
 export function collectTileMeshesFromScene(scene: Object3D): Mesh[] {
   const tileMeshes: Mesh[] = [];
   scene.traverse((child) => {
@@ -274,4 +383,193 @@ export function collectTileMeshesFromScene(scene: Object3D): Mesh[] {
     }
   });
   return tileMeshes;
+}
+
+// ---------- 按 feature 隐藏（普通 mesh 走 index 过滤） ----------
+
+export function hideMatchedFeaturesOnTileMesh(
+  mesh: Mesh,
+  featureIdAttribute: number | undefined,
+  hiddenFids: Set<number>,
+): void {
+  const geometry = mesh.geometry;
+  const index = geometry?.index;
+  if (!index) return;
+
+  if (featureIdAttribute === undefined || hiddenFids.size === 0) {
+    restoreOriginalIndex(mesh, geometry);
+    return;
+  }
+
+  const original = snapshotOriginalIndex(mesh, geometry);
+  if (!original) return;
+
+  const filtered = buildVisibleIndex(
+    mesh,
+    original.array,
+    `_feature_id_${featureIdAttribute}`,
+    hiddenFids,
+  );
+  setFilteredIndex(mesh, geometry, original, filtered);
+}
+
+function disposeStyleFilteredIndex(
+  mesh: Mesh,
+  original: BufferAttribute,
+): void {
+  const filtered = mesh.userData._styleFilteredIndex as
+    | BufferAttribute
+    | undefined;
+  if (filtered && filtered !== original) {
+    filtered.dispose();
+  }
+  mesh.userData._styleFilteredIndex = undefined;
+}
+
+function setFilteredIndex(
+  mesh: Mesh,
+  geometry: BufferGeometry,
+  original: BufferAttribute,
+  filteredArray: Uint16Array | Uint32Array,
+): void {
+  disposeStyleFilteredIndex(mesh, original);
+  const attr = new BufferAttribute(filteredArray, 1);
+  mesh.userData._styleFilteredIndex = attr;
+  geometry.setIndex(attr);
+}
+
+function restoreOriginalIndex(mesh: Mesh, geometry: BufferGeometry): void {
+  const original = mesh.userData._originalIndex;
+  if (!(original instanceof BufferAttribute)) return;
+  disposeStyleFilteredIndex(mesh, original);
+  geometry.setIndex(original);
+}
+
+// ---------- 按 feature 隐藏（InstancedMesh 走实例压缩） ----------
+
+let scratchKeptInstanceIndices: Int32Array | undefined;
+
+/** instanced 显隐的实例化 feature 通道；pid(1) 需声明第二个 featureIds 通道才可解析 */
+function resolveInstanceFeatureIndex(
+  instanceFeatures: InstanceFeatures,
+  featureIdAttribute: number,
+): number | null {
+  if (featureIdAttribute === 0) return 0;
+  return instanceFeatures.featureIds.length > 1 ? 1 : null;
+}
+
+/** 引用快照：过滤只通过替换 instanceMatrix / instanceColor 属性对象进行，不改写原数组 */
+function snapshotInstancedVisibility(mesh: InstancedMesh): void {
+  if (
+    mesh.userData._originalInstanceMatrix instanceof InstancedBufferAttribute
+  ) {
+    return;
+  }
+  mesh.userData._originalInstanceMatrix = mesh.instanceMatrix;
+  mesh.userData._originalInstanceCount = mesh.count;
+  if (mesh.instanceColor) {
+    mesh.userData._originalInstanceColor = mesh.instanceColor;
+  }
+}
+
+function restoreInstancedVisibility(mesh: InstancedMesh): void {
+  const original = mesh.userData._originalInstanceMatrix;
+  if (!(original instanceof InstancedBufferAttribute)) return;
+  if (mesh.instanceMatrix === original) return;
+  mesh.instanceMatrix = original;
+  mesh.count = mesh.userData._originalInstanceCount as number;
+  const originalColor = mesh.userData._originalInstanceColor;
+  if (
+    originalColor instanceof InstancedBufferAttribute &&
+    mesh.instanceColor !== originalColor
+  ) {
+    mesh.instanceColor = originalColor;
+  }
+}
+
+/**
+ * InstancedMesh 的按 feature 隐藏：把可见 instance 的矩阵（及 instanceColor）压缩进
+ * 新属性对象并下调 count，被隐藏的 instance 不再参与绘制。
+ * 始终从原始快照出发重建，重复调用与恢复语义幂等。
+ */
+export function hideMatchedFeaturesOnInstancedMesh(
+  mesh: InstancedMesh,
+  featureIdAttribute: number | undefined,
+  hiddenFids: Set<number>,
+): void {
+  snapshotInstancedVisibility(mesh);
+
+  const instanceFeatures = mesh.userData.instanceFeatures as
+    | InstanceFeatures
+    | undefined;
+  if (!instanceFeatures || featureIdAttribute === undefined) {
+    restoreInstancedVisibility(mesh);
+    return;
+  }
+  const featureIndex = resolveInstanceFeatureIndex(
+    instanceFeatures,
+    featureIdAttribute,
+  );
+
+  if (featureIndex === null || hiddenFids.size === 0) {
+    restoreInstancedVisibility(mesh);
+    return;
+  }
+
+  const originalMatrix = mesh.userData
+    ._originalInstanceMatrix as InstancedBufferAttribute;
+  const originalCount = mesh.userData._originalInstanceCount as number;
+  const source = originalMatrix.array as Float32Array;
+
+  if (
+    !scratchKeptInstanceIndices ||
+    scratchKeptInstanceIndices.length < originalCount
+  ) {
+    scratchKeptInstanceIndices = new Int32Array(originalCount);
+  }
+  const kept = scratchKeptInstanceIndices;
+  let visibleCount = 0;
+  for (let i = 0; i < originalCount; i++) {
+    if (!hiddenFids.has(instanceFeatures.getFeatureId(featureIndex, i))) {
+      kept[visibleCount++] = i;
+    }
+  }
+
+  if (visibleCount === originalCount) {
+    restoreInstancedVisibility(mesh);
+    return;
+  }
+
+  const matrixAttr = new InstancedBufferAttribute(
+    new Float32Array(visibleCount * 16),
+    16,
+  );
+  const dst = matrixAttr.array as Float32Array;
+  for (let j = 0; j < visibleCount; j++) {
+    const srcOffset = kept[j]! * 16;
+    dst.set(source.subarray(srcOffset, srcOffset + 16), j * 16);
+  }
+
+  // instanceColor 语义是「instance 下标 → 颜色」，必须与矩阵同步压缩，否则颜色错位
+  const originalColor = mesh.userData._originalInstanceColor;
+  if (originalColor instanceof InstancedBufferAttribute) {
+    const itemSize = originalColor.itemSize;
+    const srcColor = originalColor.array as Float32Array;
+    const colorAttr = new InstancedBufferAttribute(
+      new Float32Array(visibleCount * itemSize),
+      itemSize,
+    );
+    const dstColor = colorAttr.array as Float32Array;
+    for (let j = 0; j < visibleCount; j++) {
+      const srcOffset = kept[j]! * itemSize;
+      dstColor.set(
+        srcColor.subarray(srcOffset, srcOffset + itemSize),
+        j * itemSize,
+      );
+    }
+    mesh.instanceColor = colorAttr;
+  }
+
+  mesh.instanceMatrix = matrixAttr;
+  mesh.count = visibleCount;
 }

@@ -1,6 +1,6 @@
 import { Box3, Vector2 } from "three";
 import type { Vector3 } from "three";
-import type { StructureNode } from "../plugin-types";
+import type { StructureNode } from "../types";
 
 /**
  * 射线法判断点是否在多边形内

@@ -1,7 +1,7 @@
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { TilesRenderer } from "3d-tiles-renderer";
 import { Object3D } from "three";
-import { applyFetchOptionsToLoader, resolveFetchOptions } from "./utils";
+import { applyFetchOptionsToLoader, resolveFetchOptions } from "../utils";
 
 export interface FeatureIds {
   direct?: number[];
@@ -20,8 +20,6 @@ export interface PmiModel {
   rootNodes: PmiNode[];
 }
 
-const globalNodeIds = new Map<string, number>();
-
 export async function loadPmiModel(
   url: string,
   loader: GLTFLoader,
@@ -35,7 +33,8 @@ export async function loadPmiModel(
     resolveFetchOptions(tilesFetchOptions, fetchOptions),
   );
   const result = await loader.loadAsync(url);
-  globalNodeIds.set(url, 0);
+
+  let nextNodeId = 0;
 
   const mapNodeObject3D = new Map<number, Object3D>();
   const assoc = result.parser.associations;
@@ -54,8 +53,7 @@ export async function loadPmiModel(
   ): PmiNode {
     const sourceNode = gltf.nodes[nodeIndex];
 
-    const nodeId = globalNodeIds.get(url)!;
-    globalNodeIds.set(url, nodeId + 1);
+    const nodeId = nextNodeId++;
 
     const pmiNode: PmiNode = {
       id: nodeId,
@@ -75,14 +73,12 @@ export async function loadPmiModel(
     return pmiNode;
   }
 
-  const rootPmiNodes: PmiNode[] = [];
-
   const gltf: GLTF = result.parser.json;
   const sceneIdx = gltf.scene || 0;
   const rootIndices = gltf.scenes[sceneIdx].nodes;
-  rootIndices.forEach((nodeIndex) => {
-    rootPmiNodes.push(buildPmiNode(gltf, nodeIndex, true));
-  });
+  const rootPmiNodes: PmiNode[] = rootIndices.map((nodeIndex) =>
+    buildPmiNode(gltf, nodeIndex, true),
+  );
 
   tilesRenderer.group.add(result.scene);
 

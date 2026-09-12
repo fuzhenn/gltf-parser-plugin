@@ -10,14 +10,8 @@ import {
   Vector3,
   Loader,
 } from "three";
-import {
-  acquireWorker,
-  buildTextures,
-  buildMaterials,
-  buildMeshPrimitives,
-  type PrimitiveData,
-  getWorkers,
-} from "../utils";
+
+import { acquireWorker, getWorkers } from "../utils";
 import type { GLTFNodeData, GLTFWorkerData, MaterialBuilder } from "../types";
 import { StructuralMetadata, MeshFeatures } from "3d-tiles-renderer/plugins";
 import {
@@ -25,6 +19,12 @@ import {
   buildInstanceStructuralMetadata,
   buildInstanceFeatures,
 } from "../mesh";
+import { buildTextures } from "./build-textures";
+import { buildMaterials } from "./build-materials";
+import {
+  buildMeshPrimitives,
+  type PrimitiveData,
+} from "./build-mesh-primitives";
 
 // Extension names
 const EXT_STRUCTURAL_METADATA = "EXT_structural_metadata";

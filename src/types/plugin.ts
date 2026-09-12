@@ -1,6 +1,6 @@
 import type { WebGLRenderer } from "three";
-import type { StyleConfig } from "./plugin/style-appearance-types";
-import type { MaterialBuilder } from "./types";
+import type { StyleConfig } from "../appearance";
+import type { MaterialBuilder } from "./gltf";
 
 /**
  * structure.json 中的树节点结构

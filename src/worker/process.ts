@@ -1,19 +1,11 @@
 import { dequantizeAttribute } from "./dequantize";
 import type { AttributeData } from "./types";
+import type { FeatureIdIndexData, IndexRange } from "../types";
 import { decodeTangent } from "./tangent";
 import {
   buildFeatureEdgePositions,
   DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
 } from "./edges";
-
-type IndexRange = { offset: number; length: number };
-
-type FeatureIdIndexData = {
-  buffer: Uint16Array | Uint32Array;
-  map: Record<number, IndexRange>;
-  triangleIndices: Uint32Array;
-  triangleIndexMap: Record<number, IndexRange>;
-};
 
 /**
  * 在 worker 内、传回主线程之前，按 `_FEATURE_ID_*` 顶点属性把 index 按 featureId 分组。
@@ -62,11 +54,11 @@ function buildFeatureIdIndices(
       indexArray instanceof Uint16Array
         ? new Uint16Array(total)
         : new Uint32Array(total);
-    const map: Record<number, IndexRange> = {};
+    const featureIdIndexMap: Record<number, IndexRange> = {};
     let offset = 0;
     for (const [fid, chunk] of fidChunks) {
       buffer.set(chunk, offset);
-      map[fid] = { offset, length: chunk.length };
+      featureIdIndexMap[fid] = { offset, length: chunk.length };
       offset += chunk.length;
     }
 
@@ -85,7 +77,7 @@ function buildFeatureIdIndices(
     addTransferable(triangleIndices);
     (result ||= {})[attrName.toLowerCase()] = {
       buffer,
-      map,
+      featureIdIndexMap,
       triangleIndices,
       triangleIndexMap,
     };

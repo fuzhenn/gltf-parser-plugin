@@ -26,8 +26,6 @@ type EdgeAccum = {
 /** 嵌套 Map 查找/插入：外层存较小顶点索引，内层存较大顶点索引 */
 function getOrCreateEdge(
   edges: Map<number, Map<number, EdgeAccum>>,
-  a: number,
-  b: number,
   v1: number,
   v2: number,
   nx: number,
@@ -35,8 +33,8 @@ function getOrCreateEdge(
   nz: number,
   tri: number,
 ): EdgeAccum {
-  const lo = a < b ? a : b;
-  const hi = a < b ? b : a;
+  const lo = v1 < v2 ? v1 : v2;
+  const hi = v1 < v2 ? v2 : v1;
   let inner = edges.get(lo);
   if (!inner) {
     inner = new Map<number, EdgeAccum>();
@@ -83,51 +81,57 @@ function computeBoundingDiagonal(positions: Float32Array): number {
 }
 
 /** 按坐标合并重复顶点，避免「每三角独立顶点」导致全部边被当作边界边 */
-function weldIndicesByPosition(
+function weldVerticesByPosition(
   positions: Float32Array,
   indices: ArrayLike<number>,
   epsilon: number,
 ): { positions: Float32Array; indices: Uint32Array } {
-  const scale = 1 / epsilon;
+  const invEpsilon = 1 / epsilon;
   const grid = new Map<number, Map<number, Map<number, number>>>();
-  const outPositions: number[] = [];
-  const outIndices: number[] = [];
+  // 预分配上界：焊接后顶点数 ≤ 原顶点数，索引长度与输入一致，避免动态数组装箱与扩容
+  const weldedPositions = new Float32Array(positions.length);
+  const weldedIndices = new Uint32Array(indices.length);
+  let vertexCount = 0;
 
   for (let i = 0; i < indices.length; i++) {
     const vi = indices[i]!;
     const x = positions[vi * 3]!;
     const y = positions[vi * 3 + 1]!;
     const z = positions[vi * 3 + 2]!;
-    const gx = Math.round(x * scale);
-    const gy = Math.round(y * scale);
-    const gz = Math.round(z * scale);
+    const gx = Math.round(x * invEpsilon);
+    const gy = Math.round(y * invEpsilon);
+    const gz = Math.round(z * invEpsilon);
 
-    let ni: number | undefined;
-    let col = grid.get(gx);
-    if (col) {
-      let row = col.get(gy);
-      if (row) ni = row.get(gz);
+    let weldedIndex: number | undefined;
+    let xCell = grid.get(gx);
+    if (xCell) {
+      const yCell = xCell.get(gy);
+      if (yCell) weldedIndex = yCell.get(gz);
     }
-    if (ni === undefined) {
-      ni = outPositions.length / 3;
-      if (!col) {
-        col = new Map<number, Map<number, number>>();
-        grid.set(gx, col);
+    if (weldedIndex === undefined) {
+      weldedIndex = vertexCount;
+      if (!xCell) {
+        xCell = new Map<number, Map<number, number>>();
+        grid.set(gx, xCell);
       }
-      let row = col.get(gy);
-      if (!row) {
-        row = new Map<number, number>();
-        col.set(gy, row);
+      let yCell = xCell.get(gy);
+      if (!yCell) {
+        yCell = new Map<number, number>();
+        xCell.set(gy, yCell);
       }
-      row.set(gz, ni);
-      outPositions.push(x, y, z);
+      yCell.set(gz, vertexCount);
+      weldedPositions[vertexCount * 3] = x;
+      weldedPositions[vertexCount * 3 + 1] = y;
+      weldedPositions[vertexCount * 3 + 2] = z;
+      vertexCount++;
     }
-    outIndices.push(ni);
+    weldedIndices[i] = weldedIndex;
   }
 
   return {
-    positions: new Float32Array(outPositions),
-    indices: new Uint32Array(outIndices),
+    // subarray 零拷贝截断；焊接结果仅函数内临时使用，尾部冗余无需回收
+    positions: weldedPositions.subarray(0, vertexCount * 3),
+    indices: weldedIndices,
   };
 }
 
@@ -138,17 +142,17 @@ function weldIndicesByPosition(
  * 优化：嵌套 Map 替代字符串键、消除动态数组、内联访问器、两遍扫描法输出。
  */
 export function buildFeatureEdgePositions(
-  positions: Float32Array,
-  indices: ArrayLike<number>,
+  rawPositions: Float32Array,
+  rawIndices: ArrayLike<number>,
   thresholdAngleDeg = DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
 ): WorkerPrecomputedEdgePayload {
   const weldEpsilon = Math.max(
-    computeBoundingDiagonal(positions) * 1e-5,
+    computeBoundingDiagonal(rawPositions) * 1e-5,
     1e-6,
   );
-  const welded = weldIndicesByPosition(positions, indices, weldEpsilon);
-  positions = welded.positions;
-  indices = welded.indices;
+  const welded = weldVerticesByPosition(rawPositions, rawIndices, weldEpsilon);
+  const positions = welded.positions;
+  const indices = welded.indices;
 
   const thresholdDot = Math.cos(thresholdAngleDeg * (Math.PI / 180));
   const edges = new Map<number, Map<number, EdgeAccum>>();
@@ -186,28 +190,28 @@ export function buildFeatureEdgePositions(
       nz /= len;
     }
 
-    getOrCreateEdge(edges, ia, ib, ia, ib, nx, ny, nz, t);
-    getOrCreateEdge(edges, ib, ic, ib, ic, nx, ny, nz, t);
-    getOrCreateEdge(edges, ic, ia, ic, ia, nx, ny, nz, t);
+    getOrCreateEdge(edges, ia, ib, nx, ny, nz, t);
+    getOrCreateEdge(edges, ib, ic, nx, ny, nz, t);
+    getOrCreateEdge(edges, ic, ia, nx, ny, nz, t);
   }
 
-  let drawCount = 0;
+  let edgeCount = 0;
   for (const inner of edges.values()) {
     for (const info of inner.values()) {
       if (info.triCount === 1 || info.n2x === undefined) {
-        drawCount++;
+        edgeCount++;
       } else {
         const dot =
           info.nx * info.n2x! +
           info.ny * info.n2y! +
           info.nz * info.n2z!;
-        if (dot < thresholdDot) drawCount++;
+        if (dot < thresholdDot) edgeCount++;
       }
     }
   }
 
-  const linePositions = new Float32Array(drawCount * 6);
-  const outTriIndices = new Uint32Array(drawCount);
+  const linePositions = new Float32Array(edgeCount * 6);
+  const triangleIndices = new Uint32Array(edgeCount);
   let writePtr = 0;
   let triPtr = 0;
   for (const inner of edges.values()) {
@@ -237,13 +241,13 @@ export function buildFeatureEdgePositions(
       linePositions[writePtr + 4] = v2y;
       linePositions[writePtr + 5] = v2z;
       writePtr += 6;
-      outTriIndices[triPtr++] = info.firstTri;
+      triangleIndices[triPtr++] = info.firstTri;
     }
   }
 
   return {
     positions: linePositions,
-    triangleIndices: outTriIndices,
+    triangleIndices,
     thresholdAngleDeg,
   };
 }

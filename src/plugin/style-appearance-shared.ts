@@ -13,17 +13,15 @@ import { evaluateStyleCondition } from "../appearance";
 import {
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
+  type StyleAppearance,
+  type StyleCondition,
+  type StyleConditionInput,
+  type StyleEulerInput,
+  type StyleMaterialMaps,
+  type StyleShowInput,
+  type StyleVec3Input,
 } from "../appearance";
 import { toColor, type ColorInput } from "../utils/color-input";
-import type {
-  StyleAppearance,
-  StyleCondition,
-  StyleConditionInput,
-  StyleEulerInput,
-  StyleMaterialMaps,
-  StyleShowInput,
-  StyleVec3Input,
-} from "./style-appearance-types";
 import { MaterialBuilder } from "../types";
 
 /** 单个 mesh 在样式应用前的原始 TRS 快照，用于取消样式时复位 */
@@ -138,7 +136,7 @@ function overrideMaterialCacheKey(
 function getDefaultColorMaterial(
   c: ColorInput,
   opacity: number | undefined,
-  materialBuilder: MaterialBuilder
+  materialBuilder: MaterialBuilder,
 ): Material {
   const hex = colorHex(c);
   const op = opacity != null ? clampOpacity01(opacity) : 1;
@@ -148,8 +146,8 @@ function getDefaultColorMaterial(
     const color = new Color(hex);
     m = materialBuilder({
       pbrMetallicRoughness: {
-        baseColorFactor: [color.r, color.g, color.b, op]
-      }
+        baseColorFactor: [color.r, color.g, color.b, op],
+      },
     });
     defaultColorMaterialCache.set(key, m);
   }
@@ -216,7 +214,11 @@ export function resolveStyleMaterial(
 
   if (appearance.material === undefined) {
     if (colorInput !== undefined) {
-      return getDefaultColorMaterial(colorInput, opacityOverride, materialBuilder);
+      return getDefaultColorMaterial(
+        colorInput,
+        opacityOverride,
+        materialBuilder,
+      );
     }
     if (opacityOverride !== undefined) {
       return applyAppearanceOverridesToMaterialInstance(
@@ -454,7 +456,9 @@ export function detachStyledMeshFromScene(mesh: Mesh): void {
     delete mesh.userData[STYLE_APPEARANCE_BUILT_KEY];
   }
   if (mesh.userData?.[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] !== undefined) {
-    mesh.visible = mesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] as boolean;
+    mesh.visible = mesh.userData[
+      STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY
+    ] as boolean;
     delete mesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY];
   }
   mesh.removeFromParent();
@@ -493,7 +497,9 @@ export function restoreMeshAppearanceMaps(
     delete mesh.userData[STYLE_APPEARANCE_BUILT_KEY];
   }
   if (mesh.userData?.[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] !== undefined) {
-    mesh.visible = mesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] as boolean;
+    mesh.visible = mesh.userData[
+      STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY
+    ] as boolean;
     delete mesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY];
   }
 }
@@ -530,7 +536,7 @@ export function applyStyleAppearanceToMesh(
   appearance: StyleAppearance,
   scene: Object3D,
   maps: MeshAppearanceMaps,
-  materialBuilder: MaterialBuilder
+  materialBuilder: MaterialBuilder,
 ): void {
   if (!mesh.geometry) return;
 
@@ -544,7 +550,11 @@ export function applyStyleAppearanceToMesh(
     );
   }
   const originalMaterial = maps.originalMaterialByMesh.get(anchorMesh.uuid)!;
-  const resolvedMaterial = resolveStyleMaterial(appearance, originalMaterial, materialBuilder);
+  const resolvedMaterial = resolveStyleMaterial(
+    appearance,
+    originalMaterial,
+    materialBuilder,
+  );
 
   let renderMesh: Mesh = anchorMesh;
 
@@ -560,7 +570,9 @@ export function applyStyleAppearanceToMesh(
     if (anchorMesh instanceof InstancedMesh) {
       built = promoteBuiltMeshForInstancedAnchor(anchorMesh, built);
     }
-    if (anchorMesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] === undefined) {
+    if (
+      anchorMesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] === undefined
+    ) {
       anchorMesh.userData[STYLE_APPEARANCE_ANCHOR_VISIBLE_KEY] =
         anchorMesh.visible;
     }

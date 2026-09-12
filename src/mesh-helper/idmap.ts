@@ -23,8 +23,6 @@ function extractPartIdFromPropertyData(
   return undefined;
 }
 
-const idMapCache = new Map();
-
 function buildIdToFeatureIdMapForChannel(
   meshObject: Object3D,
   featureIndex: number,

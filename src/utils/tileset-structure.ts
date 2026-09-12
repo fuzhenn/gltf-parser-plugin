@@ -1,6 +1,6 @@
 import { gunzipSync } from "fflate";
 import type { Tileset } from "3d-tiles-renderer/core";
-import type { StructureData } from "../plugin-types";
+import type { StructureData } from "../types";
 
 /** 兼容：少数 tileset 在根级挂 structureUri */
 export type TilesetWithStructureUri = Tileset & {
@@ -13,8 +13,9 @@ export function getStructureDataUriFromTileset(
 ): string | null {
   if (!root) return null;
 
-  const extras = (root.asset as { extras?: Record<string, unknown> } | undefined)
-    ?.extras;
+  const extras = (
+    root.asset as { extras?: Record<string, unknown> } | undefined
+  )?.extras;
   const maptalks = extras?.maptalks;
   if (maptalks && typeof maptalks === "object") {
     const uri = (maptalks as { structureUri?: unknown }).structureUri;
@@ -72,9 +73,9 @@ export function decodeGzipBase64DataUriSync(dataUri: string): string {
  * 若无则回退根级 `structureUri`），同步解码并解析。
  * - 无有效 URI 或解析失败时返回 `null`（不抛错）。
  */
-export function parseEmbeddedStructureDataFromTilesSync(
-  tiles: { rootTileset: Tileset | null },
-): StructureData | null {
+export function parseStructureDataFromTilesSync(tiles: {
+  rootTileset: Tileset | null;
+}): StructureData | null {
   const uri = getStructureDataUriFromTileset(tiles.rootTileset);
   if (!uri) {
     return null;
@@ -84,7 +85,10 @@ export function parseEmbeddedStructureDataFromTilesSync(
     const data = JSON.parse(text) as StructureData;
     return data;
   } catch (e) {
-    console.warn("[GLTFParserPlugin] Failed to decode tileset structureUri:", e);
+    console.warn(
+      "[GLTFParserPlugin] Failed to decode tileset structureUri:",
+      e,
+    );
     return null;
   }
 }

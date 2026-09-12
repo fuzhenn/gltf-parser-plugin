@@ -30,21 +30,17 @@ import {
   buildSplitInstancedMeshForTileMesh,
   disposeTileMeshInstanceSplitCache,
 } from "./mesh-helper/instance-split";
-import type {
-  StyleCondition,
-  StyleConditionDescriptor,
-  StyleConditionInput,
-  StyleShowInput,
-} from "./plugin/style-appearance-types";
-import {
-  buildStyleConditionEvaluatorMap,
-  evaluateStyleCondition,
-} from "./appearance";
 import {
   normalizeFeatureIdAttribute,
   resolveShowFeatureIdAttribute,
   resolveStyleConditionContent,
   resolveStyleConditionFeatureIdAttribute,
+  buildStyleConditionEvaluatorMap,
+  evaluateStyleCondition,
+  type StyleCondition,
+  type StyleConditionDescriptor,
+  type StyleConditionInput,
+  type StyleShowInput,
 } from "./appearance";
 import {
   appearanceGroupKey,
@@ -122,10 +118,7 @@ function buildStyledMeshesForSources(
   const result: Mesh[] = [];
 
   for (const tileMesh of tileMeshes) {
-    if (
-      tileMesh instanceof InstancedMesh &&
-      isTileInstancedMesh(tileMesh)
-    ) {
+    if (tileMesh instanceof InstancedMesh && isTileInstancedMesh(tileMesh)) {
       const instanced = buildSplitInstancedMeshForTileMesh(
         tileMesh,
         idSet,
@@ -267,7 +260,8 @@ function resolveMatchedPartIdsOnTileMesh(
         featureIdAttribute,
       );
       if (!appearance) continue;
-      if (appearanceGroupKey(appearance) !== matchRule.appearanceGroupKey) continue;
+      if (appearanceGroupKey(appearance) !== matchRule.appearanceGroupKey)
+        continue;
       matchedPartIds.add(partId);
     }
     return matchedPartIds;

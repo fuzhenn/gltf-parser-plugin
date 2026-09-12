@@ -1,6 +1,9 @@
 import { BufferAttribute, BufferGeometry, Material } from "three";
-import type { GLTFWorkerData, PrimitiveExtensions } from "../types";
-import type { FeatureIdIndexData } from "../mesh-helper/feature-id-index";
+import type {
+  FeatureIdIndexData,
+  GLTFWorkerData,
+  PrimitiveExtensions,
+} from "../types";
 import { registerPrecomputedEdges } from "../mesh-helper/edge-geometry";
 
 export interface PrimitiveData {
@@ -133,19 +136,7 @@ export function buildMeshPrimitives(
         material,
         primitiveIndex,
         extensions: primitive.extensions,
-        featureIdIndices: primitive.featureIdIndices
-          ? Object.fromEntries(
-              Object.entries(primitive.featureIdIndices).map(([name, d]) => [
-                name,
-                {
-                  featureIdIndexMap: d.map,
-                  buffer: d.buffer,
-                  triangleIndexMap: d.triangleIndexMap,
-                  triangleIndices: d.triangleIndices,
-                },
-              ]),
-            )
-          : undefined,
+        featureIdIndices: primitive.featureIdIndices,
       });
     }
 

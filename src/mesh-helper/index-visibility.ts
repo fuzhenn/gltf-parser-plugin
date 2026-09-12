@@ -8,17 +8,13 @@ import {
 } from "three";
 import type { TilesRenderer } from "3d-tiles-renderer";
 import type { InstanceFeatures } from "../mesh/types";
-import type {
-  StyleCondition,
-  StyleShowInput,
-} from "../plugin/style-appearance-types";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
-} from "../appearance";
-import {
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
+  type StyleCondition,
+  type StyleShowInput,
 } from "../appearance";
 import {
   buildVisibleIndex,
@@ -210,9 +206,7 @@ function getHiddenFeatureIdsForChannel(
   channel: PartIdChannel,
 ): Set<number> {
   const mapKey = channel === "oid" ? "_tile_oidMap" : "_tile_pidMap";
-  const idMap = source.userData?.[mapKey] as
-    | Record<number, number>
-    | undefined;
+  const idMap = source.userData?.[mapKey] as Record<number, number> | undefined;
   if (!idMap) return new Set();
 
   const hidden = new Set<number>();
@@ -297,7 +291,11 @@ function applyInstancedMatrixVisibility(mesh: InstancedMesh): void {
     return;
   }
 
-  const hiddenInstances = getHiddenInstanceIndices(mesh, hiddenOids, hiddenPids);
+  const hiddenInstances = getHiddenInstanceIndices(
+    mesh,
+    hiddenOids,
+    hiddenPids,
+  );
   if (hiddenInstances.size === 0) {
     restoreInstancedMeshMatrices(mesh);
     return;

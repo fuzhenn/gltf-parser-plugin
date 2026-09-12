@@ -6,26 +6,47 @@ import {
   Material,
   Mesh,
   Object3D,
+  Sphere,
   Texture,
   Vector3,
 } from "three";
 
 import { TilesRenderer } from "3d-tiles-renderer";
 
+import type { FeatureIdIndexData, IndexRange } from "../types";
 import type { InstanceFeatures } from "../mesh/types";
 import { measureInstanceSplitForTile } from "./instance-split";
 import { disposeSplitInstancedMeshResources } from "./instance-split";
 
 import {
-  createIndexArray,
-  type FeatureIdIndexData,
-  type IndexRange,
-} from "./feature-id-index";
-// import {
-//   cropPrecomputedEdgesForFids,
-//   getPrecomputedEdges,
-//   registerPrecomputedEdges,
-// } from "./edge-geometry";
+  cropPrecomputedEdgesForFids,
+  getPrecomputedEdges,
+  registerPrecomputedEdges,
+} from "./edge-geometry";
+
+/** 与源 index 同类型地分配新 index 数组（未指定类型时默认 Uint32Array） */
+function createIndexArray(
+  sourceIndex: ArrayLike<number>,
+  length: number,
+): Uint16Array | Uint32Array {
+  if (sourceIndex instanceof Uint32Array) return new Uint32Array(length);
+  if (sourceIndex instanceof Uint16Array) return new Uint16Array(length);
+  return new Uint32Array(length);
+}
+
+/**
+ * split index 的取值上界是顶点数而非三角形数：position.count ≤ 65535 时
+ * 降为 Uint16，省一半内存与 GPU 上传带宽（大瓦片常用 Uint32 index）。
+ */
+function createSplitIndexArray(
+  geometry: BufferGeometry,
+  length: number,
+): Uint16Array | Uint32Array {
+  const position = geometry.getAttribute("position");
+  return position && position.count <= 65535
+    ? new Uint16Array(length)
+    : new Uint32Array(length);
+}
 
 /** OID 对应 `_FEATURE_ID_0`，PID 对应 `_FEATURE_ID_1` */
 export type PartIdChannel = "oid" | "pid";
@@ -187,6 +208,8 @@ type MergedSplitContext = {
   targetFids: Set<number>;
   sourceIndex: ArrayLike<number>;
   indexCache: FeatureIdIndexData;
+  /** 按 targetFids 顺序收集的 index 段（无 entry 的 fid 已剔除），与 totalIndexLength 严格一致 */
+  entries: IndexRange[];
   totalIndexLength: number;
 };
 
@@ -220,10 +243,13 @@ function resolveMergedSplitContext(
   if (!indexCache) return null;
   const { featureIdIndexMap } = indexCache;
 
+  const entries: IndexRange[] = [];
   let totalIndexLength = 0;
   for (const fid of targetFids) {
     const entry = featureIdIndexMap[fid];
-    if (entry) totalIndexLength += entry.length;
+    if (!entry) continue;
+    entries.push(entry);
+    totalIndexLength += entry.length;
   }
   if (totalIndexLength === 0) return null;
 
@@ -233,21 +259,21 @@ function resolveMergedSplitContext(
     targetFids,
     sourceIndex,
     indexCache,
+    entries,
     totalIndexLength,
   };
 }
 
-function computeLocalBBoxForFeatureIdSubset(
+function computeLocalBBoxForIndexRanges(
   geometry: BufferGeometry,
-  indexCache: FeatureIdIndexData,
-  targetFids: Set<number>,
+  buffer: Uint16Array | Uint32Array,
+  entries: IndexRange[],
 ): Box3 | null {
   const posAttr = geometry.getAttribute("position");
   if (!posAttr) return null;
 
   const positions = posAttr.array as Float32Array;
   const itemSize = posAttr.itemSize || 3;
-  const { featureIdIndexMap, buffer } = indexCache;
 
   let minX = Infinity;
   let minY = Infinity;
@@ -256,9 +282,7 @@ function computeLocalBBoxForFeatureIdSubset(
   let maxY = -Infinity;
   let maxZ = -Infinity;
 
-  for (const fid of targetFids) {
-    const entry = featureIdIndexMap[fid];
-    if (!entry) continue;
+  for (const entry of entries) {
     const end = entry.offset + entry.length;
     for (let i = entry.offset; i < end; i++) {
       const base = buffer[i]! * itemSize;
@@ -285,11 +309,11 @@ function createGeometryForFeatureIdSet(
   const {
     geometry: originalGeometry,
     targetFids,
-    sourceIndex,
     indexCache,
+    entries,
     totalIndexLength,
   } = context;
-  const { featureIdIndexMap, buffer } = indexCache;
+  const { buffer } = indexCache;
 
   const newGeometry = new BufferGeometry();
   const attributes = originalGeometry.attributes;
@@ -297,11 +321,9 @@ function createGeometryForFeatureIdSet(
     newGeometry.setAttribute(attributeName, attributes[attributeName]);
   }
 
-  const newIndices = createIndexArray(sourceIndex, totalIndexLength);
+  const newIndices = createSplitIndexArray(originalGeometry, totalIndexLength);
   let writeOffset = 0;
-  for (const fid of targetFids) {
-    const entry = featureIdIndexMap[fid];
-    if (!entry) continue;
+  for (const entry of entries) {
     newIndices.set(
       buffer.subarray(entry.offset, entry.offset + entry.length),
       writeOffset,
@@ -310,26 +332,38 @@ function createGeometryForFeatureIdSet(
   }
   newGeometry.setIndex(new BufferAttribute(newIndices, 1));
 
-  // const sourceEdges = getPrecomputedEdges(originalGeometry);
-  // if (sourceEdges) {
-  //   if (sourceEdges.triangleIndices.length === 0) {
-  //     registerPrecomputedEdges(newGeometry, sourceEdges);
-  //   } else if (indexCache.triangleIndexMap && indexCache.triangleIndices) {
-  //     const cropped = cropPrecomputedEdgesForFids(
-  //       sourceEdges,
-  //       indexCache.triangleIndexMap,
-  //       indexCache.triangleIndices,
-  //       targetFids,
-  //     );
-  //     if (cropped) {
-  //       registerPrecomputedEdges(newGeometry, {
-  //         positions: cropped,
-  //         triangleIndices: new Uint32Array(0),
-  //         thresholdAngleDeg: sourceEdges.thresholdAngleDeg,
-  //       });
-  //     }
-  //   }
-  // }
+  // 顶点属性与瓦片共享（全量顶点），不预设紧致包围盒会让 three 首帧对全量顶点
+  // 懒计算 boundingSphere，且包围球会膨胀到整瓦片，导致 split mesh 视锥剔除失效
+  const localBBox = computeLocalBBoxForIndexRanges(
+    originalGeometry,
+    buffer,
+    entries,
+  );
+  if (localBBox) {
+    newGeometry.boundingBox = localBBox;
+    newGeometry.boundingSphere = localBBox.getBoundingSphere(new Sphere());
+  }
+
+  const sourceEdges = getPrecomputedEdges(originalGeometry);
+  if (sourceEdges) {
+    if (sourceEdges.triangleIndices.length === 0) {
+      registerPrecomputedEdges(newGeometry, sourceEdges);
+    } else if (indexCache.triangleIndexMap && indexCache.triangleIndices) {
+      const cropped = cropPrecomputedEdgesForFids(
+        sourceEdges,
+        indexCache.triangleIndexMap,
+        indexCache.triangleIndices,
+        targetFids,
+      );
+      if (cropped) {
+        registerPrecomputedEdges(newGeometry, {
+          positions: cropped,
+          triangleIndices: new Uint32Array(0),
+          thresholdAngleDeg: sourceEdges.thresholdAngleDeg,
+        });
+      }
+    }
+  }
 
   return newGeometry;
 }
@@ -424,10 +458,10 @@ function measureSplitGeometryForTile(
   const triCount = context.totalIndexLength / 3;
   if (triCount === 0) return null;
 
-  const local = computeLocalBBoxForFeatureIdSubset(
+  const local = computeLocalBBoxForIndexRanges(
     context.geometry,
-    context.indexCache,
-    context.targetFids,
+    context.indexCache.buffer,
+    context.entries,
   );
   if (!local) return null;
 
@@ -534,6 +568,70 @@ export function selectDominantTileMeshesForPidSet(
   pidSet: ReadonlySet<number>,
 ): Mesh[] {
   return selectDominantTileMeshesForIdSet(candidateTiles, pidSet, "pid");
+}
+
+export function addMeshUserData(
+  tileMesh: Mesh,
+  splitMesh: Mesh,
+  idSet: ReadonlySet<number>,
+  channel: PartIdChannel,
+  options?: { splitGeometryManagedByCache?: boolean },
+) {
+  if (idSet.size === 0) return null;
+
+  const cfg = PART_ID_CHANNEL_CONFIG[channel];
+  const idMap = getPartIdMap(tileMesh, channel);
+  if (!idMap) return null;
+
+  const resolved = resolveFeatureChannelOnMesh(tileMesh, channel);
+  if (!resolved) return null;
+
+  const idsOnMesh: number[] = [];
+  for (const partId of idSet) {
+    if (idMap[partId] !== undefined) {
+      idsOnMesh.push(partId);
+    }
+  }
+  idsOnMesh.sort((a, b) => a - b);
+  if (idsOnMesh.length === 0) return null;
+  const primaryId = idsOnMesh[0]!;
+
+  const { structuralMetadata } = tileMesh.userData;
+  const propertyTableIndex = resolved.featureIdConfig?.propertyTable;
+
+  let propertyData: unknown = null;
+  if (
+    structuralMetadata &&
+    propertyTableIndex !== undefined &&
+    idMap[primaryId] !== undefined
+  ) {
+    try {
+      propertyData = structuralMetadata.getPropertyTableData(
+        propertyTableIndex,
+        idMap[primaryId]!,
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  const userData: Record<string, unknown> = {
+    ...tileMesh.userData,
+    featureId: idMap[primaryId],
+    [cfg.idKey]: primaryId,
+    [cfg.collectorKey]: idsOnMesh,
+    _originalMesh: tileMesh,
+    propertyData,
+    _isSplit: true,
+    isMergedSplit: true,
+    partIdChannel: channel,
+  };
+  if (options?.splitGeometryManagedByCache) {
+    userData.splitGeometryManagedByCache = true;
+  }
+  splitMesh.userData = userData;
+
+  splitMesh.name = `${cfg.namePrefix}_${idsOnMesh.length}_${primaryId}`;
 }
 
 /**
@@ -1155,8 +1253,6 @@ export function getPropertyDataFromMeshUserData(
   );
 }
 
-const propertyCache = new Map()
-
 function getPropertyDataOnMeshByPartId(
   mesh: Mesh,
   partId: number,
@@ -1184,8 +1280,11 @@ function getPropertyDataOnMeshByPartId(
   try {
     const cacheKey = `${propertyTableIndex}-${partId}`;
     let data;
-    let cache = mesh.userData["_propertyCache"] as Map<string, Record<string, unknown>>;
-    if (!cache){
+    let cache = mesh.userData["_propertyCache"] as Map<
+      string,
+      Record<string, unknown>
+    >;
+    if (!cache) {
       cache = new Map();
       mesh.userData["_propertyCache"] = cache;
     }

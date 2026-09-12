@@ -2,11 +2,11 @@ import { StructuralMetadata } from "3d-tiles-renderer/plugins";
 import type { Texture } from "three";
 import type { GLTFNodeData, GLTFWorkerData } from "../../types";
 import type {
-  InstanceData,
   InstanceFeatureId,
   InstanceFeatures,
   MetadataTypedArray,
 } from "../types";
+import type { InstanceData } from "../../types";
 
 const EXT_INSTANCE_FEATURES = "EXT_instance_features";
 const EXT_STRUCTURAL_METADATA = "EXT_structural_metadata";
