@@ -13,16 +13,14 @@ import {
 
 import { TilesRenderer } from "3d-tiles-renderer";
 
-import type { FeatureIdIndexData, IndexRange } from "../types";
+import type {
+  FeatureIdIndexData,
+  IndexRange,
+  PrecomputedEdgeData,
+} from "../types";
 import type { InstanceFeatures } from "../mesh/types";
 import { measureInstanceSplitForTile } from "./instance-split";
 import { disposeSplitInstancedMeshResources } from "./instance-split";
-
-import {
-  cropPrecomputedEdgesForFids,
-  getPrecomputedEdges,
-  registerPrecomputedEdges,
-} from "./edge-geometry";
 
 /** 与源 index 同类型地分配新 index 数组（未指定类型时默认 Uint32Array） */
 function createIndexArray(
@@ -205,7 +203,6 @@ export function buildVisibleIndex(
 type MergedSplitContext = {
   geometry: BufferGeometry;
   featureIdAttr: BufferAttribute;
-  targetFids: Set<number>;
   sourceIndex: ArrayLike<number>;
   indexCache: FeatureIdIndexData;
   /** 按 targetFids 顺序收集的 index 段（无 entry 的 fid 已剔除），与 totalIndexLength 严格一致 */
@@ -256,7 +253,6 @@ function resolveMergedSplitContext(
   return {
     geometry,
     featureIdAttr,
-    targetFids,
     sourceIndex,
     indexCache,
     entries,
@@ -308,7 +304,6 @@ function createGeometryForFeatureIdSet(
 ): BufferGeometry | null {
   const {
     geometry: originalGeometry,
-    targetFids,
     indexCache,
     entries,
     totalIndexLength,
@@ -344,25 +339,11 @@ function createGeometryForFeatureIdSet(
     newGeometry.boundingSphere = localBBox.getBoundingSphere(new Sphere());
   }
 
-  const sourceEdges = getPrecomputedEdges(originalGeometry);
+  const sourceEdges = originalGeometry.userData.precomputedEdges as
+    | PrecomputedEdgeData
+    | undefined;
   if (sourceEdges) {
-    if (sourceEdges.triangleIndices.length === 0) {
-      registerPrecomputedEdges(newGeometry, sourceEdges);
-    } else if (indexCache.triangleIndexMap && indexCache.triangleIndices) {
-      const cropped = cropPrecomputedEdgesForFids(
-        sourceEdges,
-        indexCache.triangleIndexMap,
-        indexCache.triangleIndices,
-        targetFids,
-      );
-      if (cropped) {
-        registerPrecomputedEdges(newGeometry, {
-          positions: cropped,
-          triangleIndices: new Uint32Array(0),
-          thresholdAngleDeg: sourceEdges.thresholdAngleDeg,
-        });
-      }
-    }
+    newGeometry.userData.precomputedEdges = sourceEdges;
   }
 
   return newGeometry;

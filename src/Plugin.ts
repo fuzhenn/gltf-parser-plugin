@@ -191,6 +191,10 @@ export class GLTFParserPlugin {
     }
   };
 
+  get tiles(): TilesRenderer | null {
+    return this._tiles;
+  }
+
   /**
    * 设置构件样式
    * @param style 样式配置，传 null 清除样式

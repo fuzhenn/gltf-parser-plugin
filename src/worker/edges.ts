@@ -2,11 +2,10 @@
  * 特征边夹角阈值（度）：越大边越稀疏，仅保留更明显的折痕/轮廓。
  * 75° 在 CAD 模型上可过滤细分曲面三角化边，同时保留孔洞与折痕。
  */
-export const DEFAULT_FEATURE_EDGE_THRESHOLD_DEG = 75;
+export const DEFAULT_FEATURE_EDGE_THRESHOLD_DEG = 30;
 
 export type WorkerPrecomputedEdgePayload = {
   positions: Float32Array;
-  triangleIndices: Uint32Array;
   thresholdAngleDeg: number;
 };
 
@@ -19,7 +18,6 @@ type EdgeAccum = {
   n2x?: number;
   n2y?: number;
   n2z?: number;
-  firstTri: number;
   triCount: number;
 };
 
@@ -31,7 +29,6 @@ function getOrCreateEdge(
   nx: number,
   ny: number,
   nz: number,
-  tri: number,
 ): EdgeAccum {
   const lo = v1 < v2 ? v1 : v2;
   const hi = v1 < v2 ? v2 : v1;
@@ -42,7 +39,7 @@ function getOrCreateEdge(
   }
   let info = inner.get(hi);
   if (!info) {
-    info = { v1, v2, nx, ny, nz, firstTri: tri, triCount: 1 };
+    info = { v1, v2, nx, ny, nz, triCount: 1 };
     inner.set(hi, info);
     return info;
   }
@@ -137,7 +134,6 @@ function weldVerticesByPosition(
 
 /**
  * 在 Worker 内预计算特征边（等价于 Three.js EdgesGeometry 的阈值逻辑，无 Three 依赖）。
- * 每条边附带一个源 mesh 三角形索引，供 split 时裁剪。
  *
  * 优化：嵌套 Map 替代字符串键、消除动态数组、内联访问器、两遍扫描法输出。
  */
@@ -190,9 +186,9 @@ export function buildFeatureEdgePositions(
       nz /= len;
     }
 
-    getOrCreateEdge(edges, ia, ib, nx, ny, nz, t);
-    getOrCreateEdge(edges, ib, ic, nx, ny, nz, t);
-    getOrCreateEdge(edges, ic, ia, nx, ny, nz, t);
+    getOrCreateEdge(edges, ia, ib, nx, ny, nz);
+    getOrCreateEdge(edges, ib, ic, nx, ny, nz);
+    getOrCreateEdge(edges, ic, ia, nx, ny, nz);
   }
 
   let edgeCount = 0;
@@ -211,9 +207,7 @@ export function buildFeatureEdgePositions(
   }
 
   const linePositions = new Float32Array(edgeCount * 6);
-  const triangleIndices = new Uint32Array(edgeCount);
   let writePtr = 0;
-  let triPtr = 0;
   for (const inner of edges.values()) {
     for (const info of inner.values()) {
       let draw = false;
@@ -241,13 +235,11 @@ export function buildFeatureEdgePositions(
       linePositions[writePtr + 4] = v2y;
       linePositions[writePtr + 5] = v2z;
       writePtr += 6;
-      triangleIndices[triPtr++] = info.firstTri;
     }
   }
 
   return {
     positions: linePositions,
-    triangleIndices,
     thresholdAngleDeg,
   };
 }

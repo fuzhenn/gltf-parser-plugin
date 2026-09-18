@@ -25,11 +25,7 @@ export type {
 } from "./MeshCollector-deleted";
 export type { StyleConditionEvaluator } from "./appearance";
 export type { FeatureInfo } from "./mesh-helper/intersection";
-export {
-  getPrecomputedEdges,
-  registerPrecomputedEdges,
-  type PrecomputedEdgeData,
-} from "./mesh-helper/edge-geometry";
+export type { PrecomputedEdgeData } from "./types";
 export {
   DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
   buildFeatureEdgePositions,

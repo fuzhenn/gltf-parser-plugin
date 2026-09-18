@@ -25,7 +25,6 @@ function buildFeatureIdIndices(
     if (!fidArray) continue;
 
     const fidChunks = new Map<number, number[]>();
-    const fidTriangleChunks = new Map<number, number[]>();
     for (let i = 0; i < indexArray.length; i += 3) {
       const a = indexArray[i]!;
       const b = indexArray[i + 1]!;
@@ -38,13 +37,6 @@ function buildFeatureIdIndices(
         fidChunks.set(fid, chunk);
       }
       chunk.push(a, b, c);
-
-      let triChunk = fidTriangleChunks.get(fid);
-      if (!triChunk) {
-        triChunk = [];
-        fidTriangleChunks.set(fid, triChunk);
-      }
-      triChunk.push(i / 3);
     }
 
     let total = 0;
@@ -62,24 +54,10 @@ function buildFeatureIdIndices(
       offset += chunk.length;
     }
 
-    let triTotal = 0;
-    for (const chunk of fidTriangleChunks.values()) triTotal += chunk.length;
-    const triangleIndices = new Uint32Array(triTotal);
-    const triangleIndexMap: Record<number, IndexRange> = {};
-    let triOffset = 0;
-    for (const [fid, chunk] of fidTriangleChunks) {
-      triangleIndices.set(chunk, triOffset);
-      triangleIndexMap[fid] = { offset: triOffset, length: chunk.length };
-      triOffset += chunk.length;
-    }
-
     addTransferable(buffer);
-    addTransferable(triangleIndices);
     (result ||= {})[attrName.toLowerCase()] = {
       buffer,
       featureIdIndexMap,
-      triangleIndices,
-      triangleIndexMap,
     };
   }
 
@@ -187,7 +165,6 @@ export function processGLTFData(data: any): {
           );
           if (precomputedEdges.positions.length > 0) {
             addTransferable(precomputedEdges.positions.buffer);
-            addTransferable(precomputedEdges.triangleIndices.buffer);
             primitive.precomputedEdges = precomputedEdges;
           }
         }

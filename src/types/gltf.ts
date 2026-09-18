@@ -12,9 +12,13 @@ export type FeatureIdIndexData = {
   featureIdIndexMap: Record<number, IndexRange>;
   /** 按 fid 连续排布的 index（与源 index 同类型） */
   buffer: Uint16Array | Uint32Array;
-  /** fid → 源 mesh 三角形索引（offset/length 指向 triangleIndices 缓冲） */
-  triangleIndexMap?: Record<number, IndexRange>;
-  triangleIndices?: Uint32Array;
+};
+
+/** worker 预计算的特征边数据，挂载在 geometry.userData.precomputedEdges 上 */
+export type PrecomputedEdgeData = {
+  /** LineSegments position buffer，每 6 个 float 为一条边 */
+  positions: Float32Array;
+  thresholdAngleDeg: number;
 };
 
 // EXT_mesh_features extension data
@@ -192,12 +196,8 @@ export interface GLTFWorkerData {
          * 主线程建几何时直接取用，避免在主线程遍历 sourceIndex。
          */
         featureIdIndices?: Record<string, FeatureIdIndexData>;
-        /** worker 预计算的特征边 LineSegments position + 源三角形索引 */
-        precomputedEdges?: {
-          positions: Float32Array;
-          triangleIndices: Uint32Array;
-          thresholdAngleDeg: number;
-        };
+        /** worker 预计算的特征边 LineSegments position */
+        precomputedEdges?: PrecomputedEdgeData;
       }>;
     }
   >;

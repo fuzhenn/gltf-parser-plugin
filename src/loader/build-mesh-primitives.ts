@@ -4,7 +4,6 @@ import type {
   GLTFWorkerData,
   PrimitiveExtensions,
 } from "../types";
-import { registerPrecomputedEdges } from "../mesh-helper/edge-geometry";
 
 export interface PrimitiveData {
   geometry: BufferGeometry;
@@ -114,11 +113,7 @@ export function buildMeshPrimitives(
       }
 
       if (primitive.precomputedEdges?.positions.length) {
-        registerPrecomputedEdges(geometry, {
-          positions: primitive.precomputedEdges.positions,
-          triangleIndices: primitive.precomputedEdges.triangleIndices,
-          thresholdAngleDeg: primitive.precomputedEdges.thresholdAngleDeg,
-        });
+        geometry.userData.precomputedEdges = primitive.precomputedEdges;
       }
 
       // Get material
