@@ -28,19 +28,19 @@
   "author": "maptalks",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "@types/three": "^0.186.0",
     "@typescript-eslint/eslint-plugin": "^8.70.0",
     "@typescript-eslint/parser": "^8.70.0",
     "@typescript/typescript6": "^6.0.2",
-    "eslint": "^10.10.0",
+    "eslint": "^10.11.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "vite-plugin-dts": "^5.1.0",
     "vitest": "^5.0.1"
   },
   "dependencies": {
-    "3d-tiles-renderer": "^0.5.2",
+    "3d-tiles-renderer": "^0.5.3",
     "@maptalks/gltf-loader": "^0.124.4",
     "@maptalks/transcoders.draco": "^0.124.4",
     "fflate": "^0.8.3",

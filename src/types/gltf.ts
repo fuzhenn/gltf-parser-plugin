@@ -14,8 +14,8 @@ export type FeatureIdIndexData = {
   buffer: Uint16Array | Uint32Array;
 };
 
-/** worker 预计算的特征边数据，挂载在 geometry.userData.precomputedEdges 上 */
-export type PrecomputedEdgeData = {
+/** worker 预计算的特征边数据，挂载在 geometry.userData.featureEdges 上 */
+export type FeatureEdgeData = {
   /** LineSegments position buffer，每 6 个 float 为一条边 */
   positions: Float32Array;
   thresholdAngleDeg: number;
@@ -197,7 +197,7 @@ export interface GLTFWorkerData {
          */
         featureIdIndices?: Record<string, FeatureIdIndexData>;
         /** worker 预计算的特征边 LineSegments position */
-        precomputedEdges?: PrecomputedEdgeData;
+        featureEdges?: FeatureEdgeData;
       }>;
     }
   >;
@@ -271,7 +271,11 @@ export interface GLTFNodeData {
   };
 }
 
+export type WorkerMaterialData = NonNullable<
+  GLTFWorkerData["materials"]
+>[number];
+
 export type MaterialBuilder = (
-  matData: unknown,
+  matData: WorkerMaterialData,
   textureMap?: Map<number, Texture>,
 ) => Material;

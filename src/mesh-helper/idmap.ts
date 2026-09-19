@@ -1,155 +1,71 @@
 import { Mesh, Object3D } from "three";
-import { resolveFeatureChannelOnMesh } from "./mesh";
+import { resolveFeatureChannelOnMesh, type PartIdChannel } from "./mesh";
 
-const OID_FEATURE_INDEX = 0;
+type PartIdField = "_oid" | "_pid";
+type IdMapKey = "_tile_oidMap" | "_tile_pidMap";
 
-type IdMapUserDataKey = "_tile_oidMap" | "_tile_pidMap";
-type PropertyIdField = "_oid" | "_pid";
-
-function extractPartIdFromPropertyData(
-  data: Record<string, unknown>,
-  propertyIdField: PropertyIdField,
-): number | undefined {
-  const candidates =
-    propertyIdField === "_pid"
-      ? [data._pid, data.pid, data.PID]
-      : [data._oid, data.oid, data.OID];
-
-  for (const value of candidates) {
-    if (value === undefined || value === null) continue;
-    const n = typeof value === "number" ? value : Number(value);
-    if (!Number.isNaN(n)) return n;
-  }
-  return undefined;
-}
-
-function buildIdToFeatureIdMapForChannel(
+/**
+ * 为 mesh 上单个通道构建 partId → featureId 映射并挂到 `userData[mapKey]`。
+ *
+ * 有属性表时 partId 取自行数据中的 `_oid` / `_pid` 字段，并预写 `_propertyCache`
+ * 供 getFeatureDataByPartId 复用，避免重复整行解码。
+ */
+function buildChannelPartIdMap(
   meshObject: Object3D,
-  featureIndex: number,
-  propertyIdField: PropertyIdField,
-  userDataKey: IdMapUserDataKey,
+  channel: PartIdChannel,
+  field: PartIdField,
+  mapKey: IdMapKey,
 ): void {
-  const { meshFeatures, structuralMetadata } = meshObject.userData;
+  const resolved = resolveFeatureChannelOnMesh(meshObject as Mesh, channel);
+  if (!resolved) return;
 
-  if (!meshFeatures || !structuralMetadata) return;
-
-  const { geometry, featureIds } = meshFeatures;
-  const featureIdConfig = featureIds[featureIndex];
-  if (!featureIdConfig) return;
-
-  const propertyTableIndex = featureIdConfig.propertyTable;
-  if (propertyTableIndex === undefined) return;
-
-  const featureAttribute = geometry.getAttribute(
-    `_feature_id_${featureIdConfig.attribute}`,
-  );
-  if (!featureAttribute) return;
+  const { featureIdAttr, featureIdConfig } = resolved;
+  const { structuralMetadata } = meshObject.userData;
+  const propertyTableIndex = featureIdConfig?.propertyTable;
+  // 无属性表或无元数据时无法建立映射，直接跳过
+  if (propertyTableIndex === undefined || !structuralMetadata) return;
 
   const processedFeatureIds = new Set<number>();
-  const idToFeatureIdMap: Record<number, number> = {};
+  const idMap: Record<number, number> = {};
+  let propertyCache: Map<string, Record<string, unknown>> | undefined;
 
-  for (
-    let vertexIndex = 0;
-    vertexIndex < featureAttribute.count;
-    vertexIndex++
-  ) {
-    const currentFeatureId = featureAttribute.getX(vertexIndex);
-
-    if (processedFeatureIds.has(currentFeatureId)) {
-      continue;
-    }
+  for (let vertexIndex = 0; vertexIndex < featureIdAttr.count; vertexIndex++) {
+    const featureId = featureIdAttr.getX(vertexIndex);
+    // 每个 feature id 只处理一次；属性表解码是确定性的，失败重试没有意义
+    if (processedFeatureIds.has(featureId)) continue;
+    processedFeatureIds.add(featureId);
 
     try {
       const featureData = structuralMetadata.getPropertyTableData(
         propertyTableIndex,
-        currentFeatureId,
-      ) as Record<string, unknown> | null | undefined;
+        featureId,
+      ) as Record<string, unknown>;
+      const partId = featureData[field] as number;
 
-      if (!featureData) continue;
-
-      const partId = extractPartIdFromPropertyData(featureData, propertyIdField);
-      if (partId === undefined) continue;
-
-      idToFeatureIdMap[partId] = currentFeatureId;
-      processedFeatureIds.add(currentFeatureId);
-      let propertyCache = meshObject.userData["_propertyCache"] as Map<string, Record<string, unknown>>;
-      if (!propertyCache){
-        propertyCache = new Map();
-      }
+      idMap[partId] = featureId;
+      if (!propertyCache) propertyCache = new Map();
       propertyCache.set(`${propertyTableIndex}-${partId}`, featureData);
-      meshObject.userData["_propertyCache"] = propertyCache;
     } catch {
-      continue;
+      // 属性表读取失败或行数据为空时跳过该 feature id
     }
   }
 
-  processedFeatureIds.clear();
-  if (Object.keys(idToFeatureIdMap).length === 0) return;
+  if (!propertyCache) return;
 
-  meshObject.userData[userDataKey] = idToFeatureIdMap;
+  meshObject.userData[mapKey] = idMap;
+  meshObject.userData["_propertyCache"] = propertyCache;
 }
 
 /**
- * 构建 pidMap：PID → featureId（`_FEATURE_ID_1` 通道）
- *
- * 1. 有 propertyTable 时从属性表读 `_pid` / `pid`
- * 2. 无 propertyTable 或读失败时，以顶点 `_feature_id_1` 的值本身作为 PID
- */
-function buildPidMap(meshObject: Object3D): void {
-  const mesh = meshObject as Mesh;
-  const { structuralMetadata } = mesh.userData;
-  const resolved = resolveFeatureChannelOnMesh(mesh, "pid");
-  if (!resolved) return;
-
-  const { featureIdAttr, featureIdConfig } = resolved;
-  const propertyTableIndex = featureIdConfig?.propertyTable;
-  const processedFeatureIds = new Set<number>();
-  const pidMap: Record<number, number> = {};
-
-  for (let vertexIndex = 0; vertexIndex < featureIdAttr.count; vertexIndex++) {
-    const currentFeatureId = featureIdAttr.getX(vertexIndex);
-    if (processedFeatureIds.has(currentFeatureId)) continue;
-    processedFeatureIds.add(currentFeatureId);
-
-    let pid: number = currentFeatureId;
-
-    if (structuralMetadata && propertyTableIndex !== undefined) {
-      try {
-        const featureData = structuralMetadata.getPropertyTableData(
-          propertyTableIndex,
-          currentFeatureId,
-        ) as Record<string, unknown> | null | undefined;
-        if (featureData) {
-          const fromMeta = extractPartIdFromPropertyData(featureData, "_pid");
-          if (fromMeta !== undefined) pid = fromMeta;
-        }
-      } catch {
-        // 无属性表数据时回退为 feature id 即 pid
-      }
-    }
-
-    pidMap[pid] = currentFeatureId;
-  }
-
-  if (Object.keys(pidMap).length === 0) return;
-  meshObject.userData._tile_pidMap = pidMap;
-}
-
-/**
- * Build mapping relationship from OID / PID to FeatureId
+ * 构建 partId（OID / PID）→ featureId 的映射：
  * OID → `_FEATURE_ID_0`（featureIds[0]），PID → `_FEATURE_ID_1`（featureIds[1]）
  * @param scene Scene object
  */
-function buildOidToFeatureIdMap(scene: Object3D): void {
-  scene.traverse((meshObject: Object3D) => {
-    buildIdToFeatureIdMapForChannel(
-      meshObject,
-      OID_FEATURE_INDEX,
-      "_oid",
-      "_tile_oidMap",
-    );
-    buildPidMap(meshObject);
+function buildPartIdToFeatureIdMap(scene: Object3D): void {
+  scene.traverse((meshObject) => {
+    buildChannelPartIdMap(meshObject, "oid", "_oid", "_tile_oidMap");
+    buildChannelPartIdMap(meshObject, "pid", "_pid", "_tile_pidMap");
   });
 }
 
-export { buildOidToFeatureIdMap };
+export { buildPartIdToFeatureIdMap };

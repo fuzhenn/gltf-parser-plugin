@@ -14,9 +14,9 @@ import {
 import { TilesRenderer } from "3d-tiles-renderer";
 
 import type {
+  FeatureEdgeData,
   FeatureIdIndexData,
   IndexRange,
-  PrecomputedEdgeData,
 } from "../types";
 import type { InstanceFeatures } from "../mesh/types";
 import { measureInstanceSplitForTile } from "./instance-split";
@@ -339,11 +339,11 @@ function createGeometryForFeatureIdSet(
     newGeometry.boundingSphere = localBBox.getBoundingSphere(new Sphere());
   }
 
-  const sourceEdges = originalGeometry.userData.precomputedEdges as
-    | PrecomputedEdgeData
+  const sourceEdges = originalGeometry.userData.featureEdges as
+    | FeatureEdgeData
     | undefined;
   if (sourceEdges) {
-    newGeometry.userData.precomputedEdges = sourceEdges;
+    newGeometry.userData.featureEdges = sourceEdges;
   }
 
   return newGeometry;

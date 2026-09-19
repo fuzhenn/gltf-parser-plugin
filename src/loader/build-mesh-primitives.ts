@@ -13,8 +13,14 @@ export interface PrimitiveData {
   featureIdIndices?: Record<string, FeatureIdIndexData>;
 }
 
-type WorkerMeshData = NonNullable<GLTFWorkerData["meshes"]>[string];
-type WorkerPrimitiveData = WorkerMeshData["primitives"][number];
+/** glTF 顶点属性 → three.js 几何 attribute 名及其缺省 itemSize */
+const VERTEX_ATTRIBUTE_SLOTS = [
+  { gltf: "POSITION", name: "position", itemSize: 3 },
+  { gltf: "NORMAL", name: "normal", itemSize: 3 },
+  { gltf: "TEXCOORD_0", name: "uv", itemSize: 2 },
+  { gltf: "COLOR_0", name: "color", itemSize: 3 },
+  { gltf: "TANGENT", name: "tangent", itemSize: 4 },
+] as const;
 
 /**
  * Build Mesh Primitives from GLTF data
@@ -31,100 +37,56 @@ export function buildMeshPrimitives(
   }
 
   for (const meshIndex in data.meshes) {
-    const meshData: WorkerMeshData = data.meshes[meshIndex];
+    const primitives = data.meshes[meshIndex].primitives;
     const primitiveDataList: PrimitiveData[] = [];
-    const primitives = meshData.primitives;
 
-    for (
-      let primitiveIndex = 0;
-      primitiveIndex < primitives.length;
-      primitiveIndex++
-    ) {
-      const primitive: WorkerPrimitiveData = primitives[primitiveIndex];
+    for (const [primitiveIndex, primitive] of primitives.entries()) {
       const geometry = new BufferGeometry();
 
-      // Handle vertex attributes
+      // 标准顶点属性
+      for (const { gltf, name, itemSize } of VERTEX_ATTRIBUTE_SLOTS) {
+        const attrData = primitive.attributes?.[gltf];
+        if (attrData?.array) {
+          geometry.setAttribute(
+            name,
+            new BufferAttribute(attrData.array, attrData.itemSize || itemSize),
+          );
+        }
+      }
+
+      // Feature ID attribute（EXT_mesh_features），键名统一小写供样式条件匹配
       if (primitive.attributes) {
-        // Position
-        const posData = primitive.attributes.POSITION;
-        if (posData && posData.array) {
-          geometry.setAttribute(
-            "position",
-            new BufferAttribute(posData.array, posData.itemSize || 3),
-          );
-        }
-
-        // Normal
-        const normalData = primitive.attributes.NORMAL;
-        if (normalData && normalData.array) {
-          geometry.setAttribute(
-            "normal",
-            new BufferAttribute(normalData.array, normalData.itemSize || 3),
-          );
-        }
-
-        // UV coordinates
-        const uvData = primitive.attributes.TEXCOORD_0;
-        if (uvData && uvData.array) {
-          geometry.setAttribute(
-            "uv",
-            new BufferAttribute(uvData.array, uvData.itemSize || 2),
-          );
-        }
-
-        // Vertex color
-        const colorData = primitive.attributes.COLOR_0;
-        if (colorData && colorData.array) {
-          geometry.setAttribute(
-            "color",
-            new BufferAttribute(colorData.array, colorData.itemSize || 3),
-          );
-        }
-
-        // Tangent
-        const tangentData = primitive.attributes.TANGENT;
-        if (tangentData && tangentData.array) {
-          geometry.setAttribute(
-            "tangent",
-            new BufferAttribute(tangentData.array, tangentData.itemSize || 4),
-          );
-        }
-
-        // Feature ID attribute (for EXT_mesh_features)
         for (const attrName in primitive.attributes) {
-          if (attrName.startsWith("_FEATURE_ID_")) {
-            const featureIdData = primitive.attributes[attrName];
-            if (featureIdData && featureIdData.array) {
-              const normalizedName = attrName.toLowerCase();
-              const featureIdAttr = new BufferAttribute(
+          if (!attrName.startsWith("_FEATURE_ID_")) {
+            continue;
+          }
+          const featureIdData = primitive.attributes[attrName];
+          if (featureIdData?.array) {
+            geometry.setAttribute(
+              attrName.toLowerCase(),
+              new BufferAttribute(
                 featureIdData.array,
                 featureIdData.itemSize || 1,
-              );
-              geometry.setAttribute(normalizedName, featureIdAttr);
-            }
+              ),
+            );
           }
         }
       }
 
       // Indices
-      const indexData = primitive.indices;
-      if (indexData && indexData.array) {
-        geometry.setIndex(new BufferAttribute(indexData.array, 1));
+      if (primitive.indices?.array) {
+        geometry.setIndex(new BufferAttribute(primitive.indices.array, 1));
       }
 
-      if (primitive.precomputedEdges?.positions.length) {
-        geometry.userData.precomputedEdges = primitive.precomputedEdges;
+      if (primitive.featureEdges?.positions.length) {
+        geometry.userData.featureEdges = primitive.featureEdges;
       }
 
       // Get material
       const material =
         primitive.material !== undefined
-          ? materialMap.get(primitive.material) || defaultMaterial
+          ? (materialMap.get(primitive.material) ?? defaultMaterial)
           : defaultMaterial;
-
-      // if (!geometry.hasAttribute("normal") && material instanceof MeshStandardMaterial) {
-      //   material.flatShading = true;
-      // }
 
       primitiveDataList.push({
         geometry,

@@ -78,7 +78,6 @@ export class TileCacheDB {
       const request = store.put({
         url,
         data,
-        timestamp: Date.now(),
       });
 
       request.onerror = () => {

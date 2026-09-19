@@ -1,10 +1,10 @@
 /**
- * 特征边夹角阈值（度）：越大边越稀疏，仅保留更明显的折痕/轮廓。
- * 75° 在 CAD 模型上可过滤细分曲面三角化边，同时保留孔洞与折痕。
+ * 特征边夹角阈值（度）：两面法线夹角超过该阈值的边视为特征边。
+ * 阈值越大边越稀疏，仅保留更明显的折痕/轮廓；默认 30° 适配 CAD 模型。
  */
 export const DEFAULT_FEATURE_EDGE_THRESHOLD_DEG = 30;
 
-export type WorkerPrecomputedEdgePayload = {
+export type FeatureEdgePayload = {
   positions: Float32Array;
   thresholdAngleDeg: number;
 };
@@ -37,19 +37,34 @@ function getOrCreateEdge(
     inner = new Map<number, EdgeAccum>();
     edges.set(lo, inner);
   }
-  let info = inner.get(hi);
-  if (!info) {
-    info = { v1, v2, nx, ny, nz, triCount: 1 };
-    inner.set(hi, info);
-    return info;
+  let edge = inner.get(hi);
+  if (!edge) {
+    edge = { v1, v2, nx, ny, nz, triCount: 1 };
+    inner.set(hi, edge);
+    return edge;
   }
-  info.triCount++;
-  if (info.n2x === undefined) {
-    info.n2x = nx;
-    info.n2y = ny;
-    info.n2z = nz;
+  edge.triCount++;
+  if (edge.n2x === undefined) {
+    edge.n2x = nx;
+    edge.n2y = ny;
+    edge.n2z = nz;
   }
-  return info;
+  return edge;
+}
+
+/** 边界边（仅 1 个三角共享）或两面法线夹角超阈值 → 特征边 */
+function isFeatureEdge(edge: EdgeAccum, thresholdDot: number): boolean {
+  // n2x/n2y/n2z 总是同时赋值，此处仅满足 TS 收窄
+  if (
+    edge.triCount === 1 ||
+    edge.n2x === undefined ||
+    edge.n2y === undefined ||
+    edge.n2z === undefined
+  ) {
+    return true;
+  }
+  const dot = edge.nx * edge.n2x + edge.ny * edge.n2y + edge.nz * edge.n2z;
+  return dot < thresholdDot;
 }
 
 function computeBoundingDiagonal(positions: Float32Array): number {
@@ -60,9 +75,9 @@ function computeBoundingDiagonal(positions: Float32Array): number {
   let maxY = -Infinity;
   let maxZ = -Infinity;
   for (let i = 0; i < positions.length; i += 3) {
-    const x = positions[i]!;
-    const y = positions[i + 1]!;
-    const z = positions[i + 2]!;
+    const x = positions[i];
+    const y = positions[i + 1];
+    const z = positions[i + 2];
     if (x < minX) minX = x;
     if (y < minY) minY = y;
     if (z < minZ) minZ = z;
@@ -91,10 +106,10 @@ function weldVerticesByPosition(
   let vertexCount = 0;
 
   for (let i = 0; i < indices.length; i++) {
-    const vi = indices[i]!;
-    const x = positions[vi * 3]!;
-    const y = positions[vi * 3 + 1]!;
-    const z = positions[vi * 3 + 2]!;
+    const vi = indices[i];
+    const x = positions[vi * 3];
+    const y = positions[vi * 3 + 1];
+    const z = positions[vi * 3 + 2];
     const gx = Math.round(x * invEpsilon);
     const gy = Math.round(y * invEpsilon);
     const gz = Math.round(z * invEpsilon);
@@ -141,7 +156,7 @@ export function buildFeatureEdgePositions(
   rawPositions: Float32Array,
   rawIndices: ArrayLike<number>,
   thresholdAngleDeg = DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
-): WorkerPrecomputedEdgePayload {
+): FeatureEdgePayload {
   const weldEpsilon = Math.max(
     computeBoundingDiagonal(rawPositions) * 1e-5,
     1e-6,
@@ -155,19 +170,19 @@ export function buildFeatureEdgePositions(
 
   const triCount = Math.floor(indices.length / 3);
   for (let t = 0; t < triCount; t++) {
-    const ia = indices[t * 3]!;
-    const ib = indices[t * 3 + 1]!;
-    const ic = indices[t * 3 + 2]!;
+    const ia = indices[t * 3];
+    const ib = indices[t * 3 + 1];
+    const ic = indices[t * 3 + 2];
 
-    const ax = positions[ia * 3]!;
-    const ay = positions[ia * 3 + 1]!;
-    const az = positions[ia * 3 + 2]!;
-    const bx = positions[ib * 3]!;
-    const by = positions[ib * 3 + 1]!;
-    const bz = positions[ib * 3 + 2]!;
-    const cx = positions[ic * 3]!;
-    const cy = positions[ic * 3 + 1]!;
-    const cz = positions[ic * 3 + 2]!;
+    const ax = positions[ia * 3];
+    const ay = positions[ia * 3 + 1];
+    const az = positions[ia * 3 + 2];
+    const bx = positions[ib * 3];
+    const by = positions[ib * 3 + 1];
+    const bz = positions[ib * 3 + 2];
+    const cx = positions[ic * 3];
+    const cy = positions[ic * 3 + 1];
+    const cz = positions[ic * 3 + 2];
 
     const abx = bx - ax;
     const aby = by - ay;
@@ -191,43 +206,26 @@ export function buildFeatureEdgePositions(
     getOrCreateEdge(edges, ic, ia, nx, ny, nz);
   }
 
+  // 两遍扫描：先计数精确分配，再写入
   let edgeCount = 0;
   for (const inner of edges.values()) {
-    for (const info of inner.values()) {
-      if (info.triCount === 1 || info.n2x === undefined) {
-        edgeCount++;
-      } else {
-        const dot =
-          info.nx * info.n2x! +
-          info.ny * info.n2y! +
-          info.nz * info.n2z!;
-        if (dot < thresholdDot) edgeCount++;
-      }
+    for (const edge of inner.values()) {
+      if (isFeatureEdge(edge, thresholdDot)) edgeCount++;
     }
   }
 
   const linePositions = new Float32Array(edgeCount * 6);
   let writePtr = 0;
   for (const inner of edges.values()) {
-    for (const info of inner.values()) {
-      let draw = false;
-      if (info.triCount === 1 || info.n2x === undefined) {
-        draw = true;
-      } else {
-        const dot =
-          info.nx * info.n2x! +
-          info.ny * info.n2y! +
-          info.nz * info.n2z!;
-        if (dot < thresholdDot) draw = true;
-      }
-      if (!draw) continue;
+    for (const edge of inner.values()) {
+      if (!isFeatureEdge(edge, thresholdDot)) continue;
 
-      const v1x = positions[info.v1 * 3]!;
-      const v1y = positions[info.v1 * 3 + 1]!;
-      const v1z = positions[info.v1 * 3 + 2]!;
-      const v2x = positions[info.v2 * 3]!;
-      const v2y = positions[info.v2 * 3 + 1]!;
-      const v2z = positions[info.v2 * 3 + 2]!;
+      const v1x = positions[edge.v1 * 3];
+      const v1y = positions[edge.v1 * 3 + 1];
+      const v1z = positions[edge.v1 * 3 + 2];
+      const v2x = positions[edge.v2 * 3];
+      const v2y = positions[edge.v2 * 3 + 1];
+      const v2z = positions[edge.v2 * 3 + 2];
       linePositions[writePtr] = v1x;
       linePositions[writePtr + 1] = v1y;
       linePositions[writePtr + 2] = v1z;

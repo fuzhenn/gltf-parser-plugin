@@ -12,7 +12,13 @@ import {
 } from "three";
 
 import { acquireWorker, getWorkers } from "../utils";
-import type { GLTFNodeData, GLTFWorkerData, MaterialBuilder } from "../types";
+import type {
+  FeatureIdIndexData,
+  GLTFNodeData,
+  GLTFWorkerData,
+  InstanceData,
+  MaterialBuilder,
+} from "../types";
 import { StructuralMetadata, MeshFeatures } from "3d-tiles-renderer/plugins";
 import {
   buildInstanceOidMap,
@@ -30,6 +36,49 @@ import {
 const EXT_STRUCTURAL_METADATA = "EXT_structural_metadata";
 const EXT_MESH_FEATURES = "EXT_mesh_features";
 
+// 实例矩阵组装的模块级复用对象，避免每 primitive/每实例重复分配
+const tmpInstanceMatrix = new Matrix4();
+const tmpInstancePos = new Vector3();
+const tmpInstanceQuat = new Quaternion();
+const tmpInstanceScale = new Vector3(1, 1, 1);
+
+/** 由第 i 个实例的 TRS 分量组装局部矩阵，结果写入 tmpInstanceMatrix */
+function composeInstanceMatrix(
+  TRANSLATION: Float32Array | undefined,
+  ROTATION: Float32Array | undefined,
+  SCALE: Float32Array | undefined,
+  i: number,
+): void {
+  if (TRANSLATION) {
+    tmpInstancePos.set(
+      TRANSLATION[i * 3],
+      TRANSLATION[i * 3 + 1],
+      TRANSLATION[i * 3 + 2],
+    );
+  } else {
+    tmpInstancePos.set(0, 0, 0);
+  }
+
+  if (ROTATION) {
+    tmpInstanceQuat.set(
+      ROTATION[i * 4],
+      ROTATION[i * 4 + 1],
+      ROTATION[i * 4 + 2],
+      ROTATION[i * 4 + 3],
+    );
+  } else {
+    tmpInstanceQuat.identity();
+  }
+
+  if (SCALE) {
+    tmpInstanceScale.set(SCALE[i * 3], SCALE[i * 3 + 1], SCALE[i * 3 + 2]);
+  } else {
+    tmpInstanceScale.set(1, 1, 1);
+  }
+
+  tmpInstanceMatrix.compose(tmpInstancePos, tmpInstanceQuat, tmpInstanceScale);
+}
+
 /**
  * GLTFWorkerLoader configuration options
  */
@@ -42,7 +91,7 @@ export interface GLTFWorkerLoaderOptions {
   fetchOptions?: RequestInit;
 }
 
-let uuid = 0;
+let nextLoaderId = 0;
 
 /**
  * Custom Loader using Worker for GLTF parsing
@@ -51,7 +100,7 @@ export class GLTFWorkerLoader extends Loader {
   private _metadata: boolean = true;
   private _materialBuilder: MaterialBuilder;
   private _fetchOptions: RequestInit = {};
-  private _loaderId = uuid++;
+  private _loaderId = nextLoaderId++;
   private _callbacks = new Map<
     number,
     { resolve: (data: any) => void; reject: (err: Error) => void }
@@ -68,17 +117,15 @@ export class GLTFWorkerLoader extends Loader {
   }
 
   addListeners() {
-    const workers = getWorkers();
-    workers.forEach((worker) => {
+    for (const worker of getWorkers()) {
       worker.addEventListener("message", this._onMessage);
-    });
+    }
   }
 
   removeListeners() {
-    const workers = getWorkers();
-    workers.forEach((worker) => {
+    for (const worker of getWorkers()) {
       worker.removeEventListener("message", this._onMessage);
-    });
+    }
   }
 
   /**
@@ -139,7 +186,7 @@ export class GLTFWorkerLoader extends Loader {
   private _onMessage = (event: MessageEvent) => {
     const { type, data, error, loaderId, requestId } = event.data;
 
-    // loaderId here is our requestId
+    // 多 loader 共享 worker 池，只处理回给本 loader 的消息
     if (loaderId !== this._loaderId) return;
     const callback = this._callbacks.get(requestId);
     if (!callback) return;
@@ -159,169 +206,50 @@ export class GLTFWorkerLoader extends Loader {
   private buildSceneFromGLTFData(data: GLTFWorkerData): Scene {
     const scene = new Scene();
 
-    // Build textures
+    // Build textures / materials / mesh primitives
     const { textureMap, textureArray } = buildTextures(data);
-
-    // Build materials
     const materialMap = buildMaterials(data, textureMap, this._materialBuilder);
-
-    // Create default material
     const defaultMaterial = this._materialBuilder({
       pbrMetallicRoughness: { baseColorFactor: [0.75, 0.75, 0.75, 1] },
     });
-
-    // Build mesh primitives
     const meshMap = buildMeshPrimitives(data, materialMap, defaultMaterial);
 
-    // Parse node
     const parseNodeData = (nodeData: GLTFNodeData): Group => {
       const node = new Group();
 
       const primitiveDataList = meshMap.get(nodeData.mesh);
       if (primitiveDataList) {
-        if (nodeData.instanceData) {
-          // EXT_mesh_gpu_instancing: create InstancedMesh per primitive
-          const { count, TRANSLATION, ROTATION, SCALE } = nodeData.instanceData;
-          const instanceFeatures = buildInstanceFeatures(nodeData);
-          const instanceStructuralMetadata = this._metadata
-            ? buildInstanceStructuralMetadata(data, textureArray)
-            : null;
-          const instanceOidMap =
-            instanceStructuralMetadata && instanceFeatures
-              ? buildInstanceOidMap(nodeData, instanceStructuralMetadata, 0)
-              : null;
-          for (const {
-            geometry,
-            material,
-            primitiveIndex,
-            featureIdIndices,
-          } of primitiveDataList) {
-            const instancedMesh = new InstancedMesh(geometry, material, count);
-
-            const tmpMatrix = new Matrix4();
-            const tmpPos = new Vector3();
-            const tmpQuat = new Quaternion();
-            const tmpScale = new Vector3(1, 1, 1);
-
-            for (let i = 0; i < count; i++) {
-              if (TRANSLATION) {
-                tmpPos.set(
-                  TRANSLATION[i * 3],
-                  TRANSLATION[i * 3 + 1],
-                  TRANSLATION[i * 3 + 2],
-                );
-              } else {
-                tmpPos.set(0, 0, 0);
-              }
-
-              if (ROTATION) {
-                tmpQuat.set(
-                  ROTATION[i * 4],
-                  ROTATION[i * 4 + 1],
-                  ROTATION[i * 4 + 2],
-                  ROTATION[i * 4 + 3],
-                );
-              } else {
-                tmpQuat.identity();
-              }
-
-              if (SCALE) {
-                tmpScale.set(SCALE[i * 3], SCALE[i * 3 + 1], SCALE[i * 3 + 2]);
-              } else {
-                tmpScale.set(1, 1, 1);
-              }
-
-              tmpMatrix.compose(tmpPos, tmpQuat, tmpScale);
-              instancedMesh.setMatrixAt(i, tmpMatrix);
-            }
-
-            instancedMesh.instanceMatrix.needsUpdate = true;
-            instancedMesh.userData._gltfMeshIndex = nodeData.mesh;
-            instancedMesh.userData._gltfPrimitiveIndex = primitiveIndex;
-            if (featureIdIndices) {
-              instancedMesh.userData._featureIdIndexCaches = featureIdIndices;
-            }
-            if (instanceStructuralMetadata) {
-              instancedMesh.userData.structuralMetadata =
-                instanceStructuralMetadata;
-            }
-            if (instanceFeatures) {
-              instancedMesh.userData.instanceFeatures = instanceFeatures;
-            }
-            if (instanceOidMap) {
-              instancedMesh.userData._tile_oidMap = instanceOidMap;
-            }
-            node.add(instancedMesh);
-          }
-        } else {
-          for (const {
-            geometry,
-            material,
-            primitiveIndex,
-            featureIdIndices,
-          } of primitiveDataList) {
-            const mesh = new Mesh(geometry, material);
-            mesh.userData._gltfMeshIndex = nodeData.mesh;
-            mesh.userData._gltfPrimitiveIndex = primitiveIndex;
-            if (featureIdIndices) {
-              mesh.userData._featureIdIndexCaches = featureIdIndices;
-            }
-            node.add(mesh);
-          }
+        const meshes = nodeData.instanceData
+          ? this.createInstancedMeshes(
+              nodeData,
+              nodeData.instanceData,
+              primitiveDataList,
+              data,
+              textureArray,
+            )
+          : this.createMeshes(nodeData, primitiveDataList);
+        for (const mesh of meshes) {
+          node.add(mesh);
         }
       }
 
-      // Set node name
       if (nodeData.name) {
         node.name = nodeData.name;
       }
 
-      // Apply transformation
-      if (nodeData.matrix) {
-        const m = new Matrix4();
-        m.fromArray(nodeData.matrix);
-        node.applyMatrix4(m);
-      } else {
-        if (nodeData.translation) {
-          node.position.set(
-            nodeData.translation[0],
-            nodeData.translation[1],
-            nodeData.translation[2],
-          );
-        }
-        if (nodeData.rotation) {
-          node.quaternion.set(
-            nodeData.rotation[0],
-            nodeData.rotation[1],
-            nodeData.rotation[2],
-            nodeData.rotation[3],
-          );
-        }
-        if (nodeData.scale) {
-          node.scale.set(
-            nodeData.scale[0],
-            nodeData.scale[1],
-            nodeData.scale[2],
-          );
-        }
-      }
+      this.applyNodeTransform(node, nodeData);
 
-      // Recursively process child nodes
       if (nodeData.children && Array.isArray(nodeData.children)) {
         for (const child of nodeData.children) {
-          const childNode = parseNodeData(child);
-          node.add(childNode);
+          node.add(parseNodeData(child));
         }
       }
 
       return node;
     };
 
-    // Add scene nodes
-    const sceneData = data.scenes[0];
-    for (const nodeData of sceneData.nodes) {
-      const node = parseNodeData(nodeData);
-      scene.add(node);
+    for (const nodeData of data.scenes[0]?.nodes ?? []) {
+      scene.add(parseNodeData(nodeData));
     }
 
     // Process metadata (if enabled)
@@ -332,13 +260,147 @@ export class GLTFWorkerLoader extends Loader {
     return scene;
   }
 
+  /** 普通（非实例化）primitive → Mesh */
+  private createMeshes(
+    nodeData: GLTFNodeData,
+    primitiveDataList: PrimitiveData[],
+  ): Mesh[] {
+    const meshes: Mesh[] = [];
+    for (const {
+      geometry,
+      material,
+      primitiveIndex,
+      featureIdIndices,
+    } of primitiveDataList) {
+      const mesh = new Mesh(geometry, material);
+      this.applyPrimitiveTag(mesh, nodeData, primitiveIndex, featureIdIndices);
+      meshes.push(mesh);
+    }
+    return meshes;
+  }
+
+  /** EXT_mesh_gpu_instancing：每个 primitive 一个 InstancedMesh */
+  private createInstancedMeshes(
+    nodeData: GLTFNodeData,
+    instanceData: InstanceData,
+    primitiveDataList: PrimitiveData[],
+    data: GLTFWorkerData,
+    textureArray: Texture[],
+  ): InstancedMesh[] {
+    const { count, TRANSLATION, ROTATION, SCALE } = instanceData;
+    const instanceFeatures = buildInstanceFeatures(nodeData);
+    const instanceStructuralMetadata = this._metadata
+      ? buildInstanceStructuralMetadata(data, textureArray)
+      : null;
+    const instanceOidMap =
+      instanceStructuralMetadata && instanceFeatures
+        ? buildInstanceOidMap(nodeData, instanceStructuralMetadata, 0)
+        : null;
+
+    const meshes: InstancedMesh[] = [];
+    for (const {
+      geometry,
+      material,
+      primitiveIndex,
+      featureIdIndices,
+    } of primitiveDataList) {
+      const instancedMesh = new InstancedMesh(geometry, material, count);
+
+      for (let i = 0; i < count; i++) {
+        composeInstanceMatrix(TRANSLATION, ROTATION, SCALE, i);
+        instancedMesh.setMatrixAt(i, tmpInstanceMatrix);
+      }
+      instancedMesh.instanceMatrix.needsUpdate = true;
+
+      this.applyPrimitiveTag(
+        instancedMesh,
+        nodeData,
+        primitiveIndex,
+        featureIdIndices,
+      );
+      if (instanceStructuralMetadata) {
+        instancedMesh.userData.structuralMetadata = instanceStructuralMetadata;
+      }
+      if (instanceFeatures) {
+        instancedMesh.userData.instanceFeatures = instanceFeatures;
+      }
+      if (instanceOidMap) {
+        instancedMesh.userData._tile_oidMap = instanceOidMap;
+      }
+      meshes.push(instancedMesh);
+    }
+    return meshes;
+  }
+
+  /** 标记 mesh 来源（mesh/primitive 定位用），供 metadata 与样式系统寻址 */
+  private applyPrimitiveTag(
+    mesh: Mesh,
+    nodeData: GLTFNodeData,
+    primitiveIndex: number,
+    featureIdIndices?: Record<string, FeatureIdIndexData>,
+  ): void {
+    mesh.userData._gltfMeshIndex = nodeData.mesh;
+    mesh.userData._gltfPrimitiveIndex = primitiveIndex;
+    if (featureIdIndices) {
+      mesh.userData._featureIdIndexCaches = featureIdIndices;
+    }
+  }
+
+  /** 应用节点 TRS：优先 matrix，否则分量为 translation / rotation / scale */
+  private applyNodeTransform(node: Group, nodeData: GLTFNodeData): void {
+    if (nodeData.matrix) {
+      const m = new Matrix4();
+      m.fromArray(nodeData.matrix);
+      node.applyMatrix4(m);
+      return;
+    }
+    if (nodeData.translation) {
+      node.position.set(
+        nodeData.translation[0],
+        nodeData.translation[1],
+        nodeData.translation[2],
+      );
+    }
+    if (nodeData.rotation) {
+      node.quaternion.set(
+        nodeData.rotation[0],
+        nodeData.rotation[1],
+        nodeData.rotation[2],
+        nodeData.rotation[3],
+      );
+    }
+    if (nodeData.scale) {
+      node.scale.set(nodeData.scale[0], nodeData.scale[1], nodeData.scale[2]);
+    }
+  }
+
+  /**
+   * 组装 EXT_structural_metadata 的定义与 buffers；schema 或根扩展缺失时返回 null
+   */
+  private buildStructuralMetadata(data: GLTFWorkerData) {
+    const loaded = data.structuralMetadata;
+    const rootExtension = data.json?.extensions?.[EXT_STRUCTURAL_METADATA];
+    if (!loaded?.schema || !rootExtension) {
+      return null;
+    }
+    return {
+      definition: {
+        schema: loaded.schema,
+        propertyTables: loaded.propertyTables || [],
+        propertyTextures: rootExtension.propertyTextures || [],
+        propertyAttributes: rootExtension.propertyAttributes || [],
+      },
+      buffers: loaded.buffers || [],
+    };
+  }
+
   /**
    * Process and attach metadata to scene and mesh objects
    */
   private processMetadata(
     scene: Scene,
     data: GLTFWorkerData,
-    textures: (Texture | null)[],
+    textures: Texture[],
     meshMap: Map<number, PrimitiveData[]>,
   ): void {
     const extensionsUsed = data.json?.extensionsUsed || [];
@@ -351,65 +413,43 @@ export class GLTFWorkerLoader extends Loader {
       return;
     }
 
-    // Process EXT_structural_metadata
+    // 根级 EXT_structural_metadata
     let rootMetadata: StructuralMetadata | null = null;
-    if (hasStructuralMetadata && data.structuralMetadata) {
-      const rootExtension = data.json?.extensions?.[EXT_STRUCTURAL_METADATA];
-      if (rootExtension) {
-        const definition = {
-          schema: data.structuralMetadata.schema,
-          propertyTables: data.structuralMetadata.propertyTables || [],
-          propertyTextures: rootExtension.propertyTextures || [],
-          propertyAttributes: rootExtension.propertyAttributes || [],
-        };
-
-        const buffers = data.structuralMetadata.buffers || [];
-        rootMetadata = new StructuralMetadata(definition, textures, buffers);
+    if (hasStructuralMetadata) {
+      const meta = this.buildStructuralMetadata(data);
+      if (meta) {
+        rootMetadata = new StructuralMetadata(
+          meta.definition,
+          textures,
+          meta.buffers,
+        );
         scene.userData.structuralMetadata = rootMetadata;
       }
     }
 
-    // Traverse all meshes in the scene, process mesh-level metadata
-    scene.traverse((child: any) => {
-      if (child instanceof InstancedMesh) return;
+    // primitive 级 metadata：meshFeatures / structuralMetadata
+    scene.traverse((child) => {
+      if (!(child instanceof Mesh) || child instanceof InstancedMesh) return;
 
-      if (!(child instanceof Mesh)) return;
-
-      const meshIndex = child.userData._gltfMeshIndex as number | undefined;
-      const primitiveIndex = child.userData._gltfPrimitiveIndex as
-        | number
-        | undefined;
+      const { _gltfMeshIndex: meshIndex, _gltfPrimitiveIndex: primitiveIndex } =
+        child.userData;
       if (meshIndex === undefined || primitiveIndex === undefined) return;
 
-      const primitiveDataList = meshMap.get(meshIndex);
-      if (!primitiveDataList) return;
-
-      const primitiveData = primitiveDataList.find(
-        (p) => p.primitiveIndex === primitiveIndex,
-      );
+      // primitiveIndex 即其在 primitiveDataList 中的下标（构建时顺序 push）
+      const primitiveData = meshMap.get(meshIndex)?.[primitiveIndex];
       if (!primitiveData) return;
 
       const extensions = primitiveData.extensions;
 
-      // Process EXT_structural_metadata (primitive level)
       if (hasStructuralMetadata && rootMetadata) {
         const primMetadataExt = extensions?.[EXT_STRUCTURAL_METADATA];
         if (primMetadataExt) {
-          const rootExtension =
-            data.json?.extensions?.[EXT_STRUCTURAL_METADATA];
-          if (rootExtension) {
-            const definition = {
-              schema: data.structuralMetadata!.schema,
-              propertyTables: data.structuralMetadata!.propertyTables || [],
-              propertyTextures: rootExtension.propertyTextures || [],
-              propertyAttributes: rootExtension.propertyAttributes || [],
-            };
-            const buffers = data.structuralMetadata!.buffers || [];
-
+          const meta = this.buildStructuralMetadata(data);
+          if (meta) {
             child.userData.structuralMetadata = new StructuralMetadata(
-              definition,
+              meta.definition,
               textures,
-              buffers,
+              meta.buffers,
               primMetadataExt,
               child,
             );
@@ -419,7 +459,6 @@ export class GLTFWorkerLoader extends Loader {
         }
       }
 
-      // Process EXT_mesh_features
       if (hasMeshFeatures) {
         const meshFeaturesExt = extensions?.[EXT_MESH_FEATURES];
         if (meshFeaturesExt) {

@@ -61,19 +61,3 @@ export function resolveShowFeatureIdAttribute(show?: StyleShowInput): number {
   if (typeof show === "string") return DEFAULT_FEATURE_ID_ATTRIBUTE;
   return normalizeFeatureIdAttribute(show.featureIdAttribute);
 }
-
-/** 从 style / highlight 参数中获取用到的 featureIdAttribute（去重、升序） */
-export function getFeatureIdAttributesFromStyleConfig(config: {
-  show?: StyleShowInput;
-  conditions?: readonly [StyleConditionInput, unknown][];
-}): number[] {
-  const attrs = new Set<number>();
-  if (config.show != null) {
-    attrs.add(resolveShowFeatureIdAttribute(config.show));
-  }
-  for (const [cond] of config.conditions ?? []) {
-    attrs.add(resolveStyleConditionFeatureIdAttribute(cond));
-  }
-  if (attrs.size === 0) attrs.add(DEFAULT_FEATURE_ID_ATTRIBUTE);
-  return [...attrs].sort((a, b) => a - b);
-}

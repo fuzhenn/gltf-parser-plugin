@@ -3,9 +3,16 @@ import {
   FrontSide,
   Material,
   MeshStandardMaterial,
+  NoColorSpace,
+  SRGBColorSpace,
   Texture,
+  type ColorSpace,
 } from "three";
-import type { GLTFWorkerData, MaterialBuilder } from "../types";
+import type {
+  GLTFWorkerData,
+  MaterialBuilder,
+  WorkerMaterialData,
+} from "../types";
 
 /** 与 glTF 2.0 / three.js GLTFLoader 一致 */
 const GLTF_ALPHA_OPAQUE = "OPAQUE";
@@ -37,60 +44,60 @@ export function buildMaterials(
   return materialMap;
 }
 
+/**
+ * 取槽位贴图并按槽位设定 colorSpace，与 three.js GLTFLoader 的 assignTexture 一致：
+ * baseColor / emissive 为 sRGB，normal / metallicRoughness / occlusion 保持线性。
+ */
+function getTexture(
+  textureMap: Map<number, Texture> | undefined,
+  texInfo?: { index: number },
+  colorSpace?: ColorSpace,
+): Texture | undefined {
+  if (!textureMap || texInfo?.index === undefined) {
+    return undefined;
+  }
+  const tex = textureMap.get(texInfo.index);
+  if (tex && colorSpace) {
+    tex.colorSpace = colorSpace;
+  }
+  return tex;
+}
+
 export function defaultMaterialBuilder(
-  matData: any,
+  matData: WorkerMaterialData,
   textureMap?: Map<number, Texture>,
 ): Material {
   const material = new MeshStandardMaterial();
+  const pbr = matData.pbrMetallicRoughness;
 
-  // PBR material properties
-  if (matData.pbrMetallicRoughness) {
-    const pbr = matData.pbrMetallicRoughness;
-
-    // Base color（A 通道写入 opacity；是否与透明混合由下方 alphaMode 决定，见 glTF 2.0 material）
-    if (pbr.baseColorFactor) {
-      material.color.setRGB(
-        pbr.baseColorFactor[0],
-        pbr.baseColorFactor[1],
-        pbr.baseColorFactor[2],
-      );
-      if (pbr.baseColorFactor[3] !== undefined) {
-        material.opacity = pbr.baseColorFactor[3];
-      }
-    }
-
-    // Base color texture
-    if (textureMap && pbr.baseColorTexture && pbr.baseColorTexture.index !== undefined) {
-      const tex = textureMap.get(pbr.baseColorTexture.index);
-      if (tex) {
-        material.map = tex;
-      }
-    }
-
-    // Metalness and roughness
-    material.metalness =
-      pbr.metallicFactor !== undefined ? pbr.metallicFactor : 1.0;
-    material.roughness =
-      pbr.roughnessFactor !== undefined ? pbr.roughnessFactor : 1.0;
-
-    // Metallic roughness texture
-    if (
-      textureMap &&
-      pbr.metallicRoughnessTexture &&
-      pbr.metallicRoughnessTexture.index !== undefined
-    ) {
-      const tex = textureMap.get(pbr.metallicRoughnessTexture.index);
-      if (tex) {
-        material.metalnessMap = material.roughnessMap = tex;
-      }
+  // Base color（A 通道写入 opacity；是否与透明混合由下方 alphaMode 决定，见 glTF 2.0 material）
+  if (pbr?.baseColorFactor) {
+    material.color.setRGB(
+      pbr.baseColorFactor[0],
+      pbr.baseColorFactor[1],
+      pbr.baseColorFactor[2],
+    );
+    if (pbr.baseColorFactor[3] !== undefined) {
+      material.opacity = pbr.baseColorFactor[3];
     }
   }
+  material.map =
+    getTexture(textureMap, pbr?.baseColorTexture, SRGBColorSpace) ?? null;
+
+  material.metalness = pbr?.metallicFactor ?? 1.0;
+  material.roughness = pbr?.roughnessFactor ?? 1.0;
+  material.metalnessMap = material.roughnessMap =
+    getTexture(textureMap, pbr?.metallicRoughnessTexture, NoColorSpace) ?? null;
 
   // Normal map
-  if (textureMap && matData.normalTexture && matData.normalTexture.index !== undefined) {
-    const tex = textureMap.get(matData.normalTexture.index);
-    if (tex) {
-      material.normalMap = tex;
+  if (matData.normalTexture) {
+    const normalMap = getTexture(
+      textureMap,
+      matData.normalTexture,
+      NoColorSpace,
+    );
+    if (normalMap) {
+      material.normalMap = normalMap;
       if (matData.normalTexture.scale !== undefined) {
         material.normalScale.set(
           matData.normalTexture.scale,
@@ -101,24 +108,12 @@ export function defaultMaterialBuilder(
   }
 
   // Occlusion map
-  if (
-    textureMap &&
-    matData.occlusionTexture &&
-    matData.occlusionTexture.index !== undefined
-  ) {
-    const tex = textureMap.get(matData.occlusionTexture.index);
-    if (tex) {
-      material.aoMap = tex;
-    }
-  }
+  material.aoMap =
+    getTexture(textureMap, matData.occlusionTexture, NoColorSpace) ?? null;
 
   // Emissive
-  if (textureMap && matData.emissiveTexture && matData.emissiveTexture.index !== undefined) {
-    const tex = textureMap.get(matData.emissiveTexture.index);
-    if (tex) {
-      material.emissiveMap = tex;
-    }
-  }
+  material.emissiveMap =
+    getTexture(textureMap, matData.emissiveTexture, SRGBColorSpace) ?? null;
   if (matData.emissiveFactor) {
     material.emissive.setRGB(
       matData.emissiveFactor[0],

@@ -24,34 +24,36 @@ function buildFeatureIdIndices(
     const fidArray = attributes[attrName]?.array;
     if (!fidArray) continue;
 
-    const fidChunks = new Map<number, number[]>();
-    for (let i = 0; i < indexArray.length; i += 3) {
-      const a = indexArray[i]!;
-      const b = indexArray[i + 1]!;
-      const c = indexArray[i + 2]!;
-      const fid = fidArray[a];
-
-      let chunk = fidChunks.get(fid);
-      if (!chunk) {
-        chunk = [];
-        fidChunks.set(fid, chunk);
-      }
-      chunk.push(a, b, c);
+    // 两遍扫描直写 typed array，避免中间 number[] 的装箱与二次拷贝：
+    // 第一遍按 fid 统计三角数，得出各 fid 的 buffer 区间；第二遍按区间写入
+    const triCount = Math.floor(indexArray.length / 3);
+    const triCountPerFid = new Map<number, number>();
+    for (let i = 0; i < triCount * 3; i += 3) {
+      const fid = fidArray[indexArray[i]];
+      triCountPerFid.set(fid, (triCountPerFid.get(fid) ?? 0) + 1);
     }
-
-    let total = 0;
-    for (const chunk of fidChunks.values()) total += chunk.length;
 
     const buffer =
       indexArray instanceof Uint16Array
-        ? new Uint16Array(total)
-        : new Uint32Array(total);
+        ? new Uint16Array(triCount * 3)
+        : new Uint32Array(triCount * 3);
     const featureIdIndexMap: Record<number, IndexRange> = {};
+    const writeCursors = new Map<number, number>();
     let offset = 0;
-    for (const [fid, chunk] of fidChunks) {
-      buffer.set(chunk, offset);
-      featureIdIndexMap[fid] = { offset, length: chunk.length };
-      offset += chunk.length;
+    for (const [fid, count] of triCountPerFid) {
+      const length = count * 3;
+      featureIdIndexMap[fid] = { offset, length };
+      writeCursors.set(fid, offset);
+      offset += length;
+    }
+
+    for (let i = 0; i < triCount * 3; i += 3) {
+      const fid = fidArray[indexArray[i]];
+      const write = writeCursors.get(fid)!;
+      buffer[write] = indexArray[i];
+      buffer[write + 1] = indexArray[i + 1];
+      buffer[write + 2] = indexArray[i + 2];
+      writeCursors.set(fid, write + 3);
     }
 
     addTransferable(buffer);
@@ -62,6 +64,51 @@ function buildFeatureIdIndices(
   }
 
   return result;
+}
+
+/** EXT_mesh_gpu_instancing 已知属性的分量数（缺省 1） */
+function instanceAttrItemSize(key: string): number {
+  return key === "ROTATION" ? 4 : key === "TRANSLATION" || key === "SCALE" ? 3 : 1;
+}
+
+/** 处理节点上的 EXT_mesh_gpu_instancing，汇总实例 TRS 属性 */
+function processInstancingExtension(
+  node: any,
+  instancingExt: { attributes: Record<string, any> },
+  addTransferable: (arr: any) => void,
+): void {
+  const attrs = instancingExt.attributes;
+
+  // 以 TRANSLATION/ROTATION/SCALE（或首个属性）的长度确定实例数
+  const refKey = attrs.TRANSLATION
+    ? "TRANSLATION"
+    : attrs.ROTATION
+      ? "ROTATION"
+      : attrs.SCALE
+        ? "SCALE"
+        : Object.keys(attrs)[0];
+  const refAttr = refKey !== undefined ? attrs[refKey] : undefined;
+  if (!refAttr) return;
+
+  const refArray = refAttr.array || refAttr;
+  const refItemSize = refAttr.itemSize || instanceAttrItemSize(refKey);
+  const count = refArray.length / refItemSize;
+
+  const instanceData: Record<string, any> = { count };
+
+  for (const [key, attr] of Object.entries(attrs)) {
+    const arr = attr.array || attr;
+    if (!arr) continue;
+    const knownSize = instanceAttrItemSize(key);
+    const itemSize =
+      attr.itemSize || (knownSize !== 1 ? knownSize : arr.length / count);
+    if (arr.length !== count * itemSize) continue;
+
+    instanceData[key] = arr;
+    addTransferable(arr);
+  }
+
+  node.instanceData = instanceData;
 }
 
 /**
@@ -89,7 +136,6 @@ export function processGLTFData(data: any): {
   ) => {
     const attr = attributes[key];
     if (attr && attr.array) {
-      // if else
       const processed = decoder
         ? decoder(attr)
         : attr.quantization
@@ -158,14 +204,14 @@ export function processGLTFData(data: any): {
           indexArray.length >= 3 &&
           positionArray.length >= 9
         ) {
-          const precomputedEdges = buildFeatureEdgePositions(
+          const featureEdges = buildFeatureEdgePositions(
             positionArray,
             indexArray,
             DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
           );
-          if (precomputedEdges.positions.length > 0) {
-            addTransferable(precomputedEdges.positions.buffer);
-            primitive.precomputedEdges = precomputedEdges;
+          if (featureEdges.positions.length > 0) {
+            addTransferable(featureEdges.positions.buffer);
+            primitive.featureEdges = featureEdges;
           }
         }
       }
@@ -177,42 +223,7 @@ export function processGLTFData(data: any): {
     const processNode = (node: any) => {
       const instancingExt = node.extensions?.EXT_mesh_gpu_instancing;
       if (instancingExt?.attributes) {
-        const attrs = instancingExt.attributes;
-        const refAttr =
-          attrs.TRANSLATION ||
-          attrs.ROTATION ||
-          attrs.SCALE ||
-          Object.values(attrs)[0];
-        if (refAttr) {
-          const refArray = refAttr.array || refAttr;
-          const refItemSize =
-            refAttr.itemSize ||
-            (refAttr === attrs.ROTATION
-              ? 4
-              : refAttr === attrs.TRANSLATION || refAttr === attrs.SCALE
-                ? 3
-                : 1);
-          const count = refArray.length / refItemSize;
-
-          const instanceData: Record<string, any> = { count };
-
-          for (const [key, attr] of Object.entries(attrs)) {
-            const arr = (attr as any).array || attr;
-            const itemSize =
-              (attr as any).itemSize ||
-              (key === "ROTATION"
-                ? 4
-                : key === "TRANSLATION" || key === "SCALE"
-                  ? 3
-                  : arr.length / count);
-            if (!arr || arr.length !== count * itemSize) continue;
-
-            instanceData[key] = arr;
-            addTransferable(arr);
-          }
-
-          node.instanceData = instanceData;
-        }
+        processInstancingExtension(node, instancingExt, addTransferable);
       }
 
       if (node.children) {
