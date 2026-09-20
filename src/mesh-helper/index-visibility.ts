@@ -60,9 +60,14 @@ function resolveHiddenPartIdsOnUserData(
       ? config.show
       : undefined;
 
-  const candidateIds = Object.keys(idMap).map(Number);
+  // 只保留作用于当前通道的条件，避免逐 partId 重复解析
+  const channelConditions = conditions.filter(
+    ([cond]) =>
+      resolveStyleConditionFeatureIdAttribute(cond) === featureIdAttribute,
+  );
 
-  for (const partId of candidateIds) {
+  for (const key of Object.keys(idMap)) {
+    const partId = Number(key);
     const propertyData = getPropertyDataFromUserData(
       userData,
       partId,
@@ -79,12 +84,7 @@ function resolveHiddenPartIdsOnUserData(
       continue;
     }
 
-    for (const [cond] of conditions) {
-      if (
-        resolveStyleConditionFeatureIdAttribute(cond) !== featureIdAttribute
-      ) {
-        continue;
-      }
+    for (const [cond] of channelConditions) {
       if (evaluateStyleCondition(cond, propertyData, evaluators)) {
         hidden.add(partId);
         break;
@@ -93,35 +93,6 @@ function resolveHiddenPartIdsOnUserData(
   }
 
   return hidden;
-}
-
-export function resolveHiddenPartIdsOnMeshUserData(
-  userData: Record<string, unknown>,
-  featureIdAttribute: number,
-  config: MeshPartVisibilityConfig,
-  internalData?: InternalData,
-): Set<number> {
-  return resolveHiddenPartIdsOnUserData(
-    userData,
-    featureIdAttribute,
-    config,
-    internalData,
-  );
-}
-
-/** {@link resolveHiddenPartIdsOnMeshUserData} 的 mesh 便捷封装 */
-export function resolveHiddenPartIdsOnMesh(
-  mesh: Mesh,
-  featureIdAttribute: number,
-  config: MeshPartVisibilityConfig,
-  internalData?: InternalData,
-): Set<number> {
-  return resolveHiddenPartIdsOnMeshUserData(
-    mesh.userData,
-    featureIdAttribute,
-    config,
-    internalData,
-  );
 }
 
 const meshPartVisibilityConfigsByAttribute = new Map<
@@ -136,7 +107,7 @@ export function setMeshPartVisibilityInternalData(
   meshPartVisibilityInternalData = internalData;
 }
 
-/** 登记某通道的 show/conditions 规则层，供 applyVisibilityToMesh 在 mesh 内局部解析 */
+/** 登记某通道的 show/conditions 规则层，供 applyVisibilityToSource 在 mesh 内局部解析 */
 export function setMeshPartVisibilityConfigs(
   featureIdAttribute: number,
   configs: MeshPartVisibilityConfig[],
@@ -146,18 +117,6 @@ export function setMeshPartVisibilityConfigs(
   } else {
     meshPartVisibilityConfigsByAttribute.delete(featureIdAttribute);
   }
-}
-
-/** @deprecated 请使用 {@link setMeshPartVisibilityConfigs} */
-export function setMeshPartVisibilityConfig(
-  featureIdAttribute: number,
-  config: MeshPartVisibilityConfig | null,
-): void {
-  setMeshPartVisibilityConfigs(featureIdAttribute, config ? [config] : []);
-}
-
-export function clearMeshPartVisibilityConfigs(): void {
-  meshPartVisibilityConfigsByAttribute.clear();
 }
 
 function hasMeshPartVisibilityRules(): boolean {
@@ -196,8 +155,7 @@ function resolveAllHiddenPartIdsOnSource(
 /** 与 split / 高亮一致：仅改 meshFeatures.geometry（若无则用 mesh.geometry） */
 function getVisibilityGeometry(mesh: Mesh): BufferGeometry | null {
   const { meshFeatures } = mesh.userData;
-  const g = meshFeatures?.geometry ?? mesh.geometry;
-  return g ?? null;
+  return meshFeatures?.geometry ?? mesh.geometry ?? null;
 }
 
 function getHiddenFeatureIdsForChannel(
@@ -231,21 +189,17 @@ function snapshotOriginalInstanceMatrices(mesh: InstancedMesh): Float32Array {
 
 function getHiddenInstanceIndices(
   mesh: InstancedMesh,
-  hiddenOids: Set<number>,
-  hiddenPids: Set<number>,
+  hiddenOidFids: Set<number>,
+  hiddenPidFids: Set<number>,
 ): Set<number> {
   const instanceFeatures = mesh.userData.instanceFeatures as
     | InstanceFeatures
     | undefined;
   if (!instanceFeatures) return new Set();
 
-  const hiddenOidFids = getHiddenFeatureIdsForChannel(mesh, hiddenOids, "oid");
-  const hiddenPidFids = getHiddenFeatureIdsForChannel(mesh, hiddenPids, "pid");
-  const needsOidHide = hiddenOids.size > 0 && hiddenOidFids.size > 0;
+  const needsOidHide = hiddenOidFids.size > 0;
   const needsPidHide =
-    hiddenPids.size > 0 &&
-    hiddenPidFids.size > 0 &&
-    instanceFeatures.featureIds.length > 1;
+    hiddenPidFids.size > 0 && instanceFeatures.featureIds.length > 1;
 
   if (!needsOidHide && !needsPidHide) return new Set();
 
@@ -291,10 +245,12 @@ function applyInstancedMatrixVisibility(mesh: InstancedMesh): void {
     return;
   }
 
+  const hiddenOidFids = getHiddenFeatureIdsForChannel(mesh, hiddenOids, "oid");
+  const hiddenPidFids = getHiddenFeatureIdsForChannel(mesh, hiddenPids, "pid");
   const hiddenInstances = getHiddenInstanceIndices(
     mesh,
-    hiddenOids,
-    hiddenPids,
+    hiddenOidFids,
+    hiddenPidFids,
   );
   if (hiddenInstances.size === 0) {
     restoreInstancedMeshMatrices(mesh);
@@ -324,7 +280,7 @@ function setGeometryIndexFromArray(
 /** OID + PID 同时隐藏时，同一 oid fid 块内可能含不同 pid fid，需逐三角过滤 */
 function buildVisibleIndexExcludingMultiChannelHiddenFids(
   sourceIndex: Uint16Array | Uint32Array,
-  checks: Array<{
+  hiddenChecks: Array<{
     featureIdAttr: { getX(index: number): number };
     hiddenFids: Set<number>;
   }>,
@@ -338,7 +294,7 @@ function buildVisibleIndexExcludingMultiChannelHiddenFids(
   for (let i = 0; i < sourceIndex.length; i += 3) {
     const vertexIndex = sourceIndex[i]!;
     let hide = false;
-    for (const { featureIdAttr, hiddenFids } of checks) {
+    for (const { featureIdAttr, hiddenFids } of hiddenChecks) {
       if (hiddenFids.has(featureIdAttr.getX(vertexIndex))) {
         hide = true;
         break;
@@ -389,10 +345,10 @@ function applyMeshIndexVisibility(mesh: Mesh): void {
     return;
   }
 
-  const original = snapshotOriginalIndex(mesh, geometry);
-  if (!original) return;
+  const originalIndex = snapshotOriginalIndex(mesh, geometry);
+  if (!originalIndex) return;
   // glTF 索引只可能是 Uint16 / Uint32
-  const originalArray = original.array as Uint16Array | Uint32Array;
+  const originalArray = originalIndex.array as Uint16Array | Uint32Array;
 
   let filteredArray: Uint16Array | Uint32Array;
   if (needsOidHide && needsPidHide) {
@@ -453,13 +409,8 @@ export function applyVisibilityToAllLoadedMeshes(tiles: TilesRenderer): void {
   });
 }
 
-/** 对单个 mesh 应用可见性过滤（通过修改 index 排除隐藏的三角形） */
-export function applyVisibilityToMesh(mesh: Mesh): void {
-  applyMeshIndexVisibility(mesh);
-}
-
-/** 恢复 mesh 的原始 index；备份保留在 userData 上，供其他系统 / 再次过滤复用 */
-export function restoreMeshIndex(mesh: Mesh): void {
+/** 恢复 mesh 的原始 index；备份保留在 userData 上，供再次过滤 / 其他系统复用 */
+function restoreMeshIndex(mesh: Mesh): void {
   const original = mesh.userData?._originalIndex;
   if (!(original instanceof BufferAttribute)) return;
 
