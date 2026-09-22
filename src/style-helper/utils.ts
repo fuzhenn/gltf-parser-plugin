@@ -12,11 +12,14 @@ import {
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
+  resolveShowContent,
+  resolveShowFeatureIdAttribute,
   resolveStyleConditionContent,
   resolveStyleConditionFeatureIdAttribute,
   type StyleCondition,
   type StyleAppearance,
   type StyleConditionInput,
+  type StyleShowInput,
 } from "../appearance";
 import {
   applyEuler,
@@ -277,6 +280,27 @@ export function releaseConditionCache(
   removeMatchedFeatureIdsCache(tileMesh, matchKey);
 }
 
+/** 清扫 tile mesh 上所有以 prefix 开头的冻结 split 缓存（摘 mesh + 释放几何），用于冻结条件数组整体替换 */
+export function releaseFrozenSplitCaches(
+  tileMesh: Mesh,
+  prefix: string,
+): void {
+  const map = tileMesh.userData[SPLIT_MESHES_CACHE_KEY] as
+    | SplitMeshCache
+    | undefined;
+  if (!map) return;
+  for (const key of [...map.keys()]) {
+    if (!key.startsWith(prefix)) continue;
+    const splitMesh = map.get(key)!;
+    splitMesh.removeFromParent();
+    disposeSplitGeometry(splitMesh);
+    map.delete(key);
+  }
+  if (map.size === 0) {
+    delete tileMesh.userData[SPLIT_MESHES_CACHE_KEY];
+  }
+}
+
 function collectPartIdsFromTileMesh(
   tileMesh: Mesh,
   featureIdAttribute: number,
@@ -330,6 +354,56 @@ export function resolveMatchedPartIdsOnTileMesh(
 
   setCachedMatchedFeatureIds(tileMesh, cacheKey, matchedPartIds);
   return matchedPartIds;
+}
+
+/** show 隐藏集的缓存 key（与条件命中缓存同池，"f" 前缀外的独立命名空间隔离极性） */
+export function buildShowHiddenCacheKey(show: StyleShowInput): string {
+  return `${resolveShowFeatureIdAttribute(show)}:${resolveShowContent(show)!
+    .trim()}#showHidden`;
+}
+
+/**
+ * 解析该 mesh 上被 show 隐藏的 partId（keep-set 补集语义：不满足 show 表达式即隐藏，
+ * 无属性数据的 partId 保持可见），与 index-visibility 的参考实现语义一致。
+ * 结果按 showHiddenKey 缓存（key 携带 show 内容，show 变更自然换 key，无失效问题）。
+ */
+export function resolveShowHiddenPartIdsOnTileMesh(
+  tileMesh: Mesh,
+  show: StyleShowInput,
+  showHiddenKey: string,
+  featureIdAttribute: number,
+): Set<number> {
+  const cached = getCachedMatchedFeatureIds(tileMesh, showHiddenKey);
+  if (cached) return cached;
+
+  const idMap = getPartIdMapForFeatureAttribute(tileMesh, featureIdAttribute);
+  const hiddenPartIds = new Set<number>();
+  if (!idMap) {
+    setCachedMatchedFeatureIds(tileMesh, showHiddenKey, hiddenPartIds);
+    return hiddenPartIds;
+  }
+
+  const evaluators = buildStyleConditionEvaluatorMap({ show });
+  const showExpr = resolveShowContent(show)!;
+
+  for (const partId of collectPartIdsFromTileMesh(
+    tileMesh,
+    featureIdAttribute,
+  )) {
+    const propertyData = getPropertyDataFromUserData(
+      tileMesh.userData,
+      partId,
+      featureIdAttribute,
+    );
+    if (propertyData == null) continue;
+    if (idMap[partId] === undefined) continue;
+    if (!evaluateStyleCondition(showExpr, propertyData, evaluators)) {
+      hiddenPartIds.add(partId);
+    }
+  }
+
+  setCachedMatchedFeatureIds(tileMesh, showHiddenKey, hiddenPartIds);
+  return hiddenPartIds;
 }
 
 /**

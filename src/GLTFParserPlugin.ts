@@ -12,6 +12,8 @@ import { Box3, Intersection, Object3D, Plane, Vector3 } from "three";
 import {
   buildStyleConditionEvaluatorMap,
   evaluateStyleCondition,
+  type StyleCondition,
+  type StyleConditionInput,
   type StyleConfig,
 } from "./appearance";
 import {
@@ -49,7 +51,9 @@ export class GLTFParserPlugin {
   private readonly _clippingPlanesHelper = new ClippingPlanesHelper(
     () => this._tiles,
   );
-  private readonly _interactionFilter = new PartInteractionFilter();
+  private readonly _interactionFilter = new PartInteractionFilter(
+    () => this._tiles,
+  );
 
   /**
    * Create a GLTFParserPlugin instance
@@ -161,7 +165,6 @@ export class GLTFParserPlugin {
    */
   private _onLoadModelCB = ({ scene }: { scene: Object3D }) => {
     buildPartIdToFeatureIdMap(scene);
-    // 新瓦片首处理：幂等应用当前样式并盖章当前代数
     this._styleHelper?.applySceneIfStale(scene);
   };
 
@@ -197,17 +200,26 @@ export class GLTFParserPlugin {
   }
 
   /**
+   * 懒创建 StyleHelper（注入交互过滤器引用：冻结视觉与样式共用同一管线）
+   */
+  private _ensureStyleHelper(): StyleHelper {
+    if (!this._styleHelper) {
+      this._styleHelper = new StyleHelper(
+        this._options.materialBuilder ?? defaultMaterialBuilder,
+        this._interactionFilter,
+      );
+    }
+    return this._styleHelper;
+  }
+
+  /**
    * 设置构件样式
    * @param style 样式配置，传 null 清除样式
    */
   setStyle(style: StyleConfig | null): void {
     if (!this._tiles) return;
-    if (!this._styleHelper) {
-      if (!style) return;
-      this._styleHelper = new StyleHelper(
-        this._options.materialBuilder ?? defaultMaterialBuilder,
-      );
-    }
+    if (!this._styleHelper && !style) return;
+    const styleHelper = this._ensureStyleHelper();
 
     const scenes: Object3D[] = [];
     this._tiles.forEachLoadedModel((scene: Object3D) => {
@@ -215,7 +227,7 @@ export class GLTFParserPlugin {
     });
 
     // 被移除的条件必须立即从所有瓦片摘除（split 卸载），全量处理不能延后
-    this._styleHelper.setStyle(style, scenes);
+    styleHelper.setStyle(style, scenes);
 
     // 新增/变更的样式只立即应用到当前可见瓦片；不可见瓦片由 update-after 按需补齐
     const visibleTiles = this._tiles.visibleTiles as
@@ -224,7 +236,7 @@ export class GLTFParserPlugin {
     if (!visibleTiles) return;
     for (const tile of visibleTiles) {
       const scene = tile?.engineData?.scene;
-      if (scene) this._styleHelper.applySceneIfStale(scene);
+      if (scene) styleHelper.applySceneIfStale(scene);
     }
   }
 
@@ -247,81 +259,30 @@ export class GLTFParserPlugin {
   }
 
   /**
-   * 将 selection 参数解析为 OID 列表：数组视为 OID 列表；
-   * 字符串视为与 `setStyle` 的 `show` 同语义的属性条件表达式。
+   * 冻结构件
    */
-  private _resolveSelectionOids(selection: number[] | string): number[] {
-    if (Array.isArray(selection)) return selection;
-    const cond = selection.trim();
-    if (!cond || !this._tiles) return [];
-    const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
-    const matched: number[] = [];
-    for (const [oid, data] of getPropertyDataMapFromTiles(this._tiles)) {
-      if (data && evaluateStyleCondition(cond, data, evaluators)) {
-        matched.push(oid);
-      }
-    }
-    return matched;
-  }
-
-  /**
-   * 冻结构件（射线拾取等交互将忽略这些构件）。参数为 OID 数组，
-   * 或与 `setStyle` 的 `show` 同语义的属性条件字符串。
-   */
-  freeze(selection: number[] | string): void {
-    const oids = this._resolveSelectionOids(selection);
-    if (oids.length > 0) this._interactionFilter.freeze(oids);
-  }
-
-  /**
-   * 取消冻结。参数为 OID 数组，或与 `setStyle` 的 `show` 同语义的属性条件字符串
-   * （匹配到的 OID 会从冻结集中移除）。
-   */
-  unfreeze(selection: number[] | string): void {
-    const oids = this._resolveSelectionOids(selection);
-    if (oids.length > 0) this._interactionFilter.unfreeze(oids);
+  freeze(selection: StyleConditionInput | StyleCondition[]): void {
+    if (!this._tiles) return;
+    this._interactionFilter.freeze(selection);
+    this._ensureStyleHelper().reapplyFrozen(this._tiles);
   }
 
   /** 取消全部冻结 */
-  unfreezeAll(): void {
-    this._interactionFilter.unfreezeAll();
+  unfreeze(): void {
+    this._interactionFilter.unfreeze();
+    if (!this._tiles) return;
+    this._ensureStyleHelper().reapplyFrozen(this._tiles);
   }
 
   /**
-   * 隔离：仅这些构件可交互，其余构件交互被屏蔽。参数为 OID 数组，
-   * 或与 `setStyle` 的 `show` 同语义的属性条件字符串。
-   */
-  isolate(selection: number[] | string): void {
-    const oids = this._resolveSelectionOids(selection);
-    if (oids.length > 0) this._interactionFilter.isolate(oids);
-  }
-
-  /**
-   * 从隔离集合中移除指定构件。参数为 OID 数组，或与 `setStyle` 的 `show`
-   * 同语义的属性条件字符串。
-   */
-  unisolate(selection: number[] | string): void {
-    const oids = this._resolveSelectionOids(selection);
-    if (oids.length > 0) this._interactionFilter.unisolate(oids);
-  }
-
-  /** 取消全部隔离（恢复为未隔离状态） */
-  unisolateAll(): void {
-    this._interactionFilter.unisolateAll();
-  }
-
-  /**
-   * 查询命中点的构件信息；命中冻结构件或不在我隔离集合内的构件时返回无效。
+   * 查询命中点的构件信息；命中冻结构件时返回无效（冻结集为 fid 域，
+   * 拾取返回的 oid 对应 channel 0）。
    */
   queryFeatureFromIntersection(hit: Intersection): FeatureInfo {
     const result = queryFeatureFromIntersection(hit);
     if (result.isValid && result.oid !== undefined) {
-      const reason = this._interactionFilter.blockedReason(result.oid);
-      if (reason === "frozen") {
+      if (this._interactionFilter.isFrozen(0, result.oid)) {
         return { isValid: false, error: "Component is frozen" };
-      }
-      if (reason === "isolated") {
-        return { isValid: false, error: "Component is not in isolated set" };
       }
     }
     return result;

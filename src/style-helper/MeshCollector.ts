@@ -1,18 +1,25 @@
 import { Mesh, Object3D } from "three";
-import { resolveStyleConditionFeatureIdAttribute } from "../appearance";
+import {
+  resolveShowFeatureIdAttribute,
+  resolveStyleConditionFeatureIdAttribute,
+} from "../appearance";
 import { getPartIdMapForFeatureAttribute } from "../mesh-helper";
-import type { StyleCondition } from "../appearance";
+import type { StyleCondition, StyleShowInput } from "../appearance";
 import type { MaterialBuilder } from "../types";
+import type { PartInteractionFilter } from "../plugin/part-interaction-filter";
 
 import {
   attachSplitMeshToTileMeshParent,
   buildMatchCacheKey,
+  buildShowHiddenCacheKey,
   buildSplitCacheKey,
   buildSplitMeshForTileMesh,
   collectTileMeshesFromScene,
   getCachedSplitMeshFromTileMesh,
   releaseConditionCache,
+  removeMatchedFeatureIdsCache,
   resolveMatchedPartIdsOnTileMesh,
+  resolveShowHiddenPartIdsOnTileMesh,
   setCachedSplitMeshOnTileMesh,
 } from "./utils";
 
@@ -20,45 +27,63 @@ export class MeshCollector {
   readonly featureIdAttribute: number;
   private _condition: StyleCondition;
   private readonly _materialBuilder?: MaterialBuilder;
+  private readonly _interactionFilter?: PartInteractionFilter;
   private readonly _matchCacheKey: string;
   private readonly _splitCacheKey: string;
+  private _show: StyleShowInput | null = null;
+  private _showChannel?: number;
+  private _showHiddenKey: string | null = null;
 
   constructor(params: {
     condition: StyleCondition;
     materialBuilder?: MaterialBuilder;
+    interactionFilter?: PartInteractionFilter;
+    show?: StyleShowInput;
   }) {
     this._condition = params.condition;
     this._materialBuilder = params.materialBuilder;
+    this._interactionFilter = params.interactionFilter;
     this._matchCacheKey = buildMatchCacheKey(params.condition[0]);
     this._splitCacheKey = buildSplitCacheKey(params.condition);
     this.featureIdAttribute = resolveStyleConditionFeatureIdAttribute(
       params.condition[0],
     );
+    this.setShow(params.show);
+  }
+
+  /** show 变更时由 StyleHelper 调用（collector 按条件 key 复用，show 状态需同步更新） */
+  setShow(show?: StyleShowInput): void {
+    this._show = show ?? null;
+    this._showChannel =
+      this._show == null
+        ? undefined
+        : resolveShowFeatureIdAttribute(this._show);
+    this._showHiddenKey =
+      this._show == null ? null : buildShowHiddenCacheKey(this._show);
   }
 
   applyStyle(scene: Object3D): void {
     const tileMeshes = collectTileMeshesFromScene(scene);
-    const featureIdAttribute = this.featureIdAttribute;
     const splitKey = this._splitCacheKey;
 
     for (const tileMesh of tileMeshes) {
-      if (getCachedSplitMeshFromTileMesh(tileMesh, splitKey)) continue;
-
       const matchedPartIds = resolveMatchedPartIdsOnTileMesh(
         tileMesh,
         this._condition,
         this._matchCacheKey,
-        featureIdAttribute,
+        this.featureIdAttribute,
       );
-      if (matchedPartIds.size === 0) {
-        releaseConditionCache(tileMesh, this._matchCacheKey, splitKey);
-        continue;
-      }
+      const effective = this._filterHiddenOnTileMesh(tileMesh, matchedPartIds);
+
+      // 本方法仅在 scene 代数过期（setStyle/freeze/show 变化或新瓦片）时执行：
+      // 直接拆旧 split 重建，不做逐 mesh 精细比对（均为低频操作，简单优先）
+      releaseConditionCache(tileMesh, this._matchCacheKey, splitKey);
+      if (effective.size === 0) continue;
 
       const splitMesh = buildSplitMeshForTileMesh(
         tileMesh,
-        matchedPartIds,
-        featureIdAttribute,
+        effective,
+        this.featureIdAttribute,
         this._condition[1],
         this._materialBuilder,
       );
@@ -67,6 +92,55 @@ export class MeshCollector {
         setCachedSplitMeshOnTileMesh(tileMesh, splitKey, splitMesh);
       }
     }
+  }
+
+  /**
+   * 生效命中集 = 条件命中 − 冻结 − show 隐藏（优先级：冻结/show 优先于样式）。
+   * 冻结按条件自身通道参与减法（冻结集按通道存 oid/pid，与 partId 同域直接比对；
+   * idMap 的值是 `_FEATURE_ID_N` 原始值域，不能拿来比对冻结集）；
+   * show 仅在与条件同通道时参与减法（不同通道无法保证 partId 语义一致，降级为不参与）。
+   */
+  private _filterHiddenOnTileMesh(
+    tileMesh: Mesh,
+    matched: Set<number>,
+  ): Set<number> {
+    const filter = this._interactionFilter;
+    const canFilterShow =
+      this._show != null && this._showChannel === this.featureIdAttribute;
+    if ((!filter && !canFilterShow) || matched.size === 0) {
+      return matched;
+    }
+
+    // 惰性拷贝：仅当确实需要剔除时才复制集合
+    let effective: Set<number> | null = null;
+    const drop = (partId: number): void => {
+      if (!effective) effective = new Set(matched);
+      effective.delete(partId);
+    };
+
+    if (filter?.hasFrozen()) {
+      for (const partId of matched) {
+        if (filter.isFrozen(this.featureIdAttribute, partId)) {
+          drop(partId);
+        }
+      }
+    }
+
+    if (this._show != null && this._showChannel === this.featureIdAttribute) {
+      const hidden = resolveShowHiddenPartIdsOnTileMesh(
+        tileMesh,
+        this._show,
+        this._showHiddenKey!,
+        this._showChannel!,
+      );
+      if (hidden.size > 0) {
+        for (const partId of matched) {
+          if (hidden.has(partId)) drop(partId);
+        }
+      }
+    }
+
+    return effective ?? matched;
   }
 
   getSplitMesh(tileMesh: Mesh): Mesh | null {
@@ -97,6 +171,9 @@ export class MeshCollector {
     const splitKey = this._splitCacheKey;
     for (const tileMesh of collectTileMeshesFromScene(scene)) {
       releaseConditionCache(tileMesh, matchKey, splitKey);
+      if (this._showHiddenKey) {
+        removeMatchedFeatureIdsCache(tileMesh, this._showHiddenKey);
+      }
     }
   }
 }
