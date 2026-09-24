@@ -52,19 +52,13 @@ function getOrCreateEdge(
   return edge;
 }
 
-/** 边界边（仅 1 个三角共享）或两面法线夹角超阈值 → 特征边 */
+/** 两面共享且法线夹角超阈值 → 特征边；单面边（瓦片切口/开放边界）不算 */
 function isFeatureEdge(edge: EdgeAccum, thresholdDot: number): boolean {
   // n2x/n2y/n2z 总是同时赋值，此处仅满足 TS 收窄
-  if (
-    edge.triCount === 1 ||
-    edge.n2x === undefined ||
-    edge.n2y === undefined ||
-    edge.n2z === undefined
-  ) {
-    return true;
+  if (edge.n2x === undefined || edge.n2y === undefined || edge.n2z === undefined) {
+    return false;
   }
-  const dot = edge.nx * edge.n2x + edge.ny * edge.n2y + edge.nz * edge.n2z;
-  return dot < thresholdDot;
+  return edge.nx * edge.n2x + edge.ny * edge.n2y + edge.nz * edge.n2z < thresholdDot;
 }
 
 function computeBoundingDiagonal(positions: Float32Array): number {
@@ -148,7 +142,8 @@ function weldVerticesByPosition(
 }
 
 /**
- * 在 Worker 内预计算特征边（等价于 Three.js EdgesGeometry 的阈值逻辑，无 Three 依赖）。
+ * 在 Worker 内预计算特征边（阈值逻辑等价于 Three.js EdgesGeometry，但排除单面边：
+ * 多瓦片切分时切口边会因缺相邻面被误判为边界边，故要求两边都有面才参与夹角判定）。
  *
  * 优化：嵌套 Map 替代字符串键、消除动态数组、内联访问器、两遍扫描法输出。
  */
