@@ -443,6 +443,7 @@ export function buildSplitMeshForTileMesh(
     appearance,
     materialBuilder,
   );
+  if (!splitMesh) return null;
   addMeshUserData(tileMesh, splitMesh!, matchedPartIds, channel, {
     splitGeometryManagedByCache: true,
   });
