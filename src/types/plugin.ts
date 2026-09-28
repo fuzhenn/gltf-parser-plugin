@@ -1,5 +1,5 @@
 import type { WebGLRenderer } from "three";
-import type { StyleConfig } from "../appearance";
+import type { StyleConfig } from "../style";
 import type { MaterialBuilder } from "./gltf";
 
 /**
