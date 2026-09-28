@@ -12,13 +12,6 @@ let currentWorkerIndex = 0;
 const schemaCache = new Map<string, Promise<any>>();
 
 /**
- * Clear the global schema cache.
- */
-export function clearSchemaCache(): void {
-  schemaCache.clear();
-}
-
-/**
  * Attach a schema request handler to a Worker.
  * When the worker sends a { type: "fetchSchema" } message,
  * the main thread fetches (with deduplication via cache) and replies with the result.

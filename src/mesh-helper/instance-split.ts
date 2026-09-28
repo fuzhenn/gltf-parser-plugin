@@ -1,11 +1,4 @@
-import {
-  Box3,
-  InstancedBufferAttribute,
-  InstancedMesh,
-  Matrix4,
-  Material,
-  Mesh,
-} from "three";
+import { InstancedBufferAttribute, InstancedMesh, Matrix4 } from "three";
 import type { InstanceFeatures } from "../mesh/types";
 import {
   featureIdAttributeToChannel,
@@ -26,7 +19,6 @@ const CHANNEL_META = {
 } as const;
 
 const tmpInstanceMatrix = new Matrix4();
-const tmpInstanceBox = new Box3();
 
 /** split 不得继承源瓦片的运行时状态键（过滤快照只属于源） */
 const EXCLUDED_SPLIT_USER_DATA_KEYS = new Set<string>([
@@ -108,34 +100,6 @@ function getMatchingInstanceIndices(
     if (targetFids.has(fid)) indices.push(i);
   }
   return indices;
-}
-
-export function measureInstanceSplitForTile(
-  source: InstancedMesh,
-  idSet: ReadonlySet<number>,
-  featureIdAttribute: number,
-): { instanceCount: number; bbox: Box3 } | null {
-  const indices = getMatchingInstanceIndices(source, idSet, featureIdAttribute);
-  if (indices.length === 0) return null;
-
-  const geometry = source.geometry;
-  if (!geometry.boundingBox) geometry.computeBoundingBox();
-  const localBox = geometry.boundingBox;
-  if (!localBox) return null;
-
-  const { matrices } = resolveOriginalInstanceSource(source);
-  const bbox = new Box3();
-  source.updateWorldMatrix(true, false);
-  for (const index of indices) {
-    tmpInstanceMatrix.fromArray(matrices, index * 16);
-    const instanceBox = tmpInstanceBox
-      .copy(localBox)
-      .applyMatrix4(tmpInstanceMatrix);
-    instanceBox.applyMatrix4(source.matrixWorld);
-    bbox.union(instanceBox);
-  }
-
-  return { instanceCount: indices.length, bbox };
 }
 
 function createSplitInstancedMesh(
@@ -235,70 +199,4 @@ export function buildSplitInstancedMeshForTileMesh(
   if (indices.length === 0) return null;
 
   return createSplitInstancedMesh(source, indices, idSet, featureIdAttribute);
-}
-
-/** 挂在 split mesh.userData：样式外观系统构建的派生 mesh */
-const STYLE_APPEARANCE_BUILT_KEY = "_gltfParserStyleAppearanceBuilt";
-
-/** 释放 instanced split 的独占资源（几何与源共享，仅释放 clone 材质） */
-export function disposeSplitInstancedMeshResources(mesh: Mesh): void {
-  const built = mesh.userData?.[STYLE_APPEARANCE_BUILT_KEY] as
-    | Mesh
-    | undefined;
-  if (built) {
-    built.removeFromParent();
-    delete mesh.userData[STYLE_APPEARANCE_BUILT_KEY];
-  }
-  mesh.removeFromParent();
-
-  const tileMesh = mesh.userData?._originalMesh as InstancedMesh | undefined;
-  const tileMats = tileMesh?.material;
-  const tileMat = Array.isArray(tileMats) ? tileMats[0] : tileMats;
-
-  const mats = mesh.material;
-  const list = Array.isArray(mats) ? mats : [mats];
-  for (let i = 0; i < list.length; i++) {
-    const mat = list[i];
-    if (!mat) continue;
-    disposeSplitMaterialVsTileInstance(mat, tileMat as Material | undefined);
-  }
-
-  (mesh as unknown as { geometry: null }).geometry = null;
-}
-
-const SPLIT_TEXTURE_KEYS = [
-  "map",
-  "lightMap",
-  "bumpMap",
-  "normalMap",
-  "specularMap",
-  "envMap",
-  "alphaMap",
-  "aoMap",
-  "displacementMap",
-  "emissiveMap",
-  "metalnessMap",
-  "roughnessMap",
-] as const;
-
-function disposeSplitMaterialVsTileInstance(
-  mat: Material,
-  tileMat: Material | undefined,
-): void {
-  const matProps = mat as unknown as Record<string, unknown>;
-  const tileProps = (tileMat ?? null) as unknown as
-    | Record<string, unknown>
-    | null;
-  for (const key of SPLIT_TEXTURE_KEYS) {
-    const texture = matProps[key];
-    if (texture == null) continue;
-    const tileTexture = tileProps?.[key];
-    if (tileTexture != null && texture === tileTexture) {
-      // 与源瓦片共享的纹理不能 dispose，仅解除引用
-      matProps[key] = null;
-    } else {
-      (texture as { dispose(): void }).dispose();
-    }
-  }
-  mat.dispose();
 }

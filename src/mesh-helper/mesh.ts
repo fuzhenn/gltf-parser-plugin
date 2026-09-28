@@ -3,11 +3,9 @@ import {
   BufferAttribute,
   BufferGeometry,
   InstancedMesh,
-  Material,
   Mesh,
   Object3D,
   Sphere,
-  Texture,
   Vector3,
 } from "three";
 
@@ -19,8 +17,6 @@ import type {
   IndexRange,
 } from "../types";
 import type { InstanceFeatures } from "../mesh/types";
-import { measureInstanceSplitForTile } from "./instance-split";
-import { disposeSplitInstancedMeshResources } from "./instance-split";
 
 /** 与源 index 同类型地分配新 index 数组（未指定类型时默认 Uint32Array） */
 function createIndexArray(
@@ -391,166 +387,6 @@ export function buildMergedSplitGeometryForTileMeshByPids(
   );
 }
 
-function splitBBoxVolume(box: Box3): number {
-  const sx = Math.max(0, box.max.x - box.min.x);
-  const sy = Math.max(0, box.max.y - box.min.y);
-  const sz = Math.max(0, box.max.z - box.min.z);
-  return sx * sy * sz;
-}
-
-function splitBBoxIoU(a: Box3, b: Box3): number {
-  const intersection = new Box3().copy(a).intersect(b);
-  if (intersection.isEmpty()) return 0;
-  const iVol = splitBBoxVolume(intersection);
-  const union = splitBBoxVolume(a) + splitBBoxVolume(b) - iVol;
-  return union > 0 ? iVol / union : 0;
-}
-
-/** 两瓦片 split 几何在世界空间是否属于同一构件的 LOD 重叠（而非空间互补分片） */
-function tilesShareLodOverlap(a: Box3, b: Box3): boolean {
-  if (splitBBoxContains(a, b) || splitBBoxContains(b, a)) return true;
-  return splitBBoxIoU(a, b) >= 0.45;
-}
-
-function splitBBoxContains(outer: Box3, inner: Box3, eps = 1e-4): boolean {
-  return (
-    outer.min.x <= inner.min.x + eps &&
-    outer.min.y <= inner.min.y + eps &&
-    outer.min.z <= inner.min.z + eps &&
-    outer.max.x >= inner.max.x - eps &&
-    outer.max.y >= inner.max.y - eps &&
-    outer.max.z >= inner.max.z - eps
-  );
-}
-
-function worldSplitBBox(tileMesh: Mesh, localBBox: Box3): Box3 {
-  tileMesh.updateWorldMatrix(true, false);
-  return localBBox.clone().applyMatrix4(tileMesh.matrixWorld);
-}
-
-function measureSplitGeometryForTile(
-  tileMesh: Mesh,
-  idSet: ReadonlySet<number>,
-  channel: PartIdChannel,
-): { triCount: number; bbox: Box3 } | null {
-  const context = resolveMergedSplitContext(tileMesh, idSet, channel);
-  if (!context) return null;
-
-  const triCount = context.totalIndexLength / 3;
-  if (triCount === 0) return null;
-
-  const local = computeLocalBBoxForIndexRanges(
-    context.geometry,
-    context.indexCache.buffer,
-    context.entries,
-  );
-  if (!local) return null;
-
-  return { triCount, bbox: worldSplitBBox(tileMesh, local) };
-}
-
-/**
- * 同一 OID 在父子 LOD 瓦片上常会同时存在。
- * - IoU 高 / bbox 包含 → 视为 LOD 重叠，只保留三角更多的瓦片（避免重复高亮与错位叠加）。
- * - IoU 低 → 视为互补分片（如各带一半轮胎），全部保留。
- */
-function selectDominantTileMeshesForIdSet(
-  candidateTiles: Iterable<Mesh>,
-  idSet: ReadonlySet<number>,
-  channel: PartIdChannel,
-): Mesh[] {
-  type TileEntry = {
-    mesh: Mesh;
-    triCount: number;
-    ids: Set<number>;
-    bbox: Box3;
-  };
-  const entries: TileEntry[] = [];
-
-  for (const tileMesh of candidateTiles) {
-    const idMap = getPartIdMap(tileMesh, channel);
-    if (!idMap) continue;
-
-    const idsOnMesh = new Set<number>();
-    for (const partId of idSet) {
-      if (idMap[partId] !== undefined) idsOnMesh.add(partId);
-    }
-    if (idsOnMesh.size === 0) continue;
-
-    let measured: { size: number; bbox: Box3 } | null = null;
-    if (tileMesh instanceof InstancedMesh && isTileInstancedMesh(tileMesh)) {
-      const featureIdAttribute = channel === "pid" ? 1 : 0;
-      const instanced = measureInstanceSplitForTile(
-        tileMesh,
-        idSet,
-        featureIdAttribute,
-      );
-      if (instanced) {
-        measured = {
-          size: instanced.instanceCount,
-          bbox: instanced.bbox,
-        };
-      }
-    } else {
-      const splitMeasured = measureSplitGeometryForTile(
-        tileMesh,
-        idSet,
-        channel,
-      );
-      if (splitMeasured) {
-        measured = {
-          size: splitMeasured.triCount,
-          bbox: splitMeasured.bbox,
-        };
-      }
-    }
-    if (!measured) continue;
-
-    entries.push({
-      mesh: tileMesh,
-      triCount: measured.size,
-      ids: idsOnMesh,
-      bbox: measured.bbox,
-    });
-  }
-
-  entries.sort((a, b) => b.triCount - a.triCount);
-
-  const selected: TileEntry[] = [];
-  for (const entry of entries) {
-    let dominated = false;
-    for (let i = selected.length - 1; i >= 0; i--) {
-      const kept = selected[i]!;
-      const sharesId = [...entry.ids].some((id) => kept.ids.has(id));
-      if (!sharesId) continue;
-      if (!tilesShareLodOverlap(kept.bbox, entry.bbox)) continue;
-
-      if (entry.triCount > kept.triCount) {
-        selected.splice(i, 1);
-      } else {
-        dominated = true;
-      }
-    }
-    if (!dominated) selected.push(entry);
-  }
-
-  return selected.map((e) => e.mesh);
-}
-
-export function selectDominantTileMeshesForOidSet(
-  candidateTiles: Iterable<Mesh>,
-  oidSet: ReadonlySet<number>,
-): Mesh[] {
-  return selectDominantTileMeshesForIdSet(candidateTiles, oidSet, "oid");
-}
-
-export function selectDominantTileMeshesForPidSet(
-  candidateTiles: Iterable<Mesh>,
-  pidSet: ReadonlySet<number>,
-): Mesh[] {
-  return selectDominantTileMeshesForIdSet(candidateTiles, pidSet, "pid");
-}
-
 export function addMeshUserData(
   tileMesh: Mesh,
   splitMesh: Mesh,
@@ -613,280 +449,6 @@ export function addMeshUserData(
   splitMesh.userData = userData;
 
   splitMesh.name = `${cfg.namePrefix}_${idsOnMesh.length}_${primaryId}`;
-}
-
-/**
- * 由已构建的 split 几何创建 Mesh（独立材质）；可选标记由全局几何缓存托管，dispose 时不释放几何缓冲。
- */
-function createMergedSplitMeshFromGeometryByChannel(
-  originalMesh: Mesh,
-  newGeometry: BufferGeometry,
-  idSet: ReadonlySet<number>,
-  channel: PartIdChannel,
-  options?: { splitGeometryManagedByCache?: boolean },
-): Mesh | null {
-  if (idSet.size === 0) return null;
-
-  const cfg = PART_ID_CHANNEL_CONFIG[channel];
-  const idMap = getPartIdMap(originalMesh, channel);
-  if (!idMap) return null;
-
-  const resolved = resolveFeatureChannelOnMesh(originalMesh, channel);
-  if (!resolved) return null;
-
-  const idsOnMesh: number[] = [];
-  for (const partId of idSet) {
-    if (idMap[partId] !== undefined) {
-      idsOnMesh.push(partId);
-    }
-  }
-  idsOnMesh.sort((a, b) => a - b);
-  if (idsOnMesh.length === 0) return null;
-  const primaryId = idsOnMesh[0]!;
-
-  const newMaterial = (originalMesh.material as Material).clone();
-  const newMesh = new Mesh(newGeometry, newMaterial);
-  originalMesh.updateWorldMatrix(true, false);
-  newMesh.position.copy(originalMesh.position);
-  newMesh.rotation.copy(originalMesh.rotation);
-  newMesh.scale.copy(originalMesh.scale);
-
-  const { structuralMetadata } = originalMesh.userData;
-  const propertyTableIndex = resolved.featureIdConfig?.propertyTable;
-
-  let propertyData: unknown = null;
-  if (
-    structuralMetadata &&
-    propertyTableIndex !== undefined &&
-    idMap[primaryId] !== undefined
-  ) {
-    try {
-      propertyData = structuralMetadata.getPropertyTableData(
-        propertyTableIndex,
-        idMap[primaryId]!,
-      );
-    } catch {
-      // ignore
-    }
-  }
-
-  const userData: Record<string, unknown> = {
-    ...originalMesh.userData,
-    featureId: idMap[primaryId],
-    [cfg.idKey]: primaryId,
-    [cfg.collectorKey]: idsOnMesh,
-    _originalMesh: originalMesh,
-    propertyData,
-    _isSplit: true,
-    isMergedSplit: true,
-    partIdChannel: channel,
-  };
-  if (options?.splitGeometryManagedByCache) {
-    userData.splitGeometryManagedByCache = true;
-  }
-  newMesh.userData = userData;
-
-  newMesh.name = `${cfg.namePrefix}_${idsOnMesh.length}_${primaryId}`;
-  return newMesh;
-}
-
-export function createMergedSplitMeshFromGeometry(
-  originalMesh: Mesh,
-  newGeometry: BufferGeometry,
-  oidSet: ReadonlySet<number>,
-  options?: { splitGeometryManagedByCache?: boolean },
-): Mesh | null {
-  return createMergedSplitMeshFromGeometryByChannel(
-    originalMesh,
-    newGeometry,
-    oidSet,
-    "oid",
-    options,
-  );
-}
-
-export function createMergedSplitMeshFromGeometryByPids(
-  originalMesh: Mesh,
-  newGeometry: BufferGeometry,
-  pidSet: ReadonlySet<number>,
-  options?: { splitGeometryManagedByCache?: boolean },
-): Mesh | null {
-  return createMergedSplitMeshFromGeometryByChannel(
-    originalMesh,
-    newGeometry,
-    pidSet,
-    "pid",
-    options,
-  );
-}
-
-/**
- * 将同一瓦片 mesh 内、属于给定 OID 集合的所有 feature 合并为 **单个** Mesh（每瓦片最多一个）
- */
-export function splitMeshByOidsMerged(
-  originalMesh: Mesh,
-  oidSet: ReadonlySet<number>,
-): Mesh | null {
-  const geom = buildMergedSplitGeometryForTileMesh(originalMesh, oidSet);
-  if (!geom) return null;
-  return createMergedSplitMeshFromGeometry(originalMesh, geom, oidSet);
-}
-
-/** 将同一瓦片 mesh 内、属于给定 PID 集合的所有 feature 合并为单个 Mesh */
-export function splitMeshByPidsMerged(
-  originalMesh: Mesh,
-  pidSet: ReadonlySet<number>,
-): Mesh | null {
-  const geom = buildMergedSplitGeometryForTileMeshByPids(originalMesh, pidSet);
-  if (!geom) return null;
-  return createMergedSplitMeshFromGeometryByPids(originalMesh, geom, pidSet);
-}
-
-/** 与贴图/环境等相关的材质字段（与瓦片共用同一引用时不能 dispose 材质） */
-const TEXTURE_LIKE_MATERIAL_KEYS: readonly string[] = [
-  "map",
-  "lightMap",
-  "bumpMap",
-  "normalMap",
-  "specularMap",
-  "envMap",
-  "alphaMap",
-  "aoMap",
-  "displacementMap",
-  "emissiveMap",
-  "gradientMap",
-  "metalnessMap",
-  "roughnessMap",
-  "clearcoatNormalMap",
-  "transmissionMap",
-  "thicknessMap",
-  "sheenColorMap",
-  "specularIntensityMap",
-  "anisotropyMap",
-  "iridescenceMap",
-  "iridescenceThicknessMap",
-];
-
-function getMeshMaterials(mesh: Mesh | undefined): Material[] {
-  if (!mesh?.material) return [];
-  const m = mesh.material;
-  return Array.isArray(m) ? m : [m];
-}
-
-/**
- * 释放 clone 材质：与瓦片同引用的贴图只 detach，不 dispose；否则 dispose 贴图。
- * 最后 `material.dispose()` 释放着色器程序等；共享贴图已置空，避免误伤瓦片。
- */
-function disposeSplitMaterialVsTile(
-  mat: Material,
-  tileMat: Material | undefined,
-): void {
-  const ra = mat as unknown as Record<string, unknown>;
-  const rb = (tileMat ?? null) as unknown as Record<string, unknown> | null;
-
-  for (const key of TEXTURE_LIKE_MATERIAL_KEYS) {
-    const va = ra[key];
-    if (va == null) continue;
-    const vb = rb?.[key];
-    const shared = vb != null && va === vb;
-    if (shared) {
-      ra[key] = null;
-    } else {
-      (va as Texture).dispose();
-      ra[key] = null;
-    }
-  }
-  mat.dispose();
-}
-
-/**
- * 释放 tileMesh.userData 上缓存的合并 split BufferGeometry。
- * 合并几何与瓦片共享顶点属性引用；直接 `dispose()` 会从 WebGL 移除共享 BufferAttribute，瓦片会发瘪/缺面。
- * 需先从合并几何上 deleteAttribute 摘掉共享引用，再 dispose（仅清独立 index 与 dispose 事件）。
- */
-export function disposeMergedSplitGeometryCacheEntry(
-  mergedGeom: BufferGeometry,
-  tileMesh: Mesh,
-): void {
-  const tileGeom = tileMesh.geometry;
-  if (!tileGeom) {
-    mergedGeom.dispose();
-    return;
-  }
-  for (const name of Object.keys(mergedGeom.attributes)) {
-    if (mergedGeom.getAttribute(name) === tileGeom.getAttribute(name)) {
-      mergedGeom.deleteAttribute(name);
-    }
-  }
-  if (mergedGeom.index && mergedGeom.index === tileGeom.index) {
-    mergedGeom.setIndex(null);
-  }
-  mergedGeom.dispose();
-}
-
-/**
- * 仅释放不与瓦片 `geometry` 共享的 index / attributes。
- */
-export function disposeSplitGeometry(mesh: Mesh): void {
-  const geom = mesh.geometry;
-  if (!geom) return;
-
-  const tileGeom = mesh.userData?._originalMesh?.geometry as
-    | BufferGeometry
-    | undefined;
-  const idx = geom.index;
-  if (idx && idx !== tileGeom?.index) {
-    idx.dispose();
-    geom.setIndex(null);
-  }
-
-  if (!tileGeom) return;
-  for (const name of Object.keys(geom.attributes)) {
-    const attr = geom.attributes[name];
-    if (!attr || attr === tileGeom.getAttribute(name)) continue;
-    geom.deleteAttribute(name);
-    if (attr instanceof BufferAttribute) attr.dispose();
-  }
-}
-
-/**
- * 释放 {@link splitMeshByOidsMerged} 生成 mesh 的独占资源。
- * - 材质：clone 与瓦片逐贴图比对引用；非共享贴图 dispose，共享贴图先 detach 再 `material.dispose()`，避免误伤瓦片。
- * - 几何：见 {@link disposeSplitGeometry}。
- * - **不要**对 `THREE.Mesh` 调用 `dispose()`：核心库中 `Mesh` 无此方法。
- */
-export function disposeMergedSplitMeshResources(mesh: Mesh): void {
-  const builtKey = "_gltfParserStyleAppearanceBuilt";
-  const built = mesh.userData?.[builtKey] as Object3D | undefined;
-  if (built) {
-    built.removeFromParent();
-    delete mesh.userData[builtKey];
-  }
-  mesh.removeFromParent();
-
-  const tileMesh = mesh.userData?._originalMesh as Mesh | undefined;
-  const tileMats = getMeshMaterials(tileMesh);
-
-  const mats = mesh.material;
-  const list = Array.isArray(mats) ? mats : [mats];
-
-  for (let i = 0; i < list.length; i++) {
-    const mat = list[i];
-    if (!mat) continue;
-    const tileMat = tileMats[i] ?? tileMats[0];
-    disposeSplitMaterialVsTile(mat, tileMat);
-  }
-
-  disposeSplitGeometry(mesh);
-}
-
-/** 释放样式/高亮产生的 split mesh 或 instanced split */
-export function disposeStyledMeshResources(mesh: Mesh): void {
-  if (mesh.userData?.isInstancedSplit) {
-    disposeSplitInstancedMeshResources(mesh);
-    return;
-  }
-  disposeMergedSplitMeshResources(mesh);
 }
 
 /** 瓦片内原始普通 mesh（非 InstancedMesh、非 split） */
@@ -1001,19 +563,6 @@ function collectPartIdsFromSourceUserData(
 }
 
 /**
- * 遍历当前已加载的瓦片 feature mesh（tiles.group + 各 tile.engineData.scene，按 uuid 去重）。
- * 新瓦片在挂到 group 前只存在于 tile scene，样式/高亮/显隐须走此入口。
- */
-export function forEachLoadedFeatureMesh(
-  tiles: TilesRenderer,
-  fn: (mesh: Mesh) => void,
-): void {
-  forEachLoadedFeatureSource(tiles, (source) => {
-    if (isTileMesh(source)) fn(source);
-  });
-}
-
-/**
  * 内部数据钩子：在原始属性表数据基础上派生/注入额外字段（如层级 `_path`）。
  * 返回新对象；约定不修改入参。
  */
@@ -1021,54 +570,6 @@ export type InternalData = (
   oid: number,
   data: Record<string, unknown>,
 ) => Record<string, unknown>;
-
-/**
- * 从瓦片中获取所有 OID
- */
-export function getAllOidsFromTiles(tiles: TilesRenderer): number[] {
-  const oidSet = new Set<number>();
-
-  forEachLoadedFeatureSource(tiles, (source) => {
-    for (const oid of collectPartIdsFromSourceUserData(source.userData, 0)) {
-      oidSet.add(oid);
-    }
-  });
-
-  return Array.from(oidSet);
-}
-
-/**
- * 从瓦片中获取所有 PID（featureIds[1]）
- */
-export function getAllPidsFromTiles(tiles: TilesRenderer): number[] {
-  const pidSet = new Set<number>();
-
-  forEachLoadedFeatureSource(tiles, (source) => {
-    for (const pid of collectPartIdsFromSourceUserData(source.userData, 1)) {
-      pidSet.add(pid);
-    }
-  });
-
-  return Array.from(pidSet);
-}
-
-/**
- * 根据 OID 获取属性数据（从瓦片 structuralMetadata）
- */
-export function getPropertyDataByOid(
-  tiles: TilesRenderer,
-  oid: number,
-  internalData?: InternalData,
-): Record<string, unknown> | null {
-  let result: Record<string, unknown> | null = null;
-
-  forEachLoadedFeatureSource(tiles, (source) => {
-    if (result) return;
-    result = getPropertyDataFromUserData(source.userData, oid, 0, internalData);
-  });
-
-  return result;
-}
 
 /**
  * 单次遍历场景构建 OID → 属性表数据。
@@ -1101,53 +602,6 @@ export function getPropertyDataMapFromTiles(
 }
 
 /**
- * 根据OID获取包含该OID的瓦片mesh
- */
-export function getTileMeshesByOid(tiles: TilesRenderer, oid: number): Mesh[] {
-  const tileMeshes: Mesh[] = [];
-
-  forEachLoadedFeatureSource(tiles, (source) => {
-    if (checkMeshContainsOid(source, oid)) {
-      tileMeshes.push(source);
-    }
-  });
-
-  return tileMeshes;
-}
-
-/**
- * 根据 PID 获取包含该 PID 的瓦片 mesh
- */
-export function getTileMeshesByPid(tiles: TilesRenderer, pid: number): Mesh[] {
-  const tileMeshes: Mesh[] = [];
-
-  forEachLoadedFeatureSource(tiles, (source) => {
-    if (checkMeshContainsPid(source, pid)) {
-      tileMeshes.push(source);
-    }
-  });
-
-  return tileMeshes;
-}
-
-/**
- * 根据 PID 获取属性数据（从瓦片 structuralMetadata，featureIds[1]）
- */
-export function getPropertyDataByPid(
-  tiles: TilesRenderer,
-  pid: number,
-): Record<string, unknown> | null {
-  let result: Record<string, unknown> | null = null;
-
-  forEachLoadedFeatureSource(tiles, (source) => {
-    if (result) return;
-    result = getPropertyDataFromUserData(source.userData, pid, 1);
-  });
-
-  return result;
-}
-
-/**
  * 单次遍历场景构建 PID → 属性表数据
  */
 export function getPropertyDataMapFromTilesByPid(
@@ -1168,24 +622,6 @@ export function getPropertyDataMapFromTilesByPid(
   });
 
   return map;
-}
-
-function checkMeshContainsPartId(
-  mesh: Mesh,
-  partId: number,
-  channel: PartIdChannel,
-): boolean {
-  const idMap = getPartIdMap(mesh, channel);
-  if (!idMap) return false;
-  return idMap[partId] !== undefined;
-}
-
-function checkMeshContainsOid(mesh: Mesh, oid: number): boolean {
-  return checkMeshContainsPartId(mesh, oid, "oid");
-}
-
-function checkMeshContainsPid(mesh: Mesh, pid: number): boolean {
-  return checkMeshContainsPartId(mesh, pid, "pid");
 }
 
 /** `_FEATURE_ID_N` 索引 → 内部 PartIdChannel（当前仅 0/1 有完整管线） */
@@ -1287,16 +723,6 @@ function getPropertyDataOnMeshByPartId(
   }
 }
 
-export function getAllFeatureIdsFromTiles(
-  tiles: TilesRenderer,
-  featureIdAttribute: number,
-): number[] {
-  const channel = featureIdAttributeToChannel(featureIdAttribute);
-  return channel === "pid"
-    ? getAllPidsFromTiles(tiles)
-    : getAllOidsFromTiles(tiles);
-}
-
 export function getPropertyDataMapFromTilesByFeatureAttribute(
   tiles: TilesRenderer,
   featureIdAttribute: number,
@@ -1305,27 +731,4 @@ export function getPropertyDataMapFromTilesByFeatureAttribute(
   const channel = featureIdAttributeToChannel(featureIdAttribute);
   if (channel === "pid") return getPropertyDataMapFromTilesByPid(tiles);
   return getPropertyDataMapFromTiles(tiles, internalData);
-}
-
-export function getPropertyDataByFeatureAttribute(
-  tiles: TilesRenderer,
-  featureId: number,
-  featureIdAttribute: number,
-  internalData?: InternalData,
-): Record<string, unknown> | null {
-  const channel = featureIdAttributeToChannel(featureIdAttribute);
-  return channel === "pid"
-    ? getPropertyDataByPid(tiles, featureId)
-    : getPropertyDataByOid(tiles, featureId, internalData);
-}
-
-export function getTileMeshesByFeatureAttribute(
-  tiles: TilesRenderer,
-  featureId: number,
-  featureIdAttribute: number,
-): Mesh[] {
-  const channel = featureIdAttributeToChannel(featureIdAttribute);
-  return channel === "pid"
-    ? getTileMeshesByPid(tiles, featureId)
-    : getTileMeshesByOid(tiles, featureId);
 }

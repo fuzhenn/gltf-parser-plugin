@@ -114,27 +114,14 @@ export function applyStyleAppearanceToSplitMesh(
       applyVec3(pivot, appearance.origin);
     }
 
-    let sx = 1;
-    let sy = 1;
-    let sz = 1;
-    if (appearance.scale !== undefined) {
-      if (Array.isArray(appearance.scale)) {
-        sx = appearance.scale[0] ?? 1;
-        sy = appearance.scale[1] ?? 1;
-        sz = appearance.scale[2] ?? 1;
-      } else {
-        const sc = appearance.scale as Vector3;
-        sx = sc.x;
-        sy = sc.y;
-        sz = sc.z;
-      }
-    }
+    const s = appearance.scale;
+    const [sx, sy, sz] = s instanceof Vector3
+      ? [s.x, s.y, s.z]
+      : [s?.[0] ?? 1, s?.[1] ?? 1, s?.[2] ?? 1];
 
     const euler = new Euler();
     if (appearance.rotation !== undefined) {
       applyEuler(euler, appearance.rotation);
-    } else {
-      euler.set(0, 0, 0);
     }
 
     const styleM = buildPivotStyleMatrix(pivot, sx, sy, sz, euler);
@@ -155,26 +142,24 @@ export function buildSplitCacheKey(condition: StyleCondition): string {
   return `${buildMatchCacheKey(input)}|${buildAppearanceCacheKey(appearance)}`;
 }
 
-export function getSplitMeshesCache(tileMesh: Mesh): SplitMeshCache {
-  const userData = tileMesh.userData;
-  let map = userData[SPLIT_MESHES_CACHE_KEY];
+/** 懒初始化地取挂载在 mesh.userData 上的缓存 Map */
+function getCacheMap<K, V>(mesh: Mesh, mapKey: string): Map<K, V> {
+  let map = mesh.userData[mapKey] as Map<K, V> | undefined;
   if (!map) {
     map = new Map();
-    userData[SPLIT_MESHES_CACHE_KEY] = map;
+    mesh.userData[mapKey] = map;
   }
   return map;
+}
+
+export function getSplitMeshesCache(tileMesh: Mesh): SplitMeshCache {
+  return getCacheMap(tileMesh, SPLIT_MESHES_CACHE_KEY);
 }
 
 export function getMatchedFeatureIdsCache(
   tileMesh: Mesh,
 ): MatchedFeatureIdsCache {
-  const userData = tileMesh.userData;
-  let map = userData[MATCHED_FEATURE_IDS_CACHE_KEY];
-  if (!map) {
-    map = new Map();
-    userData[MATCHED_FEATURE_IDS_CACHE_KEY] = map;
-  }
-  return map;
+  return getCacheMap(tileMesh, MATCHED_FEATURE_IDS_CACHE_KEY);
 }
 
 export function getCachedSplitMeshFromTileMesh(
@@ -196,9 +181,7 @@ export function getCachedMatchedFeatureIds(
   tileMesh: Mesh,
   cacheKey: string,
 ): Set<number> | null {
-  const cache = getMatchedFeatureIdsCache(tileMesh);
-  if (!cache.has(cacheKey)) return null;
-  return cache.get(cacheKey)!;
+  return getMatchedFeatureIdsCache(tileMesh).get(cacheKey) ?? null;
 }
 
 export function setCachedMatchedFeatureIds(
@@ -209,27 +192,29 @@ export function setCachedMatchedFeatureIds(
   getMatchedFeatureIdsCache(tileMesh).set(cacheKey, new Set(featureIds));
 }
 
-export function removeSplitMeshCache(tileMesh: Mesh, cacheKey: string): void {
-  const map = tileMesh.userData[SPLIT_MESHES_CACHE_KEY] as
-    | SplitMeshCache
-    | undefined;
+/** 删除缓存条目；Map 清空后顺手从 userData 摘除 */
+function removeCacheEntry(
+  tileMesh: Mesh,
+  cacheKey: string,
+  mapKey: string,
+): void {
+  const map = tileMesh.userData[mapKey] as Map<string, unknown> | undefined;
   if (!map) return;
   map.delete(cacheKey);
   if (map.size === 0) {
-    delete tileMesh.userData[SPLIT_MESHES_CACHE_KEY];
+    delete tileMesh.userData[mapKey];
   }
+}
+
+export function removeSplitMeshCache(tileMesh: Mesh, cacheKey: string): void {
+  removeCacheEntry(tileMesh, cacheKey, SPLIT_MESHES_CACHE_KEY);
 }
 
 export function removeMatchedFeatureIdsCache(
   tileMesh: Mesh,
   cacheKey: string,
 ): void {
-  const map = tileMesh.userData[MATCHED_FEATURE_IDS_CACHE_KEY];
-  if (!map) return;
-  map.delete(cacheKey);
-  if (map.size === 0) {
-    delete tileMesh.userData[MATCHED_FEATURE_IDS_CACHE_KEY];
-  }
+  removeCacheEntry(tileMesh, cacheKey, MATCHED_FEATURE_IDS_CACHE_KEY);
 }
 
 export function attachSplitMeshToTileMeshParent(
@@ -301,13 +286,36 @@ export function releaseFrozenSplitCaches(
   }
 }
 
-function collectPartIdsFromTileMesh(
+/**
+ * 按 cacheKey 缓存地遍历 tile mesh 的 partId，用 keep 谓词收集集合。
+ * 供条件命中（正取）与 show 隐藏（补集取反）共用。
+ */
+function collectPartIdsByPredicate(
   tileMesh: Mesh,
+  cacheKey: string,
   featureIdAttribute: number,
-): number[] {
+  keep: (propertyData: Record<string, unknown> | null) => boolean,
+): Set<number> {
+  const cached = getCachedMatchedFeatureIds(tileMesh, cacheKey);
+  if (cached) return cached;
+
   const idMap = getPartIdMapForFeatureAttribute(tileMesh, featureIdAttribute);
-  if (!idMap) return [];
-  return Object.keys(idMap).map((k) => Number(k));
+  const result = new Set<number>();
+  if (idMap) {
+    for (const key in idMap) {
+      const partId = Number(key);
+      const propertyData = getPropertyDataFromUserData(
+        tileMesh.userData,
+        partId,
+        featureIdAttribute,
+      );
+      if (propertyData != null && keep(propertyData)) {
+        result.add(partId);
+      }
+    }
+  }
+  setCachedMatchedFeatureIds(tileMesh, cacheKey, result);
+  return result;
 }
 
 /**
@@ -320,40 +328,16 @@ export function resolveMatchedPartIdsOnTileMesh(
   cacheKey: string,
   featureIdAttribute: number,
 ): Set<number> {
-  const cached = getCachedMatchedFeatureIds(tileMesh, cacheKey);
-  if (cached) return cached;
-
-  const [condInput] = condition;
-  const idMap = getPartIdMapForFeatureAttribute(tileMesh, featureIdAttribute);
-  const matchedPartIds = new Set<number>();
-  if (!idMap) {
-    setCachedMatchedFeatureIds(tileMesh, cacheKey, matchedPartIds);
-    return matchedPartIds;
-  }
-
   const evaluators = buildStyleConditionEvaluatorMap({
     conditions: [condition],
   });
-
-  for (const partId of collectPartIdsFromTileMesh(
+  return collectPartIdsByPredicate(
     tileMesh,
+    cacheKey,
     featureIdAttribute,
-  )) {
-    const propertyData = getPropertyDataFromUserData(
-      tileMesh.userData,
-      partId,
-      featureIdAttribute,
-    );
-    if (propertyData == null) continue;
-    if (!evaluateStyleCondition(condInput, propertyData, evaluators)) {
-      continue;
-    }
-    if (idMap[partId] === undefined) continue;
-    matchedPartIds.add(partId);
-  }
-
-  setCachedMatchedFeatureIds(tileMesh, cacheKey, matchedPartIds);
-  return matchedPartIds;
+    (propertyData) =>
+      evaluateStyleCondition(condition[0], propertyData, evaluators),
+  );
 }
 
 /** show 隐藏集的缓存 key（与条件命中缓存同池，"f" 前缀外的独立命名空间隔离极性） */
@@ -364,7 +348,7 @@ export function buildShowHiddenCacheKey(show: StyleShowInput): string {
 
 /**
  * 解析该 mesh 上被 show 隐藏的 partId（keep-set 补集语义：不满足 show 表达式即隐藏，
- * 无属性数据的 partId 保持可见），与 index-visibility 的参考实现语义一致。
+ * 无属性数据的 partId 保持可见）。
  * 结果按 showHiddenKey 缓存（key 携带 show 内容，show 变更自然换 key，无失效问题）。
  */
 export function resolveShowHiddenPartIdsOnTileMesh(
@@ -373,37 +357,15 @@ export function resolveShowHiddenPartIdsOnTileMesh(
   showHiddenKey: string,
   featureIdAttribute: number,
 ): Set<number> {
-  const cached = getCachedMatchedFeatureIds(tileMesh, showHiddenKey);
-  if (cached) return cached;
-
-  const idMap = getPartIdMapForFeatureAttribute(tileMesh, featureIdAttribute);
-  const hiddenPartIds = new Set<number>();
-  if (!idMap) {
-    setCachedMatchedFeatureIds(tileMesh, showHiddenKey, hiddenPartIds);
-    return hiddenPartIds;
-  }
-
   const evaluators = buildStyleConditionEvaluatorMap({ show });
   const showExpr = resolveShowContent(show)!;
-
-  for (const partId of collectPartIdsFromTileMesh(
+  return collectPartIdsByPredicate(
     tileMesh,
+    showHiddenKey,
     featureIdAttribute,
-  )) {
-    const propertyData = getPropertyDataFromUserData(
-      tileMesh.userData,
-      partId,
-      featureIdAttribute,
-    );
-    if (propertyData == null) continue;
-    if (idMap[partId] === undefined) continue;
-    if (!evaluateStyleCondition(showExpr, propertyData, evaluators)) {
-      hiddenPartIds.add(partId);
-    }
-  }
-
-  setCachedMatchedFeatureIds(tileMesh, showHiddenKey, hiddenPartIds);
-  return hiddenPartIds;
+    (propertyData) =>
+      !evaluateStyleCondition(showExpr, propertyData, evaluators),
+  );
 }
 
 /**
@@ -425,7 +387,7 @@ export function buildSplitMeshForTileMesh(
       matchedPartIds,
       featureIdAttribute,
     );
-    return instanced ? instanced : null;
+    return instanced;
   }
 
   if (!isTileMesh(tileMesh)) return null;
@@ -444,10 +406,10 @@ export function buildSplitMeshForTileMesh(
     materialBuilder,
   );
   if (!splitMesh) return null;
-  addMeshUserData(tileMesh, splitMesh!, matchedPartIds, channel, {
+  addMeshUserData(tileMesh, splitMesh, matchedPartIds, channel, {
     splitGeometryManagedByCache: true,
   });
-  return splitMesh ? splitMesh : null;
+  return splitMesh;
 }
 
 export function collectTileMeshesFromScene(scene: Object3D): Mesh[] {
@@ -522,8 +484,6 @@ function restoreOriginalIndex(mesh: Mesh, geometry: BufferGeometry): void {
 
 // ---------- 按 feature 隐藏（InstancedMesh 走实例压缩） ----------
 
-let scratchKeptInstanceIndices: Int32Array | undefined;
-
 /** instanced 显隐的实例化 feature 通道；pid(1) 需声明第二个 featureIds 通道才可解析 */
 function resolveInstanceFeatureIndex(
   instanceFeatures: InstanceFeatures,
@@ -596,13 +556,7 @@ export function hideMatchedFeaturesOnInstancedMesh(
   const originalCount = mesh.userData._originalInstanceCount as number;
   const source = originalMatrix.array as Float32Array;
 
-  if (
-    !scratchKeptInstanceIndices ||
-    scratchKeptInstanceIndices.length < originalCount
-  ) {
-    scratchKeptInstanceIndices = new Int32Array(originalCount);
-  }
-  const kept = scratchKeptInstanceIndices;
+  const kept = new Int32Array(originalCount);
   let visibleCount = 0;
   for (let i = 0; i < originalCount; i++) {
     if (!hiddenFids.has(instanceFeatures.getFeatureId(featureIndex, i))) {
