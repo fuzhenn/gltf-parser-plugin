@@ -69,6 +69,7 @@ export class GLTFParserPlugin {
       this._options.materialBuilder ?? defaultMaterialBuilder;
     this._loader = new GLTFWorkerLoader(tiles.manager, {
       metadata: this._options.metadata,
+      edges: this._options.edges,
       materialBuilder: materialBuilder,
       fetchOptions,
     });

@@ -111,12 +111,21 @@ function processInstancingExtension(
   node.instanceData = instanceData;
 }
 
+/** 判断 URL 是否为顶级瓦片（如 _0_0_0.glb） */
+function isRootTile(url?: string): boolean {
+  return !!url && url.includes("_0_0_0.glb");
+}
+
 /**
  * Process and dequantize GLTF data
  * @param data - Raw GLTF data from loader
+ * @param buildEdges - Whether to pre-generate feature edge data
  * @returns Processed data with transferables array
  */
-export function processGLTFData(data: any): {
+export function processGLTFData(
+  data: any,
+  options?: { buildEdges?: boolean , url?: string },
+): {
   data: any;
   transferables: ArrayBuffer[];
 } {
@@ -199,10 +208,12 @@ export function processGLTFData(data: any): {
           | Float32Array
           | undefined;
         if (
+          options?.buildEdges &&
           positionArray &&
           indexArray &&
           indexArray.length >= 3 &&
-          positionArray.length >= 9
+          positionArray.length >= 9 &&
+          !isRootTile(options?.url)
         ) {
           const featureEdges = buildFeatureEdgePositions(
             positionArray,

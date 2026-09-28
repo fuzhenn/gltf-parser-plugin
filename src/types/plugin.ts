@@ -91,4 +91,11 @@ export interface GLTFParserPluginOptions {
    * 用于 Worker 内 GLTF 解析及 schema 拉取（如 Authorization 等 headers）。
    */
   fetchOptions?: RequestInit;
+
+  /**
+   * 是否在 Worker 内预先生成特征边框数据（挂载在 geometry.userData.featureEdges）。
+   * 边框计算有一定开销，仅在需要边框渲染时开启。
+   * @default false
+   */
+  edges?: boolean;
 }
