@@ -98,4 +98,11 @@ export interface GLTFParserPluginOptions {
    * @default false
    */
   edges?: boolean;
+
+  /**
+   * 特征边夹角阈值（度）：两面法线夹角超过该阈值的边视为特征边。
+   * 阈值越大边越稀疏，仅保留更明显的折痕/轮廓；仅 `edges` 开启时生效。
+   * @default 30
+   */
+  edgeThresholdDeg?: number;
 }

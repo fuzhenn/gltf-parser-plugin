@@ -2,10 +2,7 @@ import { dequantizeAttribute } from "./dequantize";
 import type { AttributeData } from "./types";
 import type { FeatureIdIndexData, IndexRange } from "../types";
 import { decodeTangent } from "./tangent";
-import {
-  buildFeatureEdgePositions,
-  DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
-} from "./edges";
+import { buildFeatureEdgePositions } from "./edges";
 
 /**
  * 在 worker 内、传回主线程之前，按 `_FEATURE_ID_*` 顶点属性把 index 按 featureId 分组。
@@ -124,7 +121,7 @@ function isRootTile(url?: string): boolean {
  */
 export function processGLTFData(
   data: any,
-  options?: { buildEdges?: boolean , url?: string },
+  options?: { buildEdges?: boolean; edgeThresholdDeg?: number; url?: string },
 ): {
   data: any;
   transferables: ArrayBuffer[];
@@ -218,7 +215,7 @@ export function processGLTFData(
           const featureEdges = buildFeatureEdgePositions(
             positionArray,
             indexArray,
-            DEFAULT_FEATURE_EDGE_THRESHOLD_DEG,
+            options?.edgeThresholdDeg,
           );
           if (featureEdges.positions.length > 0) {
             addTransferable(featureEdges.positions.buffer);

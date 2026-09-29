@@ -101,6 +101,7 @@ self.onmessage = function (event: MessageEvent) {
     buffer,
     root,
     edges: buildEdges,
+    edgeThresholdDeg,
   } = event.data;
 
   if (method === "parseTile") {
@@ -130,6 +131,7 @@ self.onmessage = function (event: MessageEvent) {
         try {
           const { data: processedData, transferables } = processGLTFData(data, {
             buildEdges,
+            edgeThresholdDeg,
             url: root || "",
           });
           self.postMessage(
