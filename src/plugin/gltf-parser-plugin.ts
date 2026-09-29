@@ -70,6 +70,7 @@ export class GLTFParserPlugin {
     this._loader = new GLTFWorkerLoader(tiles.manager, {
       metadata: this._options.metadata,
       edges: this._options.edges,
+      edgeThresholdDeg: this._options.edgeThresholdDeg,
       materialBuilder: materialBuilder,
       fetchOptions,
     });

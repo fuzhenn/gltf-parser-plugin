@@ -87,6 +87,8 @@ export interface GLTFWorkerLoaderOptions {
   metadata?: boolean;
   /** Whether to pre-generate feature edge data in the worker */
   edges?: boolean;
+  /** Feature edge angle threshold in degrees (only used when `edges` is enabled) */
+  edgeThresholdDeg?: number;
   /** Custom material builder function */
   materialBuilder: MaterialBuilder;
   /** Network request options passed to Worker parsing */
@@ -101,6 +103,7 @@ let nextLoaderId = 0;
 export class GLTFWorkerLoader extends Loader {
   private _metadata: boolean = true;
   private _edges: boolean = false;
+  private _edgeThresholdDeg?: number;
   private _materialBuilder: MaterialBuilder;
   private _fetchOptions: RequestInit = {};
   private _loaderId = nextLoaderId++;
@@ -114,6 +117,7 @@ export class GLTFWorkerLoader extends Loader {
     super(manager);
     this._metadata = options.metadata ?? true;
     this._edges = options.edges ?? false;
+    this._edgeThresholdDeg = options.edgeThresholdDeg;
     this._materialBuilder = options.materialBuilder;
     this._fetchOptions = options.fetchOptions ?? {};
 
@@ -182,6 +186,7 @@ export class GLTFWorkerLoader extends Loader {
           requestId,
           fetchOptions: this._fetchOptions,
           edges: this._edges,
+          edgeThresholdDeg: this._edgeThresholdDeg,
         },
         [buffer],
       );
