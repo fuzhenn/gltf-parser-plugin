@@ -45,6 +45,7 @@ export class StyleHelper {
   private readonly _collectors = new Map<string, MeshCollector>();
   private readonly _materialBuilder?: MaterialBuilder;
   private readonly _interactionFilter?: PartInteractionFilter;
+  private readonly _getOidPathMap?: () => Map<number, string>;
   private _generation = 0;
   private _show: StyleShowInput | null = null;
   private _showChannel?: number;
@@ -53,9 +54,11 @@ export class StyleHelper {
   constructor(
     materialBuilder?: MaterialBuilder,
     interactionFilter?: PartInteractionFilter,
+    getOidPathMap?: () => Map<number, string>,
   ) {
     this._materialBuilder = materialBuilder;
     this._interactionFilter = interactionFilter;
+    this._getOidPathMap = getOidPathMap;
   }
 
   /** 样式代数：每次 setStyle 递增，scene 上的标记落后即为"过期" */
@@ -83,6 +86,7 @@ export class StyleHelper {
         condition,
         materialBuilder: this._materialBuilder,
         interactionFilter: this._interactionFilter,
+        getOidPathMap: this._getOidPathMap,
       });
       this._collectors.set(key, collector);
       added.push(collector);
@@ -236,6 +240,7 @@ export class StyleHelper {
       this._show,
       this._showHiddenKey!,
       this._showChannel,
+      this._getOidPathMap?.(),
     );
     if (hidden.size === 0) return;
     const idMap = getPartIdMapForFeatureAttribute(source, this._showChannel);
@@ -269,6 +274,7 @@ export class StyleHelper {
           condition,
           matchKey,
           channel,
+          this._getOidPathMap?.(),
         );
         if (matchedPartIds.size === 0) continue;
 

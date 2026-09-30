@@ -24,6 +24,7 @@ function collectPartIdsByPredicate(
   cacheKey: string,
   featureIdAttribute: number,
   keep: (propertyData: Record<string, unknown> | null) => boolean,
+  oidPathMap?: Map<number, string>,
 ): Set<number> {
   const cached = getCachedMatchedFeatureIds(tileMesh, cacheKey);
   if (cached) return cached;
@@ -37,6 +38,7 @@ function collectPartIdsByPredicate(
         tileMesh.userData,
         partId,
         featureIdAttribute,
+        oidPathMap,
       );
       if (propertyData != null && keep(propertyData)) {
         result.add(partId);
@@ -56,6 +58,7 @@ export function resolveMatchedPartIdsOnTileMesh(
   condition: StyleCondition,
   cacheKey: string,
   featureIdAttribute: number,
+  oidPathMap?: Map<number, string>,
 ): Set<number> {
   const evaluators = buildStyleConditionEvaluatorMap({
     conditions: [condition],
@@ -66,6 +69,7 @@ export function resolveMatchedPartIdsOnTileMesh(
     featureIdAttribute,
     (propertyData) =>
       evaluateStyleCondition(condition[0], propertyData, evaluators),
+    oidPathMap,
   );
 }
 
@@ -79,6 +83,7 @@ export function resolveShowHiddenPartIdsOnTileMesh(
   show: StyleShowInput,
   showHiddenKey: string,
   featureIdAttribute: number,
+  oidPathMap?: Map<number, string>,
 ): Set<number> {
   const evaluators = buildStyleConditionEvaluatorMap({ show });
   const showExpr = resolveShowContent(show)!;
@@ -88,5 +93,6 @@ export function resolveShowHiddenPartIdsOnTileMesh(
     featureIdAttribute,
     (propertyData) =>
       !evaluateStyleCondition(showExpr, propertyData, evaluators),
+    oidPathMap,
   );
 }

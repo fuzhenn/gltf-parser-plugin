@@ -19,11 +19,16 @@ export const FROZEN_DEFAULT_APPEARANCE: StyleAppearance = { opacity: 0.2 };
  */
 export class PartInteractionFilter {
   private readonly _getTiles: () => TilesRenderer | null;
+  private readonly _getOidPathMap?: () => Map<number, string>;
   private readonly _frozenByChannel = new Map<number, Set<number>>();
   private _conditions: StyleCondition[] = [];
 
-  constructor(getTiles: () => TilesRenderer | null) {
+  constructor(
+    getTiles: () => TilesRenderer | null,
+    getOidPathMap?: () => Map<number, string>,
+  ) {
     this._getTiles = getTiles;
+    this._getOidPathMap = getOidPathMap;
   }
 
   /** 当前冻结条件数组（整体替换语义） */
@@ -90,7 +95,11 @@ export class PartInteractionFilter {
       typeof selection === "boolean" ? {} : { show: selection },
     );
     const partIds: number[] = [];
-    for (const [fid, data] of getPropertyDataMapFromTiles(tiles, channel)) {
+    for (const [fid, data] of getPropertyDataMapFromTiles(
+      tiles,
+      channel,
+      this._getOidPathMap?.(),
+    )) {
       if (data && evaluateStyleCondition(selection, data, evaluators)) {
         partIds.push(fid);
       }

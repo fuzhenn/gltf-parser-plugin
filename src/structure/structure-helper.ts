@@ -29,6 +29,7 @@ export class StructureHelper {
   private readonly _getTiles: () => TilesRenderer | null;
   private _structureData: StructureData | null = null;
   private readonly _oidNodeMap = new Map<number, StructureNode>();
+  private readonly _oidPathMap = new Map<number, string>();
   private _modelInfo: ModelInfo | null = null;
   private _modelInfoPromise: Promise<ModelInfo | null> | null = null;
 
@@ -40,6 +41,7 @@ export class StructureHelper {
   invalidate(): void {
     this._structureData = null;
     this._oidNodeMap.clear();
+    this._oidPathMap.clear();
   }
 
   /** 与 tileset 同目录的侧车文件 URL，如 modelInfo.json */
@@ -52,6 +54,17 @@ export class StructureHelper {
   private _buildOidNodeMap(node: StructureNode): void {
     if (node.id !== undefined) this._oidNodeMap.set(node.id, node);
     for (const child of node.children ?? []) this._buildOidNodeMap(child);
+  }
+
+  /**
+   * DFS 构建层级路径：`/1/`、`/1/2/`（首尾带分隔符，`startsWith('/1/')` 即子树匹配且不误伤兄弟位数字）。
+   * 节点缺 id 时以 0 占位（如根节点无 id → `/0/1/2/`）。
+   */
+  private _buildOidPathMap(node: StructureNode, parentPath: string): void {
+    const id = node.id ?? 0;
+    const path = `${parentPath}${id}/`;
+    this._oidPathMap.set(id, path);
+    for (const child of node.children ?? []) this._buildOidPathMap(child, path);
   }
 
   /**
@@ -124,6 +137,21 @@ export class StructureHelper {
   }
 
   /**
+   * oid → 层级路径表（惰性构建一次）。
+   * 值为首尾带分隔符的路径（`/1/`、`/1/2/`），供属性数据注入 `_path` 后用
+   * `_path.startsWith('/1/')` 一次性命中构件自身及全部子孙。
+   */
+  getOidPathMap(): Map<number, string> {
+    this._syncStructureFromTileset();
+    if (this._oidPathMap.size === 0) {
+      for (const tree of this._structureData!.trees ?? []) {
+        this._buildOidPathMap(tree, "/");
+      }
+    }
+    return this._oidPathMap;
+  }
+
+  /**
    * 根据 oid 从结构数据取轴对齐包围盒（`bbox` 为 `[minX,minY,minZ,maxX,maxY,maxZ]`，与 `selectByBox` 一致）
    * @returns 无对应节点或缺少有效 bbox 时返回 `null`
    */
@@ -151,7 +179,11 @@ export class StructureHelper {
 
     const evaluators = buildStyleConditionEvaluatorMap({ show: cond });
     const matched: number[] = [];
-    for (const [oid, data] of getPropertyDataMapFromTiles(tiles)) {
+    for (const [oid, data] of getPropertyDataMapFromTiles(
+      tiles,
+      0,
+      this.getOidPathMap(),
+    )) {
       if (data && evaluateStyleCondition(cond, data, evaluators)) {
         matched.push(oid);
       }
