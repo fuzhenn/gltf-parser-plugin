@@ -9,22 +9,17 @@ import { getPartIdMap, getPartIdMapForFeatureAttribute } from "./id-map";
 import { forEachLoadedFeatureSource } from "./source";
 
 /**
- * 内部数据钩子：在原始属性表数据基础上派生/注入额外字段（如层级 `_path`）。
- * 返回新对象；约定不修改入参。
+ * oid → 层级路径表（值为首尾带分隔符的路径，如 `/1/`、`/1/2/`，
+ * 供 `_path.startsWith('/1/')` 子树匹配）。
+ * 由 StructureHelper 构建并经调用链下传（features 层不依赖 structure 层）。
  */
-export type InternalData = (
-  oid: number,
-  data: Record<string, unknown>,
-) => Record<string, unknown>;
+type OidPathMap = Map<number, string>;
 
-/**
- * 从 userData 读取零件属性（自动区分 meshFeatures / instanceFeatures）。
- */
-export function getPropertyDataFromUserData(
+/** 读取原始属性数据（instanceFeatures 与 meshFeatures 两个来源） */
+function readPropertyData(
   userData: Record<string, unknown>,
   partId: number,
   featureIdAttribute: number,
-  internalData?: InternalData,
 ): Record<string, unknown> | null {
   const instanceFeatures = userData.instanceFeatures as
     | InstanceFeatures
@@ -51,24 +46,33 @@ export function getPropertyDataFromUserData(
     }
 
     try {
-      const data = structuralMetadata.getPropertyTableData(
+      return structuralMetadata.getPropertyTableData(
         propertyTableIndex,
         fid,
-      );
-      return featureIdAttribute === 0 && internalData
-        ? internalData(partId, data)
-        : data;
+      ) as Record<string, unknown>;
     } catch {
       return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
     }
   }
 
-  return getPropertyDataFromMeshUserData(
-    userData,
-    partId,
-    featureIdAttribute,
-    internalData,
-  );
+  return getPropertyDataFromMeshUserData(userData, partId, featureIdAttribute);
+}
+
+/**
+ * 从 userData 读取零件属性（自动区分 meshFeatures / instanceFeatures）。
+ * 传入 `oidPathMap` 时在出口为 oid 通道幂等注入 `_path`（供条件表达式做子树匹配）。
+ */
+export function getPropertyDataFromUserData(
+  userData: Record<string, unknown>,
+  partId: number,
+  featureIdAttribute: number,
+  oidPathMap?: OidPathMap,
+): Record<string, unknown> | null {
+  const data = readPropertyData(userData, partId, featureIdAttribute);
+  if (data && oidPathMap && featureIdAttribute === 0) {
+    data._path = oidPathMap.get(partId)!;
+  }
+  return data;
 }
 
 function collectPartIdsFromSourceUserData(
@@ -87,7 +91,6 @@ function getPropertyDataFromMeshUserData(
   userData: Record<string, unknown>,
   partId: number,
   featureIdAttribute: number,
-  internalData?: InternalData,
 ): Record<string, unknown> | null {
   const meshFeatures = userData.meshFeatures as
     | { geometry?: BufferGeometry }
@@ -96,19 +99,13 @@ function getPropertyDataFromMeshUserData(
     userData,
     geometry: meshFeatures?.geometry,
   } as Mesh;
-  return getPropertyDataOnMeshByPartId(
-    mesh,
-    partId,
-    featureIdAttribute,
-    internalData,
-  );
+  return getPropertyDataOnMeshByPartId(mesh, partId, featureIdAttribute);
 }
 
 function getPropertyDataOnMeshByPartId(
   mesh: Mesh,
   partId: number,
   featureIdAttribute: number,
-  internalData?: InternalData,
 ): Record<string, unknown> | null {
   const channel = featureIdAttributeToChannel(featureIdAttribute);
   const idMap = getPartIdMap(mesh, channel);
@@ -149,9 +146,7 @@ function getPropertyDataOnMeshByPartId(
       ) as Record<string, unknown>;
       cache.set(cacheKey, data);
     }
-    return channel === "oid" && internalData
-      ? internalData(partId, data)
-      : data;
+    return data;
   } catch {
     return channel === "pid" ? { _pid: partId, pid: partId } : null;
   }
@@ -164,7 +159,7 @@ function getPropertyDataOnMeshByPartId(
 export function getPropertyDataMapFromTiles(
   tiles: TilesRenderer,
   featureIdAttribute = 0,
-  internalData?: InternalData,
+  oidPathMap?: OidPathMap,
 ): Map<number, Record<string, unknown> | null> {
   const map = new Map<number, Record<string, unknown> | null>();
 
@@ -178,7 +173,7 @@ export function getPropertyDataMapFromTiles(
         source.userData,
         partId,
         featureIdAttribute,
-        internalData,
+        oidPathMap,
       );
       if (data != null) {
         map.set(partId, data);

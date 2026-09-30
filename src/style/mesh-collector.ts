@@ -33,6 +33,7 @@ export class MeshCollector {
   private _condition: StyleCondition;
   private readonly _materialBuilder?: MaterialBuilder;
   private readonly _interactionFilter?: PartInteractionFilter;
+  private readonly _getOidPathMap?: () => Map<number, string>;
   private readonly _matchCacheKey: string;
   private readonly _splitCacheKey: string;
   private _show: StyleShowInput | null = null;
@@ -44,10 +45,12 @@ export class MeshCollector {
     materialBuilder?: MaterialBuilder;
     interactionFilter?: PartInteractionFilter;
     show?: StyleShowInput;
+    getOidPathMap?: () => Map<number, string>;
   }) {
     this._condition = params.condition;
     this._materialBuilder = params.materialBuilder;
     this._interactionFilter = params.interactionFilter;
+    this._getOidPathMap = params.getOidPathMap;
     this._matchCacheKey = buildMatchCacheKey(params.condition[0]);
     this._splitCacheKey = buildSplitCacheKey(params.condition);
     this.featureIdAttribute = resolveStyleConditionFeatureIdAttribute(
@@ -72,13 +75,19 @@ export class MeshCollector {
     const splitKey = this._splitCacheKey;
 
     for (const tileMesh of tileMeshes) {
+      const oidPathMap = this._getOidPathMap?.();
       const matchedPartIds = resolveMatchedPartIdsOnTileMesh(
         tileMesh,
         this._condition,
         this._matchCacheKey,
         this.featureIdAttribute,
+        oidPathMap,
       );
-      const effective = this._filterHiddenOnTileMesh(tileMesh, matchedPartIds);
+      const effective = this._filterHiddenOnTileMesh(
+        tileMesh,
+        matchedPartIds,
+        oidPathMap,
+      );
 
       // 本方法仅在 scene 代数过期（setStyle/freeze/show 变化或新瓦片）时执行：
       // 直接拆旧 split 重建，不做逐 mesh 精细比对（均为低频操作，简单优先）
@@ -108,6 +117,7 @@ export class MeshCollector {
   private _filterHiddenOnTileMesh(
     tileMesh: Mesh,
     matched: Set<number>,
+    oidPathMap?: Map<number, string>,
   ): Set<number> {
     const filter = this._interactionFilter;
     const canFilterShow =
@@ -137,6 +147,7 @@ export class MeshCollector {
         this._show,
         this._showHiddenKey!,
         this._showChannel!,
+        oidPathMap,
       );
       if (hidden.size > 0) {
         for (const partId of matched) {
@@ -159,6 +170,7 @@ export class MeshCollector {
       this._condition,
       this._matchCacheKey,
       this.featureIdAttribute,
+      this._getOidPathMap?.(),
     );
     const idMap = getPartIdMapForFeatureAttribute(
       tileMesh,

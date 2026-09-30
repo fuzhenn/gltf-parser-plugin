@@ -40,6 +40,7 @@ export class GLTFParserPlugin {
   );
   private readonly _interactionFilter = new PartInteractionFilter(
     () => this._tiles,
+    () => this._structureHelper.getOidPathMap(),
   );
 
   /**
@@ -195,6 +196,7 @@ export class GLTFParserPlugin {
       this._styleHelper = new StyleHelper(
         this._options.materialBuilder ?? defaultMaterialBuilder,
         this._interactionFilter,
+        () => this._structureHelper.getOidPathMap(),
       );
     }
     return this._styleHelper;
