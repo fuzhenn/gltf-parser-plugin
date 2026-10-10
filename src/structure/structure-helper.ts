@@ -68,7 +68,7 @@ export class StructureHelper {
   }
 
   /**
-   * 从已加载根 tileset 的内嵌 structure（`asset.extras.maptalks.structureUri`）
+   * 从已加载根 tileset 的内嵌 structure（`extras.modeltiles.structureUri`）
    * 同步解压并建索引。rootTileset 尚未就绪时返回 null，可稍后再次调用。
    */
   private _syncStructureFromTileset(): StructureData | null {
