@@ -7,18 +7,16 @@ export type TilesetWithStructureUri = Tileset & {
   structureUri?: string;
 };
 
-/** 从 tileset 取内嵌 structure 的 data URI（优先 MapTalks：`asset.extras.maptalks.structureUri`） */
+/** 从 tileset 取内嵌 structure 的 data URI（优先 MapTalks：`extras.modeltiles.structureUri`） */
 export function getStructureDataUriFromTileset(
   root: Tileset | null,
 ): string | null {
   if (!root) return null;
 
-  const extras = (
-    root.asset as { extras?: Record<string, unknown> } | undefined
-  )?.extras;
-  const maptalks = extras?.maptalks;
-  if (maptalks && typeof maptalks === "object") {
-    const uri = (maptalks as { structureUri?: unknown }).structureUri;
+  const extras = root.extras;
+  const modeltiles = extras?.modeltiles;
+  if (modeltiles && typeof modeltiles === "object") {
+    const uri = (modeltiles as { structureUri?: unknown }).structureUri;
     if (typeof uri === "string" && uri.trim()) {
       return uri.trim();
     }
@@ -69,7 +67,7 @@ export function decodeGzipBase64DataUriSync(dataUri: string): string {
 }
 
 /**
- * 从已加载的根 tileset 读取内嵌 structure（`asset.extras.maptalks.structureUri`，
+ * 从已加载的根 tileset 读取内嵌 structure（`extras.modeltiles.structureUri`，
  * 若无则回退根级 `structureUri`），同步解码并解析。
  * - 无有效 URI 或解析失败时返回 `null`（不抛错）。
  */
