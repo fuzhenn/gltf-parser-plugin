@@ -9,10 +9,17 @@ import {
 type PartIdField = "_oid" | "_pid";
 
 /**
+ * 全局 featureData 缓存：partId → 属性表整行数据。
+ * 跨 mesh / 跨通道复用已解码的行数据，避免重复整行解码。
+ */
+const featureDataCache = new Map<number, Record<string, unknown>>();
+
+/**
  * 为 mesh 上单个通道构建 partId → featureId 映射并挂到 `userData[mapKey]`。
  *
- * 有属性表时 partId 取自行数据中的 `_oid` / `_pid` 字段，并预写 `_propertyCache`
- * 供属性查询复用，避免重复整行解码。
+ * 有属性表时先用轻量请求（仅取 `_oid` / `_pid` 字段）解析 partId，
+ * 命中全局缓存则直接复用整行数据，否则按整行解码一次并写入缓存；
+ * 同时预写 `_propertyCache` 供属性查询复用。
  */
 function buildChannelPartIdMap(
   meshObject: Object3D,
@@ -39,11 +46,22 @@ function buildChannelPartIdMap(
     processedFeatureIds.add(featureId);
 
     try {
-      const featureData = structuralMetadata.getPropertyTableData(
-        propertyTableIndex,
-        featureId,
-      ) as Record<string, unknown>;
-      const partId = featureData[field] as number;
+      // 轻量请求：只解码 partId 字段，避免整行解码开销
+      const table = structuralMetadata.tableAccessors[propertyTableIndex];
+      const partId = table.getPropertyValue(
+        field,
+        featureId
+      );
+
+      // 命中全局缓存直接复用，否则整行解码一次并写入缓存
+      let featureData = featureDataCache.get(partId);
+      if (!featureData) {
+        featureData = structuralMetadata.getPropertyTableData(
+          propertyTableIndex,
+          featureId,
+        ) as Record<string, unknown>;
+        featureDataCache.set(partId, featureData);
+      }
 
       idMap[partId] = featureId;
       if (!propertyCache) propertyCache = new Map();
