@@ -9,22 +9,18 @@ import {
 type PartIdField = "_oid" | "_pid";
 
 /**
- * 全局 featureData 缓存：partId → 属性表整行数据。
- * 跨 mesh / 跨通道复用已解码的行数据，避免重复整行解码。
- */
-const featureDataCache = new Map<number, Record<string, unknown>>();
-
-/**
  * 为 mesh 上单个通道构建 partId → featureId 映射并挂到 `userData[mapKey]`。
  *
  * 有属性表时先用轻量请求（仅取 `_oid` / `_pid` 字段）解析 partId，
- * 命中全局缓存则直接复用整行数据，否则按整行解码一次并写入缓存；
+ * 命中 `featureDataCache`（partId → 整行数据，由 GLTFParserPlugin 持有）
+ * 则直接复用，否则按整行解码一次并写入缓存；
  * 同时预写 `_propertyCache` 供属性查询复用。
  */
 function buildChannelPartIdMap(
   meshObject: Object3D,
   channel: PartIdChannel,
   field: PartIdField,
+  featureDataCache: Map<number, Record<string, unknown>>,
 ): void {
   const resolved = resolveFeatureChannelOnMesh(meshObject as Mesh, channel);
   if (!resolved) return;
@@ -81,11 +77,15 @@ function buildChannelPartIdMap(
  * 构建 partId（OID / PID）→ featureId 的映射：
  * OID → `_FEATURE_ID_0`（featureIds[0]），PID → `_FEATURE_ID_1`（featureIds[1]）
  * @param scene Scene object
+ * @param featureDataCache partId → 整行属性数据缓存（由 GLTFParserPlugin 实例持有）
  */
-export function buildPartIdToFeatureIdMap(scene: Object3D): void {
+export function buildPartIdToFeatureIdMap(
+  scene: Object3D,
+  featureDataCache: Map<number, Record<string, unknown>>,
+): void {
   scene.traverse((meshObject) => {
-    buildChannelPartIdMap(meshObject, "oid", "_oid");
-    buildChannelPartIdMap(meshObject, "pid", "_pid");
+    buildChannelPartIdMap(meshObject, "oid", "_oid", featureDataCache);
+    buildChannelPartIdMap(meshObject, "pid", "_pid", featureDataCache);
   });
 }
 

@@ -34,6 +34,12 @@ export class GLTFParserPlugin {
   private _styleHelper: StyleHelper | null = null;
   private _loader: GLTFWorkerLoader | null = null;
 
+  /** 全局 featureData 缓存：partId → 属性表整行数据，跨 mesh / 跨通道复用 */
+  private readonly _featureDataCache = new Map<
+    number,
+    Record<string, unknown>
+  >();
+
   private readonly _structureHelper = new StructureHelper(() => this._tiles);
   private readonly _clippingPlanesHelper = new ClippingPlanesHelper(
     () => this._tiles,
@@ -154,7 +160,7 @@ export class GLTFParserPlugin {
    * Load model callback
    */
   private _onLoadModelCB = ({ scene }: { scene: Object3D }) => {
-    buildPartIdToFeatureIdMap(scene);
+    buildPartIdToFeatureIdMap(scene, this._featureDataCache);
     this._styleHelper?.applySceneIfStale(scene);
   };
 
