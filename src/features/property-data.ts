@@ -6,6 +6,10 @@ import {
   resolveFeatureChannelOnMesh,
 } from "./channel";
 import { getPartIdMap, getPartIdMapForFeatureAttribute } from "./id-map";
+import {
+  getOrLoadFeatureData,
+  type FeatureDataCache,
+} from "./feature-data-cache";
 import { forEachLoadedFeatureSource } from "./source";
 
 /**
@@ -20,6 +24,7 @@ function readPropertyData(
   userData: Record<string, unknown>,
   partId: number,
   featureIdAttribute: number,
+  featureDataCache?: FeatureDataCache,
 ): Record<string, unknown> | null {
   const instanceFeatures = userData.instanceFeatures as
     | InstanceFeatures
@@ -46,16 +51,24 @@ function readPropertyData(
     }
 
     try {
-      return structuralMetadata.getPropertyTableData(
-        propertyTableIndex,
-        fid,
-      ) as Record<string, unknown>;
+      // 优先命中插件级缓存，未命中再整行解码并回写
+      return getOrLoadFeatureData(featureDataCache, partId, () =>
+        structuralMetadata.getPropertyTableData(
+          propertyTableIndex,
+          fid,
+        ) as Record<string, unknown>,
+      );
     } catch {
       return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
     }
   }
 
-  return getPropertyDataFromMeshUserData(userData, partId, featureIdAttribute);
+  return getPropertyDataFromMeshUserData(
+    userData,
+    partId,
+    featureIdAttribute,
+    featureDataCache,
+  );
 }
 
 /**
@@ -67,8 +80,14 @@ export function getPropertyDataFromUserData(
   partId: number,
   featureIdAttribute: number,
   oidPathMap?: OidPathMap,
+  featureDataCache?: FeatureDataCache,
 ): Record<string, unknown> | null {
-  const data = readPropertyData(userData, partId, featureIdAttribute);
+  const data = readPropertyData(
+    userData,
+    partId,
+    featureIdAttribute,
+    featureDataCache,
+  );
   if (data && oidPathMap && featureIdAttribute === 0) {
     data._path = oidPathMap.get(partId)!;
   }
@@ -91,6 +110,7 @@ function getPropertyDataFromMeshUserData(
   userData: Record<string, unknown>,
   partId: number,
   featureIdAttribute: number,
+  featureDataCache?: FeatureDataCache,
 ): Record<string, unknown> | null {
   const meshFeatures = userData.meshFeatures as
     | { geometry?: BufferGeometry }
@@ -99,13 +119,19 @@ function getPropertyDataFromMeshUserData(
     userData,
     geometry: meshFeatures?.geometry,
   } as Mesh;
-  return getPropertyDataOnMeshByPartId(mesh, partId, featureIdAttribute);
+  return getPropertyDataOnMeshByPartId(
+    mesh,
+    partId,
+    featureIdAttribute,
+    featureDataCache,
+  );
 }
 
 function getPropertyDataOnMeshByPartId(
   mesh: Mesh,
   partId: number,
   featureIdAttribute: number,
+  featureDataCache?: FeatureDataCache,
 ): Record<string, unknown> | null {
   const channel = featureIdAttributeToChannel(featureIdAttribute);
   const idMap = getPartIdMap(mesh, channel);
@@ -140,10 +166,13 @@ function getPropertyDataOnMeshByPartId(
     if (cache.has(cacheKey)) {
       data = cache.get(cacheKey)!;
     } else {
-      data = structuralMetadata.getPropertyTableData(
-        propertyTableIndex,
-        fid,
-      ) as Record<string, unknown>;
+      // 优先命中插件级缓存，未命中再整行解码并回写
+      data = getOrLoadFeatureData(featureDataCache, partId, () =>
+        structuralMetadata.getPropertyTableData(
+          propertyTableIndex,
+          fid,
+        ) as Record<string, unknown>,
+      );
       cache.set(cacheKey, data);
     }
     return data;
@@ -160,6 +189,7 @@ export function getPropertyDataMapFromTiles(
   tiles: TilesRenderer,
   featureIdAttribute = 0,
   oidPathMap?: OidPathMap,
+  featureDataCache?: FeatureDataCache,
 ): Map<number, Record<string, unknown> | null> {
   const map = new Map<number, Record<string, unknown> | null>();
 
@@ -174,6 +204,7 @@ export function getPropertyDataMapFromTiles(
         partId,
         featureIdAttribute,
         oidPathMap,
+        featureDataCache,
       );
       if (data != null) {
         map.set(partId, data);

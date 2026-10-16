@@ -13,6 +13,7 @@ import {
 import { parseStructureDataFromTilesSync } from "./tileset-structure";
 import {
   getPropertyDataMapFromTiles,
+  type FeatureDataCache,
 } from "../features";
 import {
   buildStyleConditionEvaluatorMap,
@@ -27,14 +28,19 @@ import {
  */
 export class StructureHelper {
   private readonly _getTiles: () => TilesRenderer | null;
+  private readonly _featureDataCache?: FeatureDataCache;
   private _structureData: StructureData | null = null;
   private readonly _oidNodeMap = new Map<number, StructureNode>();
   private readonly _oidPathMap = new Map<number, string>();
   private _modelInfo: ModelInfo | null = null;
   private _modelInfoPromise: Promise<ModelInfo | null> | null = null;
 
-  constructor(getTiles: () => TilesRenderer | null) {
+  constructor(
+    getTiles: () => TilesRenderer | null,
+    featureDataCache?: FeatureDataCache,
+  ) {
     this._getTiles = getTiles;
+    this._featureDataCache = featureDataCache;
   }
 
   /** 根 tileset 变化时失效缓存（子 tileset 的 load-tileset 不会触发） */
@@ -183,6 +189,7 @@ export class StructureHelper {
       tiles,
       0,
       this.getOidPathMap(),
+      this._featureDataCache,
     )) {
       if (data && evaluateStyleCondition(cond, data, evaluators)) {
         matched.push(oid);

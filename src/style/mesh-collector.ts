@@ -6,6 +6,7 @@ import {
   type StyleShowInput,
 } from "./appearance";
 import { getPartIdMapForFeatureAttribute } from "../features";
+import type { FeatureDataCache } from "../features";
 import type { MaterialBuilder } from "../types";
 import type { PartInteractionFilter } from "../interaction";
 
@@ -34,6 +35,7 @@ export class MeshCollector {
   private readonly _materialBuilder?: MaterialBuilder;
   private readonly _interactionFilter?: PartInteractionFilter;
   private readonly _getOidPathMap?: () => Map<number, string>;
+  private readonly _featureDataCache?: FeatureDataCache;
   private readonly _matchCacheKey: string;
   private readonly _splitCacheKey: string;
   private _show: StyleShowInput | null = null;
@@ -46,11 +48,13 @@ export class MeshCollector {
     interactionFilter?: PartInteractionFilter;
     show?: StyleShowInput;
     getOidPathMap?: () => Map<number, string>;
+    featureDataCache?: FeatureDataCache;
   }) {
     this._condition = params.condition;
     this._materialBuilder = params.materialBuilder;
     this._interactionFilter = params.interactionFilter;
     this._getOidPathMap = params.getOidPathMap;
+    this._featureDataCache = params.featureDataCache;
     this._matchCacheKey = buildMatchCacheKey(params.condition[0]);
     this._splitCacheKey = buildSplitCacheKey(params.condition);
     this.featureIdAttribute = resolveStyleConditionFeatureIdAttribute(
@@ -82,6 +86,7 @@ export class MeshCollector {
         this._matchCacheKey,
         this.featureIdAttribute,
         oidPathMap,
+        this._featureDataCache,
       );
       const effective = this._filterHiddenOnTileMesh(
         tileMesh,
@@ -100,6 +105,7 @@ export class MeshCollector {
         this.featureIdAttribute,
         this._condition[1],
         this._materialBuilder,
+        this._featureDataCache,
       );
       if (splitMesh) {
         attachSplitMeshToTileMeshParent(tileMesh, splitMesh);
@@ -148,6 +154,7 @@ export class MeshCollector {
         this._showHiddenKey!,
         this._showChannel!,
         oidPathMap,
+        this._featureDataCache,
       );
       if (hidden.size > 0) {
         for (const partId of matched) {
@@ -171,6 +178,7 @@ export class MeshCollector {
       this._matchCacheKey,
       this.featureIdAttribute,
       this._getOidPathMap?.(),
+      this._featureDataCache,
     );
     const idMap = getPartIdMapForFeatureAttribute(
       tileMesh,

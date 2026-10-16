@@ -22,6 +22,7 @@ import {
   getPartIdMapForFeatureAttribute,
   isTileInstancedMesh,
   isTileMesh,
+  type FeatureDataCache,
 } from "../features";
 import {
   hideMatchedFeaturesOnInstancedMesh,
@@ -46,6 +47,7 @@ export class StyleHelper {
   private readonly _materialBuilder?: MaterialBuilder;
   private readonly _interactionFilter?: PartInteractionFilter;
   private readonly _getOidPathMap?: () => Map<number, string>;
+  private readonly _featureDataCache?: FeatureDataCache;
   private _generation = 0;
   private _show: StyleShowInput | null = null;
   private _showChannel?: number;
@@ -55,10 +57,12 @@ export class StyleHelper {
     materialBuilder?: MaterialBuilder,
     interactionFilter?: PartInteractionFilter,
     getOidPathMap?: () => Map<number, string>,
+    featureDataCache?: FeatureDataCache,
   ) {
     this._materialBuilder = materialBuilder;
     this._interactionFilter = interactionFilter;
     this._getOidPathMap = getOidPathMap;
+    this._featureDataCache = featureDataCache;
   }
 
   /** 样式代数：每次 setStyle 递增，scene 上的标记落后即为"过期" */
@@ -87,6 +91,7 @@ export class StyleHelper {
         materialBuilder: this._materialBuilder,
         interactionFilter: this._interactionFilter,
         getOidPathMap: this._getOidPathMap,
+        featureDataCache: this._featureDataCache,
       });
       this._collectors.set(key, collector);
       added.push(collector);
@@ -241,6 +246,7 @@ export class StyleHelper {
       this._showHiddenKey!,
       this._showChannel,
       this._getOidPathMap?.(),
+      this._featureDataCache,
     );
     if (hidden.size === 0) return;
     const idMap = getPartIdMapForFeatureAttribute(source, this._showChannel);
@@ -275,6 +281,7 @@ export class StyleHelper {
           matchKey,
           channel,
           this._getOidPathMap?.(),
+          this._featureDataCache,
         );
         if (matchedPartIds.size === 0) continue;
 
@@ -284,6 +291,7 @@ export class StyleHelper {
           channel,
           condition[1],
           this._materialBuilder,
+          this._featureDataCache,
         );
         if (frozenMesh) {
           attachSplitMeshToTileMeshParent(tileMesh, frozenMesh);

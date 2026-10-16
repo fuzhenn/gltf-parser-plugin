@@ -5,6 +5,10 @@ import {
   resolveFeatureChannelOnMesh,
   type PartIdChannel,
 } from "./channel";
+import {
+  getOrLoadFeatureData,
+  type FeatureDataCache,
+} from "./feature-data-cache";
 
 type PartIdField = "_oid" | "_pid";
 
@@ -20,7 +24,7 @@ function buildChannelPartIdMap(
   meshObject: Object3D,
   channel: PartIdChannel,
   field: PartIdField,
-  featureDataCache: Map<number, Record<string, unknown>>,
+  featureDataCache: FeatureDataCache,
 ): void {
   const resolved = resolveFeatureChannelOnMesh(meshObject as Mesh, channel);
   if (!resolved) return;
@@ -49,15 +53,16 @@ function buildChannelPartIdMap(
         featureId
       );
 
-      // 命中全局缓存直接复用，否则整行解码一次并写入缓存
-      let featureData = featureDataCache.get(partId);
-      if (!featureData) {
-        featureData = structuralMetadata.getPropertyTableData(
-          propertyTableIndex,
-          featureId,
-        ) as Record<string, unknown>;
-        featureDataCache.set(partId, featureData);
-      }
+      // 命中缓存直接复用，否则整行解码一次并写入缓存
+      const featureData = getOrLoadFeatureData(
+        featureDataCache,
+        partId,
+        () =>
+          structuralMetadata.getPropertyTableData(
+            propertyTableIndex,
+            featureId,
+          ) as Record<string, unknown>,
+      );
 
       idMap[partId] = featureId;
       if (!propertyCache) propertyCache = new Map();
@@ -81,7 +86,7 @@ function buildChannelPartIdMap(
  */
 export function buildPartIdToFeatureIdMap(
   scene: Object3D,
-  featureDataCache: Map<number, Record<string, unknown>>,
+  featureDataCache: FeatureDataCache,
 ): void {
   scene.traverse((meshObject) => {
     buildChannelPartIdMap(meshObject, "oid", "_oid", featureDataCache);

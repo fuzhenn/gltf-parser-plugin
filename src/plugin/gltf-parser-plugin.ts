@@ -40,13 +40,17 @@ export class GLTFParserPlugin {
     Record<string, unknown>
   >();
 
-  private readonly _structureHelper = new StructureHelper(() => this._tiles);
+  private readonly _structureHelper = new StructureHelper(
+    () => this._tiles,
+    this._featureDataCache,
+  );
   private readonly _clippingPlanesHelper = new ClippingPlanesHelper(
     () => this._tiles,
   );
   private readonly _interactionFilter = new PartInteractionFilter(
     () => this._tiles,
     () => this._structureHelper.getOidPathMap(),
+    this._featureDataCache,
   );
 
   /**
@@ -203,6 +207,7 @@ export class GLTFParserPlugin {
         this._options.materialBuilder ?? defaultMaterialBuilder,
         this._interactionFilter,
         () => this._structureHelper.getOidPathMap(),
+        this._featureDataCache,
       );
     }
     return this._styleHelper;
@@ -275,7 +280,7 @@ export class GLTFParserPlugin {
    * 拾取返回的 oid 对应 channel 0）。
    */
   queryFeatureFromIntersection(hit: Intersection): FeatureInfo {
-    const result = queryFeatureFromIntersection(hit);
+    const result = queryFeatureFromIntersection(hit, this._featureDataCache);
     if (result.isValid && result.oid !== undefined) {
       if (this._interactionFilter.isFrozen(0, result.oid)) {
         return { isValid: false, error: "Component is frozen" };
