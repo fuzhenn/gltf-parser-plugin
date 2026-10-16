@@ -5,6 +5,10 @@ import {
   type PartIdChannel,
 } from "../features/channel";
 import { getPartIdMap } from "../features/id-map";
+import {
+  getOrLoadFeatureData,
+  type FeatureDataCache,
+} from "../features/feature-data-cache";
 
 export function addMeshUserData(
   tileMesh: Mesh,
@@ -12,6 +16,7 @@ export function addMeshUserData(
   idSet: ReadonlySet<number>,
   channel: PartIdChannel,
   options?: { splitGeometryManagedByCache?: boolean },
+  featureDataCache?: FeatureDataCache,
 ) {
   if (idSet.size === 0) return null;
 
@@ -42,9 +47,12 @@ export function addMeshUserData(
     idMap[primaryId] !== undefined
   ) {
     try {
-      propertyData = structuralMetadata.getPropertyTableData(
-        propertyTableIndex,
-        idMap[primaryId]!,
+      // 优先命中插件级缓存，未命中再整行解码并回写
+      propertyData = getOrLoadFeatureData(featureDataCache, primaryId, () =>
+        structuralMetadata.getPropertyTableData(
+          propertyTableIndex,
+          idMap[primaryId]!,
+        ) as Record<string, unknown>,
       );
     } catch {
       // ignore

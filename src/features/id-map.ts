@@ -5,19 +5,26 @@ import {
   resolveFeatureChannelOnMesh,
   type PartIdChannel,
 } from "./channel";
+import {
+  getOrLoadFeatureData,
+  type FeatureDataCache,
+} from "./feature-data-cache";
 
 type PartIdField = "_oid" | "_pid";
 
 /**
  * 为 mesh 上单个通道构建 partId → featureId 映射并挂到 `userData[mapKey]`。
  *
- * 有属性表时 partId 取自行数据中的 `_oid` / `_pid` 字段，并预写 `_propertyCache`
- * 供属性查询复用，避免重复整行解码。
+ * 有属性表时先用轻量请求（仅取 `_oid` / `_pid` 字段）解析 partId，
+ * 命中 `featureDataCache`（partId → 整行数据，由 GLTFParserPlugin 持有）
+ * 则直接复用，否则按整行解码一次并写入缓存；
+ * 同时预写 `_propertyCache` 供属性查询复用。
  */
 function buildChannelPartIdMap(
   meshObject: Object3D,
   channel: PartIdChannel,
   field: PartIdField,
+  featureDataCache: FeatureDataCache,
 ): void {
   const resolved = resolveFeatureChannelOnMesh(meshObject as Mesh, channel);
   if (!resolved) return;
@@ -39,11 +46,23 @@ function buildChannelPartIdMap(
     processedFeatureIds.add(featureId);
 
     try {
-      const featureData = structuralMetadata.getPropertyTableData(
-        propertyTableIndex,
-        featureId,
-      ) as Record<string, unknown>;
-      const partId = featureData[field] as number;
+      // 轻量请求：只解码 partId 字段，避免整行解码开销
+      const table = structuralMetadata.tableAccessors[propertyTableIndex];
+      const partId = table.getPropertyValue(
+        field,
+        featureId
+      );
+
+      // 命中缓存直接复用，否则整行解码一次并写入缓存
+      const featureData = getOrLoadFeatureData(
+        featureDataCache,
+        partId,
+        () =>
+          structuralMetadata.getPropertyTableData(
+            propertyTableIndex,
+            featureId,
+          ) as Record<string, unknown>,
+      );
 
       idMap[partId] = featureId;
       if (!propertyCache) propertyCache = new Map();
@@ -63,11 +82,15 @@ function buildChannelPartIdMap(
  * 构建 partId（OID / PID）→ featureId 的映射：
  * OID → `_FEATURE_ID_0`（featureIds[0]），PID → `_FEATURE_ID_1`（featureIds[1]）
  * @param scene Scene object
+ * @param featureDataCache partId → 整行属性数据缓存（由 GLTFParserPlugin 实例持有）
  */
-export function buildPartIdToFeatureIdMap(scene: Object3D): void {
+export function buildPartIdToFeatureIdMap(
+  scene: Object3D,
+  featureDataCache: FeatureDataCache,
+): void {
   scene.traverse((meshObject) => {
-    buildChannelPartIdMap(meshObject, "oid", "_oid");
-    buildChannelPartIdMap(meshObject, "pid", "_pid");
+    buildChannelPartIdMap(meshObject, "oid", "_oid", featureDataCache);
+    buildChannelPartIdMap(meshObject, "pid", "_pid", featureDataCache);
   });
 }
 

@@ -34,13 +34,23 @@ export class GLTFParserPlugin {
   private _styleHelper: StyleHelper | null = null;
   private _loader: GLTFWorkerLoader | null = null;
 
-  private readonly _structureHelper = new StructureHelper(() => this._tiles);
+  /** 全局 featureData 缓存：partId → 属性表整行数据，跨 mesh / 跨通道复用 */
+  private readonly _featureDataCache = new Map<
+    number,
+    Record<string, unknown>
+  >();
+
+  private readonly _structureHelper = new StructureHelper(
+    () => this._tiles,
+    this._featureDataCache,
+  );
   private readonly _clippingPlanesHelper = new ClippingPlanesHelper(
     () => this._tiles,
   );
   private readonly _interactionFilter = new PartInteractionFilter(
     () => this._tiles,
     () => this._structureHelper.getOidPathMap(),
+    this._featureDataCache,
   );
 
   /**
@@ -154,7 +164,7 @@ export class GLTFParserPlugin {
    * Load model callback
    */
   private _onLoadModelCB = ({ scene }: { scene: Object3D }) => {
-    buildPartIdToFeatureIdMap(scene);
+    buildPartIdToFeatureIdMap(scene, this._featureDataCache);
     this._styleHelper?.applySceneIfStale(scene);
   };
 
@@ -197,6 +207,7 @@ export class GLTFParserPlugin {
         this._options.materialBuilder ?? defaultMaterialBuilder,
         this._interactionFilter,
         () => this._structureHelper.getOidPathMap(),
+        this._featureDataCache,
       );
     }
     return this._styleHelper;
@@ -269,7 +280,7 @@ export class GLTFParserPlugin {
    * 拾取返回的 oid 对应 channel 0）。
    */
   queryFeatureFromIntersection(hit: Intersection): FeatureInfo {
-    const result = queryFeatureFromIntersection(hit);
+    const result = queryFeatureFromIntersection(hit, this._featureDataCache);
     if (result.isValid && result.oid !== undefined) {
       if (this._interactionFilter.isFrozen(0, result.oid)) {
         return { isValid: false, error: "Component is frozen" };

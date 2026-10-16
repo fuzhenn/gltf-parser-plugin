@@ -13,6 +13,7 @@ import {
 import type { StyleAppearance } from "./appearance";
 import { applyStyleAppearanceToSplitMesh } from "./appearance-apply";
 import type { MaterialBuilder } from "../types";
+import type { FeatureDataCache } from "../features";
 
 /**
  * 按 matchedPartIds 从 tile mesh 构建拆分 mesh（普通网格走合并几何，实例网格走实例拆分），
@@ -24,6 +25,7 @@ export function buildSplitMeshForTileMesh(
   featureIdAttribute: number,
   appearance: StyleAppearance,
   materialBuilder?: MaterialBuilder,
+  featureDataCache?: FeatureDataCache,
 ): Mesh | null {
   if (matchedPartIds.size === 0) return null;
 
@@ -32,6 +34,7 @@ export function buildSplitMeshForTileMesh(
       tileMesh,
       matchedPartIds,
       featureIdAttribute,
+      featureDataCache,
     );
     return instanced;
   }
@@ -55,6 +58,6 @@ export function buildSplitMeshForTileMesh(
   if (!splitMesh) return null;
   addMeshUserData(tileMesh, splitMesh, matchedPartIds, channel, {
     splitGeometryManagedByCache: true,
-  });
+  }, featureDataCache);
   return splitMesh;
 }

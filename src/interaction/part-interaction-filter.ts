@@ -7,7 +7,10 @@ import {
   type StyleCondition,
   type StyleConditionInput,
 } from "../style";
-import { getPropertyDataMapFromTiles } from "../features";
+import {
+  getPropertyDataMapFromTiles,
+  type FeatureDataCache,
+} from "../features";
 
 /** 冻结默认外观（半透明幽灵体）；freeze 条目未指定样式时使用 */
 export const FROZEN_DEFAULT_APPEARANCE: StyleAppearance = { opacity: 0.2 };
@@ -20,15 +23,18 @@ export const FROZEN_DEFAULT_APPEARANCE: StyleAppearance = { opacity: 0.2 };
 export class PartInteractionFilter {
   private readonly _getTiles: () => TilesRenderer | null;
   private readonly _getOidPathMap?: () => Map<number, string>;
+  private readonly _featureDataCache?: FeatureDataCache;
   private readonly _frozenByChannel = new Map<number, Set<number>>();
   private _conditions: StyleCondition[] = [];
 
   constructor(
     getTiles: () => TilesRenderer | null,
     getOidPathMap?: () => Map<number, string>,
+    featureDataCache?: FeatureDataCache,
   ) {
     this._getTiles = getTiles;
     this._getOidPathMap = getOidPathMap;
+    this._featureDataCache = featureDataCache;
   }
 
   /** 当前冻结条件数组（整体替换语义） */
@@ -99,6 +105,7 @@ export class PartInteractionFilter {
       tiles,
       channel,
       this._getOidPathMap?.(),
+      this._featureDataCache,
     )) {
       if (data && evaluateStyleCondition(selection, data, evaluators)) {
         partIds.push(fid);

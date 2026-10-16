@@ -4,6 +4,10 @@ import {
   featureIdAttributeToChannel,
 } from "../features/channel";
 import { getPartIdMapForFeatureAttribute } from "../features/id-map";
+import {
+  getOrLoadFeatureData,
+  type FeatureDataCache,
+} from "../features/feature-data-cache";
 import type { InstanceFeatures } from "../features/types";
 
 const tmpInstanceMatrix = new Matrix4();
@@ -95,6 +99,7 @@ function createSplitInstancedMesh(
   instanceIndices: readonly number[],
   idSet: ReadonlySet<number>,
   featureIdAttribute: number,
+  featureDataCache?: FeatureDataCache,
 ): InstancedMesh | null {
   if (instanceIndices.length === 0) return null;
 
@@ -150,9 +155,12 @@ function createSplitInstancedMesh(
     idMap[primaryId] !== undefined
   ) {
     try {
-      propertyData = structuralMetadata.getPropertyTableData(
-        featureConfig.propertyTable,
-        idMap[primaryId]!,
+      // 优先命中插件级缓存，未命中再整行解码并回写
+      propertyData = getOrLoadFeatureData(featureDataCache, primaryId, () =>
+        structuralMetadata.getPropertyTableData(
+          featureConfig.propertyTable,
+          idMap[primaryId]!,
+        ) as Record<string, unknown>,
       );
     } catch {
       // ignore
@@ -180,11 +188,18 @@ export function buildSplitInstancedMeshForTileMesh(
   source: InstancedMesh,
   idSet: ReadonlySet<number>,
   featureIdAttribute: number,
+  featureDataCache?: FeatureDataCache,
 ): InstancedMesh | null {
   if (idSet.size === 0) return null;
 
   const indices = getMatchingInstanceIndices(source, idSet, featureIdAttribute);
   if (indices.length === 0) return null;
 
-  return createSplitInstancedMesh(source, indices, idSet, featureIdAttribute);
+  return createSplitInstancedMesh(
+    source,
+    indices,
+    idSet,
+    featureIdAttribute,
+    featureDataCache,
+  );
 }
