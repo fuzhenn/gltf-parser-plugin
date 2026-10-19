@@ -280,7 +280,7 @@ export class GLTFParserPlugin {
    * 拾取返回的 oid 对应 channel 0）。
    */
   queryFeatureFromIntersection(hit: Intersection): FeatureInfo {
-    const result = queryFeatureFromIntersection(hit, this._featureDataCache);
+    const result = queryFeatureFromIntersection(hit);
     if (result.isValid && result.oid !== undefined) {
       if (this._interactionFilter.isFrozen(0, result.oid)) {
         return { isValid: false, error: "Component is frozen" };
