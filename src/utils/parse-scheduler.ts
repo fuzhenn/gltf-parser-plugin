@@ -1,5 +1,5 @@
 /**
- * 默认同时处理的瓦片 buffer 总字节数上限：512KB
+ * 默认同时处理的瓦片 buffer 总字节数上限：1MB
  */
 export const DEFAULT_MAX_CONCURRENT_BYTES = 1024 * 1024;
 
