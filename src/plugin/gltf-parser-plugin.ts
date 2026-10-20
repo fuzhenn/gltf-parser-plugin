@@ -7,7 +7,11 @@ import type {
 } from "../types";
 import type { Box3, Intersection, Object3D, Plane, Vector3 } from "three";
 import { GLTFWorkerLoader, defaultMaterialBuilder } from "../loader";
-import { setMaxWorkers, resolveFetchOptions } from "../utils";
+import {
+  setMaxWorkers,
+  resolveFetchOptions,
+  TileParseScheduler,
+} from "../utils";
 import { tileCache } from "../cache";
 import type {
   StyleConfig,
@@ -33,6 +37,8 @@ export class GLTFParserPlugin {
   private _tiles: (TilesRenderer & Record<string, any>) | null = null;
   private _styleHelper: StyleHelper | null = null;
   private _loader: GLTFWorkerLoader | null = null;
+  /** 时间片调度器：按 buffer 字节预算限制同时解析的瓦片数量 */
+  private readonly _parseScheduler: TileParseScheduler;
 
   /** 全局 featureData 缓存：partId → 属性表整行数据，跨 mesh / 跨通道复用 */
   private readonly _featureDataCache = new Map<
@@ -62,6 +68,11 @@ export class GLTFParserPlugin {
 
     // --- Worker pool setup ---
     setMaxWorkers(this._options.maxWorkers);
+
+    // --- 时间片调度器：同时解析的瓦片 buffer 总量不超过预算（默认 1MB）---
+    this._parseScheduler = new TileParseScheduler(
+      this._options.maxConcurrentBytes,
+    );
   }
 
   /**
@@ -139,25 +150,37 @@ export class GLTFParserPlugin {
   }
 
   /**
-   * Parse tile data
+   * Parse tile data（经时间片调度器按 buffer 字节预算排队执行）
    */
-  async parseTile(
+  parseTile(
     buffer: ArrayBuffer,
     tile: any,
     extension: any,
     uri: string,
     abortSignal: AbortSignal,
-  ) {
-    if (this._options.beforeParseTile) {
-      buffer = await this._options.beforeParseTile(
-        buffer,
-        tile,
-        extension,
-        uri,
-        abortSignal,
-      );
-    }
-    return this._tiles!.parseTile(buffer, tile, extension, uri, abortSignal);
+  ): Promise<any> {
+    return this._parseScheduler.run(
+      buffer.byteLength,
+      async () => {
+        const finalBuffer = this._options.beforeParseTile
+          ? await this._options.beforeParseTile(
+              buffer,
+              tile,
+              extension,
+              uri,
+              abortSignal,
+            )
+          : buffer;
+        return this._tiles!.parseTile(
+          finalBuffer,
+          tile,
+          extension,
+          uri,
+          abortSignal,
+        );
+      },
+      abortSignal,
+    );
   }
 
   /**
