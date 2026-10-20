@@ -1,7 +1,7 @@
 /**
  * 默认同时处理的瓦片 buffer 总字节数上限：512KB
  */
-export const DEFAULT_MAX_CONCURRENT_BYTES = 512 * 1024;
+export const DEFAULT_MAX_CONCURRENT_BYTES = 1024 * 1024;
 
 /**
  * 排队任务条目
