@@ -57,6 +57,13 @@ export interface GLTFParserPluginOptions {
   maxWorkers?: number;
 
   /**
+   * 同时处理的瓦片（scene）buffer 总字节上限（时间片调度）
+   * 在途瓦片 buffer 总量超过该值时，后续瓦片排队等待先完成的瓦片释放额度
+   * @default 1024 * 1024 (1MB)
+   */
+  maxConcurrentBytes?: number;
+
+  /**
    * Custom material builder function
    * Used to handle GLTF material extensions or custom material logic
    */
