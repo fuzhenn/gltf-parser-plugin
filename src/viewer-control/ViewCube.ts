@@ -39,6 +39,7 @@ export class ViewCube {
   private raycaster = new THREE.Raycaster();
   private hoverIndex: number | null = null;
   private downPos: { x: number; y: number } | null = null;
+  private visible = true;
   private disposed = false;
 
   private options: ViewCubeOptions;
@@ -107,13 +108,13 @@ export class ViewCube {
 
   /** 每帧调用：让 ViewCube 的姿态与主相机保持同步（反向旋转） */
   public update(camera: THREE.Camera): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.visible) return;
     this.cube.quaternion.copy(camera.quaternion).invert();
   }
 
   /** 在主画布右上角以 scissor 视口叠加渲染 ViewCube（需在主场景渲染完成之后调用） */
   public render(renderer: THREE.WebGLRenderer): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.visible) return;
     const w = renderer.domElement.clientWidth;
     const h = renderer.domElement.clientHeight;
     const x = w - this.size - this.margin;
@@ -128,6 +129,22 @@ export class ViewCube {
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, w, h);
     renderer.autoClear = true;
+  }
+
+  /** 设置 ViewCube 的显示/隐藏（隐藏时同步隐藏交互层，不再响应事件与渲染） */
+  public setVisible(visible: boolean): void {
+    if (this.disposed || this.visible === visible) return;
+    this.visible = visible;
+    this.overlay.style.display = visible ? '' : 'none';
+    if (!visible) {
+      this.setHover(null);
+      this.downPos = null;
+    }
+  }
+
+  /** 当前是否可见 */
+  public isVisible(): boolean {
+    return this.visible;
   }
 
   public dispose(): void {

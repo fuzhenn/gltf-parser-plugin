@@ -17,6 +17,13 @@ export interface ViewerControlOptions {
    * 轨道目标（controls.target）默认为原点，如需修改请在构造后设置。
    */
   camera: THREE.PerspectiveCamera;
+  /**
+   * 是否启用 ViewCube（右上角视角立方体）。
+   * - 默认 true（启用）：每帧同步姿态并叠加渲染；
+   * - 为 false 时隐藏 ViewCube 及其交互层，update/renderViewCube 均跳过它；
+   * - 运行时可随时通过 setViewCubeEnabled() 切换。
+   */
+  viewCubeEnabled?: boolean;
 }
 
 interface FaceTween {
@@ -52,6 +59,7 @@ export class ViewerControl {
 
   private tween: FaceTween | null = null;
   private disposed = false;
+  private viewCubeEnabled = true;
 
   constructor(options: ViewerControlOptions) {
     const container = options.container;
@@ -78,6 +86,23 @@ export class ViewerControl {
       margin: 10,
       onFaceClick: (dir) => this.flyToDirection(dir),
     });
+
+    // ViewCube 开关设置（默认启用）
+    this.setViewCubeEnabled(options.viewCubeEnabled ?? true);
+  }
+
+  /**
+   * 设置是否启用 ViewCube。
+   * 禁用时会隐藏其交互层并跳过姿态同步与叠加渲染。
+   */
+  public setViewCubeEnabled(enabled: boolean): void {
+    this.viewCubeEnabled = enabled;
+    this.viewCube.setVisible(enabled);
+  }
+
+  /** 当前是否启用 ViewCube */
+  public isViewCubeEnabled(): boolean {
+    return this.viewCubeEnabled;
   }
 
   /** 将相机平滑重置到指定方向（ViewCube 点击时调用） */
@@ -124,8 +149,8 @@ export class ViewerControl {
 
     this.updateFaceTween(deltaTime);
     if (!this.tween) this.controls.update();
-    // ViewCube 姿态跟随相机同步变换
-    this.viewCube.update(this.camera);
+    // ViewCube 姿态跟随相机同步变换（禁用时跳过）
+    if (this.viewCubeEnabled) this.viewCube.update(this.camera);
   }
 
   /**
@@ -133,7 +158,7 @@ export class ViewerControl {
    * 必须在外部渲染完场景之后调用，否则会被场景渲染的清屏覆盖。
    */
   public renderViewCube(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.viewCubeEnabled) return;
     this.viewCube.render(this.renderer);
   }
 
