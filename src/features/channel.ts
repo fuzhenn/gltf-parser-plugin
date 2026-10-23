@@ -7,21 +7,17 @@ export type PartIdChannel = "oid" | "pid";
  * oid/pid 双通道的统一元数据：
  * - featureIndex：meshFeatures.featureIds 中的下标
  * - mapKey：idMap 挂在 mesh.userData 上的键
- * - idKey / collectorKey / namePrefix：split mesh userData 字段与命名
+ * - namePrefix：split mesh 命名前缀
  */
 export const CHANNEL_CONFIG = {
   oid: {
     featureIndex: 0,
     mapKey: "_tile_oidMap",
-    idKey: "oid",
-    collectorKey: "collectorOids",
     namePrefix: "merged_features",
   },
   pid: {
     featureIndex: 1,
     mapKey: "_tile_pidMap",
-    idKey: "pid",
-    collectorKey: "collectorPids",
     namePrefix: "merged_pids",
   },
 } as const;
