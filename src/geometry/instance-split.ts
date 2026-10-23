@@ -169,16 +169,9 @@ function createSplitInstancedMesh(
 
   newMesh.userData = {
     ...buildSplitUserData(originalMesh),
-    featureId: idMap[primaryId],
-    [cfg.idKey]: primaryId,
-    [cfg.collectorKey]: idsOnMesh,
     _originalMesh: originalMesh,
     propertyData,
     _isSplit: true,
-    isMergedSplit: true,
-    isInstancedSplit: true,
-    partIdChannel: channel,
-    splitInstanceIndices: [...instanceIndices],
   };
   newMesh.name = `${cfg.namePrefix}_inst_${idsOnMesh.length}_${primaryId}`;
   return newMesh;

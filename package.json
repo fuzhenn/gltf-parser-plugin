@@ -30,19 +30,19 @@
   "devDependencies": {
     "@types/node": "26.6.5",
     "@types/three": "^0.186.0",
-    "@typescript-eslint/eslint-plugin": "8.71.2",
-    "@typescript-eslint/parser": "8.71.2",
+    "@typescript-eslint/eslint-plugin": "8.72.0",
+    "@typescript-eslint/parser": "8.72.0",
     "@typescript/typescript6": "^6.0.2",
     "eslint": "10.13.0",
     "typescript": "^7.0.2",
-    "vite": "8.3.4",
+    "vite": "8.3.5",
     "vite-plugin-dts": "5.1.2",
     "vitest": "5.0.5"
   },
   "dependencies": {
     "3d-tiles-renderer": "^0.5.3",
-    "@maptalks/gltf-loader": "^0.124.4",
-    "@maptalks/transcoders.draco": "^0.124.4",
+    "@maptalks/gltf-loader": "0.126.0",
+    "@maptalks/transcoders.draco": "0.126.0",
     "fflate": "^0.8.3",
     "three": "^0.186.1"
   }

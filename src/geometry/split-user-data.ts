@@ -61,14 +61,9 @@ export function addMeshUserData(
 
   const userData: Record<string, unknown> = {
     ...tileMesh.userData,
-    featureId: idMap[primaryId],
-    [cfg.idKey]: primaryId,
-    [cfg.collectorKey]: idsOnMesh,
     _originalMesh: tileMesh,
     propertyData,
     _isSplit: true,
-    isMergedSplit: true,
-    partIdChannel: channel,
   };
   if (options?.splitGeometryManagedByCache) {
     userData.splitGeometryManagedByCache = true;
