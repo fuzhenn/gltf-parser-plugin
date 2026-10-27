@@ -3,6 +3,7 @@ import {
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
   type StyleCondition,
+  type StyleRefine,
   type StyleShowInput,
 } from "./appearance";
 import { getPartIdMapForFeatureAttribute } from "../features";
@@ -32,6 +33,7 @@ import { collectTileMeshesFromScene } from "../features";
 export class MeshCollector {
   readonly featureIdAttribute: number;
   private _condition: StyleCondition;
+  private readonly _refine: StyleRefine;
   private readonly _materialBuilder?: MaterialBuilder;
   private readonly _interactionFilter?: PartInteractionFilter;
   private readonly _getOidPathMap?: () => Map<number, string>;
@@ -51,6 +53,7 @@ export class MeshCollector {
     featureDataCache?: FeatureDataCache;
   }) {
     this._condition = params.condition;
+    this._refine = params.condition[1]?.refine ?? "replace";
     this._materialBuilder = params.materialBuilder;
     this._interactionFilter = params.interactionFilter;
     this._getOidPathMap = params.getOidPathMap;
@@ -172,6 +175,8 @@ export class MeshCollector {
 
   /** 把本条件在该 tile mesh 上命中的 featureId 原地累加进 out，避免中间 Set 分配 */
   addMatchedFeatureIds(tileMesh: Mesh, out: Set<number>): void {
+    // refine: add → split 仅叠加显示，命中部分不从 tile mesh index
+    if (this._refine === "add") return;
     const partIds = resolveMatchedPartIdsOnTileMesh(
       tileMesh,
       this._condition,

@@ -38,7 +38,7 @@ function fnIdentityKey(fn: Function): string {
 /** 外观片段 key（材质取 uuid / 函数实例标识，颜色与透明度取字面量） */
 export function buildAppearanceCacheKey(appearance?: StyleAppearance): string {
   if (!appearance) return "";
-  const { material, color, opacity, mesh } = appearance;
+  const { material, color, opacity, mesh, refine } = appearance;
   const matKey =
     material instanceof Material
       ? material.uuid
@@ -48,7 +48,7 @@ export function buildAppearanceCacheKey(appearance?: StyleAppearance): string {
   const meshKey = typeof mesh === "function"
     ? `mesh${fnIdentityKey(mesh)}`
     : "";
-  return `m${matKey}:c${color ?? ""}:o${opacity ?? ""}:${meshKey}`;
+  return `m${matKey}:c${color ?? ""}:o${opacity ?? ""}:${meshKey}:r${refine ?? "replace"}`;
 }
 
 /** split 缓存完整 key：条件 key + 外观 key */
