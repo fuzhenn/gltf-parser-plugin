@@ -39,6 +39,9 @@ export type StyleMeshFactory = (
   material: Material,
 ) => Mesh;
 
+/** refine 模式：命中部分与 tile mesh 原几何的关系 */
+export type StyleRefine = "replace" | "add";
+
 /** 条件命中后的外观：材质与位姿均可选（未传则保留原 mesh 对应分量） */
 export interface StyleAppearance {
   /**
@@ -63,6 +66,12 @@ export interface StyleAppearance {
    * 返回的 Mesh 会将其 geometry、material 写回当前 split mesh，uuid 不变。
    */
   mesh?: StyleMeshFactory;
+  /**
+   * 命中部分与 tile mesh 原几何的关系，默认 `"replace"`：
+   * - `"replace"`：split mesh 替代原几何，命中的部分从 tile mesh geometry 的 index 中剔除；
+   * - `"add"`：split mesh 仅叠加显示，tile mesh geometry 的 index 保持不变（原几何与样式副本同时可见）。
+   */
+  refine?: StyleRefine;
   translation?: StyleVec3Input;
   scale?: StyleVec3Input;
   rotation?: StyleEulerInput;
