@@ -150,7 +150,7 @@ export class StructureHelper {
   getOidPathMap(): Map<number, string> {
     this._syncStructureFromTileset();
     if (this._oidPathMap.size === 0) {
-      for (const tree of this._structureData!.trees ?? []) {
+      for (const tree of this._structureData?.trees ?? []) {
         this._buildOidPathMap(tree, "/");
       }
     }
