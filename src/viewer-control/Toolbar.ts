@@ -14,6 +14,20 @@ export enum CameraMode {
   Zoom = 'zoom',
 }
 
+export interface JumpToViewOptions {
+  /**
+   * 观察方向（世界坐标，自目标指向相机）。
+   * 缺省时保持相机当前相对轨道目标的观察方向。
+   */
+  direction?: THREE.Vector3;
+  /** 在内置 1.5 倍安全边距之上追加的留白比例（0.1 = 追加 10%）；默认 0 */
+  padding?: number;
+  /** 视口宽高比；缺省使用相机当前的 aspect */
+  aspect?: number;
+  /** 是否把轨道目标（controls.target）移动到包围盒中心；默认 true */
+  moveTarget?: boolean;
+}
+
 /**
  * Toolbar - 独立的工具栏组件，供 Viewer 创建、由外部程序使用。
  *
@@ -189,6 +203,72 @@ export class Toolbar {
         };
         break;
     }
+  }
+
+  /**
+   * 将相机视角调整到刚好可以完整显示 sceneBBox（即时跳转，无动画）。
+   *
+   * 距离计算：取包围盒最大边长 maxDim，按相机 FOV 反推观察距离 ——
+   * 垂直方向 maxDim / (2·tan(fov/2))，水平方向按 aspect 换算水平 FOV 后同理，
+   * 取两者较大者确保包围盒在两个方向都完整可见，再乘以 1.5 倍安全边距。
+   * 正交相机按 maxDim × 2 取距离。
+   * 观察方向缺省时保持相机当前的观察方向，仅调整距离与目标点。
+   *
+   * camera 缺省时使用 OrbitControls 绑定的相机；传入其他相机时仅调整其位置与朝向，
+   * 不改动 controls.target。直接改写相机位置即可：外部渲染循环每帧调用
+   * controls.update()，会基于新的相机位置重新计算内部球坐标。
+   *
+   * 无 sceneBBox 或包围盒为空时为空操作。
+   */
+  public jumpToView(camera?: THREE.Camera, options: JumpToViewOptions = {}): void {
+    if (this.disposed || !this.sceneBBox || this.sceneBBox.isEmpty()) return;
+    const cam = camera ?? this.controls.object;
+
+    const center = this.sceneBBox.getCenter(new THREE.Vector3());
+
+    // 观察方向：优先用指定方向，否则保持当前相机相对目标的偏移方向
+    const dir = options.direction
+      ? options.direction.clone().normalize()
+      : cam.position.clone().sub(this.controls.target);
+    // 方向退化为零向量（如相机恰在目标点上）时兜底取对角方向
+    if (dir.lengthSq() < 1e-12) dir.set(1, 1, 1).normalize();
+
+    // 包围盒最大边长，据此按相机 FOV 反推观察距离
+    const size = this.sceneBBox.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+
+    let dist: number;
+    if (cam instanceof THREE.PerspectiveCamera) {
+      const aspect = options.aspect ?? cam.aspect;
+      const fov = THREE.MathUtils.degToRad(cam.fov);
+      // 垂直 / 水平两个方向分别计算，取较大者确保包围盒完整在视野内
+      const distanceV = maxDim / (2 * Math.tan(fov / 2));
+      const fovHorizontal = 2 * Math.atan(Math.tan(fov / 2) * Math.max(aspect, 1e-6));
+      const distanceH = maxDim / (2 * Math.tan(fovHorizontal / 2));
+      dist = Math.max(distanceV, distanceH) * 1.5; // 1.5 倍安全边距
+
+      if (options.aspect !== undefined) {
+        cam.aspect = aspect;
+        cam.updateProjectionMatrix();
+      }
+    } else {
+      // 正交相机：不随距离改变视野大小，按经验值取 maxDim × 2
+      dist = maxDim * 2;
+    }
+
+    dist = THREE.MathUtils.clamp(
+      dist * (1 + Math.max(0, options.padding ?? 0)),
+      this.controls.minDistance,
+      this.controls.maxDistance,
+    );
+
+    // 仅当操作的是 OrbitControls 绑定的相机时才同步轨道目标，
+    // 否则相机与控制器目标分离会导致后续交互跳变
+    const moveTarget = options.moveTarget !== false && cam === this.controls.object;
+    if (moveTarget) this.controls.target.copy(center);
+
+    cam.position.copy(center).addScaledVector(dir, dist);
+    cam.lookAt(center);
   }
 
   /**
