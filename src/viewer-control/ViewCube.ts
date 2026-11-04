@@ -5,8 +5,19 @@ export interface ViewCubeOptions {
   size?: number;
   /** 距容器右上角的边距（像素），默认 10 */
   margin?: number;
+  /**
+   * 世界坐标的上方向轴：'Y_UP'（默认）或 'Z_UP'。
+   * 决定各面标签/世界方向的对应关系及立方体的对齐旋转，需与主相机 up 向量一致。
+   */
+  upAxis?: 'Y_UP' | 'Z_UP';
   /** 点击某个面时回调：direction 为相机应处于目标点的世界方向，label 为面的中文标识 */
   onFaceClick?: (direction: THREE.Vector3, label: string) => void;
+  /**
+   * 拖拽旋转回调：在 ViewCube 上按下并拖动超过阈值后触发。
+   * rotY 为水平拖拽对应的旋转弧度（绕视口竖直轴，右拖为正），
+   * rotX 为垂直拖拽对应的旋转弧度（绕视口水平轴，下拖为正）。
+   */
+  onDragRotate?: (rotY: number, rotX: number) => void;
 }
 
 interface FaceDef {
@@ -25,6 +36,8 @@ interface FaceDef {
  * - 立方体姿态跟随主相机同步旋转（局部坐标系与世界坐标系对齐）。
  * - 叠加渲染在主画布右上角的 scissor 视口中（需在主场景渲染完成之后调用 render）。
  * - 点击某个面可触发回调，将主相机重置到对应方向。
+ * - 按住拖拽可旋转视角：拖拽增量通过 onDragRotate 回调交由外部旋转主相机，
+ *   立方体姿态随主相机同步，表现为立方体与场景一起被拖动旋转。
  */
 export class ViewCube {
   public readonly size: number;
@@ -39,8 +52,16 @@ export class ViewCube {
   private raycaster = new THREE.Raycaster();
   private hoverIndex: number | null = null;
   private downPos: { x: number; y: number } | null = null;
+  private dragging = false;
+  private lastDragPos: { x: number; y: number } | null = null;
+  /** 拖拽角速度：拖过一个 ViewCube 宽度约旋转 180° */
+  private readonly rotateSpeed: number;
   private visible = true;
   private disposed = false;
+  /** 世界坐标上方向轴（构造时确定） */
+  private upAxis: 'Y_UP' | 'Z_UP';
+  /** Z-UP 时把立方体从 Y-UP 惯例对齐到 Z-UP 的旋转（绕 X 轴 +90°），Y-UP 时为单位旋转 */
+  private upAlignQuat = new THREE.Quaternion();
 
   private options: ViewCubeOptions;
 
@@ -53,18 +74,37 @@ export class ViewCube {
     this.options = options;
     this.size = options.size ?? 120;
     this.margin = options.margin ?? 10;
+    this.rotateSpeed = Math.PI / this.size;
+
+    // 上方向轴：Z-UP 时用绕 X 轴 +90° 的对齐旋转，使立方体局部 +Y 对齐世界 +Z，
+    // 保证各侧面文字在对应正视方向下保持直立（与 Y-UP 时的表现一致）
+    this.upAxis = options.upAxis ?? 'Y_UP';
+    if (this.upAxis === 'Z_UP') {
+      this.upAlignQuat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    }
 
     // 立方体与六个面的标签：右/左/上/下/前/后
     // 注意：顺序必须与 BoxGeometry 的材质索引顺序一致：
-    // 0:+X, 1:-X, 2:+Y, 3:-Y, 4:+Z, 5:-Z
-    const faceDefs: Array<{ normal: THREE.Vector3; label: string }> = [
-      { normal: new THREE.Vector3(1, 0, 0), label: '右' }, // +X
-      { normal: new THREE.Vector3(-1, 0, 0), label: '左' }, // -X
-      { normal: new THREE.Vector3(0, 1, 0), label: '上' }, // +Y
-      { normal: new THREE.Vector3(0, -1, 0), label: '下' }, // -Y
-      { normal: new THREE.Vector3(0, 0, 1), label: '前' }, // +Z
-      { normal: new THREE.Vector3(0, 0, -1), label: '后' }, // -Z
-    ];
+    // 0:+X, 1:-X, 2:+Y, 3:-Y, 4:+Z, 5:-Z；
+    // normal 为该面对应的世界方向（随 upAxis 变化），点击时作为目标相机方向回调
+    const faceDefs: Array<{ normal: THREE.Vector3; label: string }> =
+      this.upAxis === 'Z_UP'
+        ? [
+            { normal: new THREE.Vector3(1, 0, 0), label: '右' }, // +X
+            { normal: new THREE.Vector3(-1, 0, 0), label: '左' }, // -X
+            { normal: new THREE.Vector3(0, 0, 1), label: '上' }, // +Z
+            { normal: new THREE.Vector3(0, 0, -1), label: '下' }, // -Z
+            { normal: new THREE.Vector3(0, -1, 0), label: '前' }, // -Y（Z-UP 惯例：-Y 朝前）
+            { normal: new THREE.Vector3(0, 1, 0), label: '后' }, // +Y
+          ]
+        : [
+            { normal: new THREE.Vector3(1, 0, 0), label: '右' }, // +X
+            { normal: new THREE.Vector3(-1, 0, 0), label: '左' }, // -X
+            { normal: new THREE.Vector3(0, 1, 0), label: '上' }, // +Y
+            { normal: new THREE.Vector3(0, -1, 0), label: '下' }, // -Y
+            { normal: new THREE.Vector3(0, 0, 1), label: '前' }, // +Z
+            { normal: new THREE.Vector3(0, 0, -1), label: '后' }, // -Z
+          ];
     const materials = faceDefs.map((def) => {
       const texNormal = this.createFaceTexture(def.label, false);
       const texHover = this.createFaceTexture(def.label, true);
@@ -96,20 +136,24 @@ export class ViewCube {
       width: `${this.size}px`,
       height: `${this.size}px`,
       zIndex: '15',
-      cursor: 'default',
+      cursor: 'grab',
       touchAction: 'none',
     } as CSSStyleDeclaration);
     this.overlay.addEventListener('pointermove', this.onPointerMove);
     this.overlay.addEventListener('pointerleave', this.onPointerLeave);
     this.overlay.addEventListener('pointerdown', this.onPointerDown);
     this.overlay.addEventListener('pointerup', this.onPointerUp);
+    this.overlay.addEventListener('pointercancel', this.onPointerCancel);
     overlayHost.appendChild(this.overlay);
   }
 
   /** 每帧调用：让 ViewCube 的姿态与主相机保持同步（反向旋转） */
   public update(camera: THREE.Camera): void {
     if (this.disposed || !this.visible) return;
+    // 立方体姿态 = 相机姿态的逆；Z-UP 时再左乘对齐旋转（绕 X 轴 +90°），
+    // 使立方体局部 +Y 对齐世界 +Z
     this.cube.quaternion.copy(camera.quaternion).invert();
+    if (this.upAxis === 'Z_UP') this.cube.quaternion.multiply(this.upAlignQuat);
   }
 
   /** 在主画布右上角以 scissor 视口叠加渲染 ViewCube（需在主场景渲染完成之后调用） */
@@ -139,6 +183,8 @@ export class ViewCube {
     if (!visible) {
       this.setHover(null);
       this.downPos = null;
+      this.dragging = false;
+      this.lastDragPos = null;
     }
   }
 
@@ -154,6 +200,7 @@ export class ViewCube {
     this.overlay.removeEventListener('pointerleave', this.onPointerLeave);
     this.overlay.removeEventListener('pointerdown', this.onPointerDown);
     this.overlay.removeEventListener('pointerup', this.onPointerUp);
+    this.overlay.removeEventListener('pointercancel', this.onPointerCancel);
     this.overlay.remove();
     for (const face of this.faces) {
       face.texNormal.dispose();
@@ -173,7 +220,7 @@ export class ViewCube {
     ctx.strokeStyle = hover ? '#ffffff' : '#9aa0a6';
     ctx.lineWidth = 6;
     ctx.strokeRect(4, 4, 120, 120);
-    ctx.fillStyle = hover ? '#ffffff' : '#3c4043';
+    ctx.fillStyle = hover ? '#ffffff' : '#9aa0a6';
     ctx.font = 'bold 64px "Microsoft YaHei", "PingFang SC", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -218,15 +265,39 @@ export class ViewCube {
       f.material.needsUpdate = true;
       this.overlay.style.cursor = 'pointer';
     } else {
-      this.overlay.style.cursor = 'default';
+      this.overlay.style.cursor = 'grab';
     }
   }
 
   private onPointerMove = (e: PointerEvent): void => {
+    if (this.downPos) {
+      // 按下状态：超过阈值后进入拖拽旋转
+      if (!this.dragging) {
+        const dx = e.clientX - this.downPos.x;
+        const dy = e.clientY - this.downPos.y;
+        if (dx * dx + dy * dy > 25) {
+          this.dragging = true;
+          this.lastDragPos = { x: e.clientX, y: e.clientY };
+          this.setHover(null);
+          this.overlay.style.cursor = 'grabbing';
+        }
+      } else {
+        const last = this.lastDragPos;
+        if (!last) return;
+        const ldx = e.clientX - last.x;
+        const ldy = e.clientY - last.y;
+        this.lastDragPos = { x: e.clientX, y: e.clientY };
+        const rotY = ldx * this.rotateSpeed;
+        const rotX = ldy * this.rotateSpeed;
+        if (rotY !== 0 || rotX !== 0) this.options.onDragRotate?.(rotY, rotX);
+      }
+      return;
+    }
     this.setHover(this.raycastFace(e));
   };
 
   private onPointerLeave = (): void => {
+    if (this.dragging) return;
     this.setHover(null);
     this.downPos = null;
   };
@@ -234,20 +305,39 @@ export class ViewCube {
   private onPointerDown = (e: PointerEvent): void => {
     if (e.button !== 0) return;
     this.downPos = { x: e.clientX, y: e.clientY };
+    // 捕获指针，拖出 ViewCube 区域时仍能继续接收 move/up 事件
+    this.overlay.setPointerCapture(e.pointerId);
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (e.button !== 0 || !this.downPos) return;
-    const dx = e.clientX - this.downPos.x;
-    const dy = e.clientY - this.downPos.y;
+    if (e.button !== 0) return;
+    if (this.overlay.hasPointerCapture(e.pointerId)) {
+      this.overlay.releasePointerCapture(e.pointerId);
+    }
+    const wasDragging = this.dragging;
+    this.dragging = false;
+    this.lastDragPos = null;
+    const start = this.downPos;
     this.downPos = null;
-    if (dx * dx + dy * dy > 25) return; // 视为拖拽，不触发点击
+    this.overlay.style.cursor = 'grab';
+    if (wasDragging || !start) return; // 拖拽结束不触发点击
+
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (dx * dx + dy * dy > 25) return;
 
     const index = this.raycastFace(e);
     if (index === null) return;
     const face = this.faces[index];
     // 立方体姿态是主相机姿态的逆，因此面的本地法线即目标世界方向
     this.options.onFaceClick?.(face.normal.clone(), face.label);
+  };
+
+  private onPointerCancel = (): void => {
+    this.dragging = false;
+    this.lastDragPos = null;
+    this.downPos = null;
+    this.overlay.style.cursor = 'grab';
   };
 
   /** 供 Viewer 后续更新点击回调 */
