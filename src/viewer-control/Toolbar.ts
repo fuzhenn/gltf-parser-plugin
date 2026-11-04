@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { ClippingPlane, type ClippingAxis } from './ClippingPlane';
+import { SectionBox, type SectionBoxOptions } from './SectionBox';
 
 export enum CameraMode {
   /** 默认模式：左键旋转、右键平移、滚轮缩放；单指触控旋转 */
@@ -37,6 +38,8 @@ export class Toolbar {
   private sceneBBox: THREE.Box3 | null;
   /** 当前剖切面，null 表示未创建 */
   private clippingPlane: ClippingPlane | null = null;
+  /** 当前剖切框，null 表示未创建 */
+  private sectionBox: SectionBox | null = null;
 
   /**
    * 缩放模式下的缩放速度（默认 1）。
@@ -248,9 +251,53 @@ export class Toolbar {
     return this.clippingPlane ? [this.clippingPlane.getPlane()] : [];
   }
 
+  /**
+   * 创建 Revit 风格的剖切框，大小与位置基于 ViewerControl 的 sceneBBox。
+   * 已存在剖切框时会先移除旧的再创建新的。
+   * 拖拽剖切框期间由 Toolbar 内部暂停 / 恢复 OrbitControls，避免两个控制器抢占指针。
+   * 返回创建的 SectionBox（无 sceneBBox 或已释放时返回 null）；
+   * 其 object3d 与 gizmoHelper 需由外部加入场景渲染。
+   */
+  public createSectionBox(options: Omit<SectionBoxOptions, 'onDraggingChange'> = {}): SectionBox | null {
+    if (this.disposed || !this.sceneBBox || !this.canvas) return null;
+    this.removeSectionBox();
+    this.sectionBox = new SectionBox(this.controls.object, this.canvas, this.sceneBBox, {
+      ...options,
+      onDraggingChange: (dragging) => {
+        // 拖拽剖切框期间暂停轨道相机，避免两个控制器抢占指针
+        this.controls.enabled = !dragging;
+      },
+    });
+    return this.sectionBox;
+  }
+
+  /** 移除当前剖切框（可视化对象同时从场景中摘除，事件与资源一并释放） */
+  public removeSectionBox(): void {
+    if (this.sectionBox) {
+      this.sectionBox.dispose();
+      this.sectionBox = null;
+    }
+  }
+
+  /** 当前剖切框；未创建时返回 null */
+  public getSectionBox(): SectionBox | null {
+    return this.sectionBox;
+  }
+
+  /** 是否已创建剖切框 */
+  public hasSectionBox(): boolean {
+    return this.sectionBox !== null;
+  }
+
+  /** 返回剖切框的 6 个裁剪平面；未创建剖切框时返回空数组（原地同步，无需重复获取） */
+  public getSectionBoxPlanes(): THREE.Plane[] {
+    return this.sectionBox ? this.sectionBox.getPlanes() : [];
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.removeClippingPlane();
+    this.removeSectionBox();
     const el = this.canvas;
     if (el) {
       el.removeEventListener('pointerdown', this.onPointerDown);
