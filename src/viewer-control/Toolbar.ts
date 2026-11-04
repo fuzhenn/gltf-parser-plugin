@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { ClippingPlane, type ClippingAxis } from './ClippingPlane';
 
 export enum CameraMode {
   /** 默认模式：左键旋转、右键平移、滚轮缩放；单指触控旋转 */
@@ -32,6 +33,10 @@ export class Toolbar {
   private canvas: HTMLElement | null = null;
   private disposed = false;
   private mode: CameraMode = CameraMode.Default;
+  /** 场景包围盒（由 ViewerControl 传入），用于创建剖切面 */
+  private sceneBBox: THREE.Box3 | null;
+  /** 当前剖切面，null 表示未创建 */
+  private clippingPlane: ClippingPlane | null = null;
 
   /**
    * 缩放模式下的缩放速度（默认 1）。
@@ -106,8 +111,9 @@ export class Toolbar {
     }
   };
 
-  constructor(controls: OrbitControls) {
+  constructor(controls: OrbitControls, sceneBBox?: THREE.Box3 | null) {
     this.controls = controls;
+    this.sceneBBox = sceneBBox ?? null;
 
     // 缩放模式的自定义拖拽缩放监听（挂在画布上，OrbitControls 在拖拽期间
     // 会对画布做指针捕获，因此指针移出画布也能持续收到 move 事件）
@@ -182,8 +188,69 @@ export class Toolbar {
     }
   }
 
+  /**
+   * 创建沿指定轴（x / y / z）的剖切面，大小与位置基于 ViewerControl 的 sceneBBox。
+   * 已存在剖切面时会先移除旧的再创建新的。
+   * 返回创建的 ClippingPlane（无 sceneBBox 或已释放时返回 null）。
+   */
+  public createClippingPlane(axis: ClippingAxis): ClippingPlane | null {
+    if (this.disposed || !this.sceneBBox) return null;
+    this.removeClippingPlane();
+    this.clippingPlane = new ClippingPlane(this.sceneBBox, axis);
+    // 操作柄的指针交互（命中拦截 / 法线方向拖拽 / 悬停光标）由 ClippingPlaneHandle 自行监听
+    if (this.canvas) this.clippingPlane.handle.attachInteraction(this.canvas, this.controls, this.clippingPlane);
+    // 旋转手柄（两个圆环）的指针交互（绕圆环法线旋转剖切面），须在平移手柄之后绑定
+    if (this.canvas) {
+      this.clippingPlane.rotationHandle.attachInteraction(this.canvas, this.controls, this.clippingPlane);
+    }
+    return this.clippingPlane;
+  }
+
+  /** 移除当前剖切面（可视化对象同时从场景中摘除） */
+  public removeClippingPlane(): void {
+    if (this.clippingPlane) {
+      this.clippingPlane.dispose();
+      this.clippingPlane = null;
+    }
+  }
+
+  /** 当前剖切面；未创建时返回 null */
+  public getClippingPlane(): ClippingPlane | null {
+    return this.clippingPlane;
+  }
+
+  /** 当前剖切面的可视化对象（含面片、边框与操作柄）；未创建时返回 null */
+  public getClippingObject(): THREE.Group | null {
+    return this.clippingPlane ? this.clippingPlane.object3d : null;
+  }
+
+  /** 是否已创建剖切面 */
+  public hasClippingPlane(): boolean {
+    return this.clippingPlane !== null;
+  }
+
+  /**
+   * 返回剖切面结果（可直接作为 renderer.clippingPlanes 或
+   * material.clippingPlanes 使用）；未创建剖切面时返回空数组。
+   * 返回的是内部 Plane 实例，剖切面位置/方向更新时原地同步，无需重复获取。
+   */
+  /**
+   * 每帧更新剖切面操作柄的屏幕显示尺寸（固定 100 像素长度），
+   * 由外部渲染循环在渲染前调用；未创建剖切面时为空操作。
+   */
+  public updateClippingPlaneScreenSize(): void {
+    if (this.disposed || !this.clippingPlane || !this.canvas) return;
+    const rect = this.canvas.getBoundingClientRect();
+    this.clippingPlane.updateHandleScreenSize(this.controls.object, rect.height);
+  }
+
+  public getClippingPlanes(): THREE.Plane[] {
+    return this.clippingPlane ? [this.clippingPlane.getPlane()] : [];
+  }
+
   public dispose(): void {
     if (this.disposed) return;
+    this.removeClippingPlane();
     const el = this.canvas;
     if (el) {
       el.removeEventListener('pointerdown', this.onPointerDown);
