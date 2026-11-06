@@ -127,7 +127,6 @@ export class SectionBox {
 
     // 6 个裁剪平面：法线朝向框内，框内一侧（distance >= 0）保留，框外被裁掉。
     // 顺序：X 最小面 / X 最大面 / Y 最小面 / Y 最大面 / Z 最小面 / Z 最大面
-    const half = this.size.clone().multiplyScalar(0.5);
     this.planes = [
       new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
       new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0),
