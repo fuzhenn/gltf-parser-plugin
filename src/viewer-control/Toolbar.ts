@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { ClippingPlane, type ClippingAxis } from './ClippingPlane';
 import { SectionBox, type SectionBoxOptions } from './SectionBox';
+import type { UpAxis } from './ViewerControls';
 
 export enum CameraMode {
   /** 默认模式：左键旋转、右键平移、滚轮缩放；单指触控旋转 */
@@ -48,8 +49,10 @@ export class Toolbar {
   private canvas: HTMLElement | null = null;
   private disposed = false;
   private mode: CameraMode = CameraMode.Default;
-  /** 场景包围盒（由 ViewerControl 传入），用于创建剖切面 */
+  /** 场景包围盒（由 ViewerControls 传入），用于创建剖切面 */
   private sceneBBox: THREE.Box3 | null;
+  /** 世界坐标上方向轴（由 ViewerControls 传入），创建剖切面 / 剖切框时向下传递 */
+  private readonly upAxis: UpAxis;
   /** 当前剖切面，null 表示未创建 */
   private clippingPlane: ClippingPlane | null = null;
   /** 当前剖切框，null 表示未创建 */
@@ -128,9 +131,10 @@ export class Toolbar {
     }
   };
 
-  constructor(controls: OrbitControls, sceneBBox?: THREE.Box3 | null) {
+  constructor(controls: OrbitControls, sceneBBox?: THREE.Box3 | null, upAxis: UpAxis = 'Z_UP') {
     this.controls = controls;
     this.sceneBBox = sceneBBox ?? null;
+    this.upAxis = upAxis;
 
     // 缩放模式的自定义拖拽缩放监听（挂在画布上，OrbitControls 在拖拽期间
     // 会对画布做指针捕获，因此指针移出画布也能持续收到 move 事件）
@@ -206,7 +210,9 @@ export class Toolbar {
   }
 
   /**
-   * 将相机视角调整到刚好可以完整显示 sceneBBox（即时跳转，无动画）。
+   * 将相机视角调整到刚好可以完整显示 sceneBox（即时跳转，无动画）。
+   *
+   * sceneBox 为必填参数，相机参数完全基于它计算，不使用实例上的 sceneBBox。
    *
    * 距离计算：取包围盒最大边长 maxDim，按相机 FOV 反推观察距离 ——
    * 垂直方向 maxDim / (2·tan(fov/2))，水平方向按 aspect 换算水平 FOV 后同理，
@@ -218,13 +224,14 @@ export class Toolbar {
    * 不改动 controls.target。直接改写相机位置即可：外部渲染循环每帧调用
    * controls.update()，会基于新的相机位置重新计算内部球坐标。
    *
-   * 无 sceneBBox 或包围盒为空时为空操作。
+   * 包围盒为空时为空操作。
    */
-  public jumpToView(camera?: THREE.Camera, options: JumpToViewOptions = {}): void {
-    if (this.disposed || !this.sceneBBox || this.sceneBBox.isEmpty()) return;
+  public jumpToView(sceneBox: THREE.Box3, camera?: THREE.Camera, options: Omit<JumpToViewOptions, 'sceneBox'> = {}): void {
+    if (this.disposed) return;
+    if (!sceneBox || sceneBox.isEmpty()) return;
     const cam = camera ?? this.controls.object;
 
-    const center = this.sceneBBox.getCenter(new THREE.Vector3());
+    const center = sceneBox.getCenter(new THREE.Vector3());
 
     // 观察方向：优先用指定方向，否则保持当前相机相对目标的偏移方向
     const dir = options.direction
@@ -234,7 +241,7 @@ export class Toolbar {
     if (dir.lengthSq() < 1e-12) dir.set(1, 1, 1).normalize();
 
     // 包围盒最大边长，据此按相机 FOV 反推观察距离
-    const size = this.sceneBBox.getSize(new THREE.Vector3());
+    const size = sceneBox.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
 
     let dist: number;
@@ -272,14 +279,14 @@ export class Toolbar {
   }
 
   /**
-   * 创建沿指定轴（x / y / z）的剖切面，大小与位置基于 ViewerControl 的 sceneBBox。
+   * 创建沿指定轴（x / y / z）的剖切面，大小与位置基于 ViewerControls 的 sceneBBox。
    * 已存在剖切面时会先移除旧的再创建新的。
    * 返回创建的 ClippingPlane（无 sceneBBox 或已释放时返回 null）。
    */
   public createClippingPlane(axis: ClippingAxis): ClippingPlane | null {
     if (this.disposed || !this.sceneBBox) return null;
     this.removeClippingPlane();
-    this.clippingPlane = new ClippingPlane(this.sceneBBox, axis);
+    this.clippingPlane = new ClippingPlane(this.sceneBBox, axis, { upAxis: this.upAxis });
     // 操作柄的指针交互（命中拦截 / 法线方向拖拽 / 悬停光标）由 ClippingPlaneHandle 自行监听
     if (this.canvas) this.clippingPlane.handle.attachInteraction(this.canvas, this.controls, this.clippingPlane);
     // 旋转手柄（两个圆环）的指针交互（绕圆环法线旋转剖切面），须在平移手柄之后绑定
@@ -332,7 +339,7 @@ export class Toolbar {
   }
 
   /**
-   * 创建 Revit 风格的剖切框，大小与位置基于 ViewerControl 的 sceneBBox。
+   * 创建 Revit 风格的剖切框，大小与位置基于 ViewerControls 的 sceneBBox。
    * 已存在剖切框时会先移除旧的再创建新的。
    * 拖拽剖切框期间由 Toolbar 内部暂停 / 恢复 OrbitControls，避免两个控制器抢占指针。
    * 返回创建的 SectionBox（无 sceneBBox 或已释放时返回 null）；
@@ -343,6 +350,8 @@ export class Toolbar {
     this.removeSectionBox();
     this.sectionBox = new SectionBox(this.controls.object, this.canvas, this.sceneBBox, {
       ...options,
+      // 调用方未显式指定时沿用 Viewer 的 upAxis，保证 Y-UP 下竖直方向约束正确
+      upAxis: options.upAxis ?? this.upAxis,
       onDraggingChange: (dragging) => {
         // 拖拽剖切框期间暂停轨道相机，避免两个控制器抢占指针
         this.controls.enabled = !dragging;

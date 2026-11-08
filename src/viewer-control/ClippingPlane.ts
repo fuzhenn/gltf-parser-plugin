@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ClippingPlaneHandle } from './ClippingPlaneHandle';
 import { ClippingPlaneRotationHandle } from './ClippingPlaneRotationHandle';
+import type { UpAxis } from './ViewerControls';
 
 /** 剖切面轴向（沿 x / y / z 轴创建） */
 export type ClippingAxis = 'x' | 'y' | 'z';
@@ -12,12 +13,21 @@ export interface ClippingPlaneOptions {
   flip?: boolean;
   /** 边框线颜色，默认深灰 0x444444 */
   borderColor?: number;
+  /**
+   * 世界坐标的上方向轴。
+   * - 'Y_UP'：Y 轴向上（three.js 默认习惯），相机 up = (0,1,0)；
+   * - 'Z_UP'：Z 轴向上（CAD 常用习惯），相机 up = (0,0,1)；
+   * 默认 'Z_UP'。仅构造时生效，不支持运行时切换。
+   *
+   * axis 参数始终按世界坐标轴解释（剖切 Z = 世界 Z 面），不随 upAxis 换算。
+   */
+  upAxis?: UpAxis;
 }
 
 /**
  * ClippingPlane - 场景剖切面（渲染逻辑独立成类，由 Toolbar 调用）。
  *
- * - 剖切面大小与位置由场景包围盒（ViewerControl.sceneBBox）决定：
+ * - 剖切面大小与位置由场景包围盒（ViewerControls.sceneBBox）决定：
  *   面片尺寸取包围盒在垂直于剖切轴的两个方向上的尺寸，
  *   初始位置默认为包围盒沿剖切轴的中点；
  * - 同时持有可视化边框线（挂在本类持有的 Group 上，
@@ -27,8 +37,10 @@ export interface ClippingPlaneOptions {
  * - 可视化面片沿法线方向做了微小偏移，避免被自己的剖切平面裁掉。
  */
 export class ClippingPlane {
-  /** 剖切轴 */
+  /** 剖切面法线所沿的世界坐标轴（按世界坐标直接解释，不随 upAxis 换算） */
   public readonly axis: ClippingAxis;
+  /** 世界坐标上方向轴（构造时确定，不可变更） */
+  public readonly upAxis: UpAxis;
   /** 创建时依据的场景包围盒（内部复制保存） */
   public readonly sceneBBox: THREE.Box3;
   /** 可视化对象（含面片与边框），由外部加入场景渲染 */
@@ -56,21 +68,23 @@ export class ClippingPlane {
 
   constructor(sceneBBox: THREE.Box3, axis: ClippingAxis, options: ClippingPlaneOptions = {}) {
     this.sceneBBox = sceneBBox.clone();
+    // axis 参数按世界坐标轴直接解释（剖切 Z = 世界 Z 面），不随 upAxis 换算
+    this.upAxis = options.upAxis ?? 'Z_UP';
     this.axis = axis;
     this.normalSign = options.flip ? -1 : 1;
-    // 初始位置：按旧的沿轴位置比例换算为沿（未旋转，即轴方向）法线的偏移量
+    // 初始位置：按旧的沿轴位置比例换算为沿（未旋转，即世界轴方向）法线的偏移量
     const t = THREE.MathUtils.clamp(options.positionT ?? 0.5, 0, 1);
-    const axisSize = this.sceneBBox.max[axis] - this.sceneBBox.min[axis];
+    const axisSize = this.sceneBBox.max[this.axis] - this.sceneBBox.min[this.axis];
     this.normalOffset = (t - 0.5) * axisSize;
 
     const size = this.sceneBBox.getSize(new THREE.Vector3());
-    // 面片尺寸：取垂直于剖切轴的两个方向上的包围盒尺寸。
+    // 面片尺寸：取垂直于剖切轴（世界轴）的两个方向上的包围盒尺寸。
     // 注意 X 轴时面片绕 Y 轴旋转 90°，几何本地 X 对应世界 Z、本地 Y 对应世界 Y，
     // 故宽取 size.z、高取 size.y；Y/Z 轴时本地 XY 恰好对应世界对应方向。
     const [w, h] =
-      axis === 'x'
+      this.axis === 'x'
         ? [size.z, size.y]
-        : axis === 'y'
+        : this.axis === 'y'
           ? [size.x, size.z]
           : [size.x, size.y];
     this.epsilon = Math.max(size.x, size.y, size.z) * 1e-3;
@@ -94,11 +108,9 @@ export class ClippingPlane {
     this.rotationHandle = new ClippingPlaneRotationHandle(Math.max(size.x, size.y, size.z));
     this.object3d.add(this.rotationHandle.object3d);
 
-    // 剖切平面：法线沿剖切轴（可翻转），过当前面片位置
+    // 剖切平面：法线沿世界剖切轴，含 flip 方向符号，过当前面片位置
     const normal = new THREE.Vector3();
-    if (axis === 'x') normal.set(1, 0, 0);
-    else if (axis === 'y') normal.set(0, 1, 0);
-    else normal.set(0, 0, 1);
+    normal[this.axis] = 1;
     normal.multiplyScalar(this.normalSign);
     this.plane = new THREE.Plane(normal.clone(), 0);
 
@@ -190,10 +202,13 @@ export class ClippingPlane {
 
   /** 依据当前中心点与旋转同步可视化面片、剖切平面 constant 与操作柄 */
   private updateTransform(): void {
-    // 剖切面法线：基准轴方向 × 方向符号，再应用用户旋转
+    // 剖切面法线：世界轴方向 × flip 符号，再应用用户旋转
     const axisNormal = new THREE.Vector3();
     axisNormal[this.axis] = 1;
-    this.plane.normal.copy(axisNormal).multiplyScalar(this.normalSign).applyQuaternion(this.rotationQuat);
+    this.plane.normal
+      .copy(axisNormal)
+      .multiplyScalar(this.normalSign)
+      .applyQuaternion(this.rotationQuat);
 
     // 法向偏移量为派生值：中心点相对包围盒中心在当前法线方向上的投影
     this.normalOffset = this.planePoint
