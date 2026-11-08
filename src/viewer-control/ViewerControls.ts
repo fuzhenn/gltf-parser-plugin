@@ -6,17 +6,17 @@ import { Toolbar, CameraMode } from './Toolbar';
 /** 世界坐标上方向轴：'Y_UP' 表示 Y 轴向上，'Z_UP' 表示 Z 轴向上 */
 export type UpAxis = 'Y_UP' | 'Z_UP';
 
-export interface ViewerControlOptions {
+export interface ViewerControlsOptions {
   /**
    * 挂载容器（DOM 元素）。工具栏与 ViewCube 的悬浮层以 absolute 定位放置其中，
    * 因此容器应为非 static 定位（如 position: relative），由外部负责设置。
    */
   container: HTMLElement;
-  /** 外部创建并完成画布挂载/尺寸设置的渲染器（ViewerControl 仅负责自适应尺寸与 ViewCube 叠加渲染） */
+  /** 外部创建并完成画布挂载/尺寸设置的渲染器（ViewerControls 仅负责自适应尺寸与 ViewCube 叠加渲染） */
   renderer: THREE.WebGLRenderer;
   /**
    * 外部创建的相机（含位置、朝向、aspect 等全部初始状态）。
-   * 注意：相机 up 向量由 upAxis 配置决定，ViewerControl 会在构造 OrbitControls 前
+   * 注意：相机 up 向量由 upAxis 配置决定，ViewerControls 会在构造 OrbitControls 前
    * 覆盖设置（OrbitControls 构造时会基于 camera.up 缓存内部旋转基准）。
    * 轨道目标（controls.target）默认为原点，如需修改请在构造后设置。
    */
@@ -57,19 +57,19 @@ interface FaceTween {
 }
 
 /**
- * ViewerControl - 基于 Three.js 的 CAD 风格三维查看器。
+ * ViewerControls - 基于 Three.js 的 CAD 风格三维查看器。
  *
  * - renderer、camera、scene 均由外部创建：renderer（含画布挂载）与 camera 通过构造参数传入，scene 由外部闭包持有；
- * - ViewerControl 不决定何时渲染场景，也不持有场景；场景渲染时机与逻辑完全由外部掌控；
+ * - ViewerControls 不决定何时渲染场景，也不持有场景；场景渲染时机与逻辑完全由外部掌控；
  * - 渲染循环由外部驱动：外部每帧调用 update(deltaTime) 更新相机/控制器/ViewCube 姿态，
  *   自行渲染场景，并在场景渲染之后调用 renderViewCube() 叠加渲染 ViewCube；
- * - ViewerControl 负责相机/控制器与工具栏；尺寸自适应（相机 aspect 与 renderer 画布）完全由外部负责；
+ * - ViewerControls 负责相机/控制器与工具栏；尺寸自适应（相机 aspect 与 renderer 画布）完全由外部负责；
  * - 通过 upAxis 配置支持 Y-UP / Z-UP 世界（默认 Z-UP），构造时据此设置相机 up 向量，
  *   并同步 ViewCube 的面标签与对齐方式；
  * - 容器 DOM 仅在构造时使用，不作为成员保存。
  */
-export class ViewerControl {
-  /** 相机操作模式，外部通过 ViewerControl.CameraMode 访问 */
+export class ViewerControls {
+  /** 相机操作模式，外部通过 ViewerControls.CameraMode 访问 */
   public static readonly CameraMode = CameraMode;
 
   public readonly renderer: THREE.WebGLRenderer;
@@ -88,17 +88,17 @@ export class ViewerControl {
   private disposed = false;
   private viewCubeEnabled = true;
 
-  constructor(options: ViewerControlOptions) {
+  constructor(options: ViewerControlsOptions) {
     const container = options.container;
 
     // 场景包围盒（不会变化），复制保存备用
     this.sceneBBox = options.sceneBBox ? options.sceneBBox.clone() : null;
 
-    // 渲染器由外部创建并完成画布挂载，ViewerControl 不构造、不销毁、不挂载，
+    // 渲染器由外部创建并完成画布挂载，ViewerControls 不构造、不销毁、不挂载，
     // 尺寸自适应完全由外部负责
     this.renderer = options.renderer;
 
-    // 相机由外部创建并完成初始状态设置，ViewerControl 不构造
+    // 相机由外部创建并完成初始状态设置，ViewerControls 不构造
     this.camera = options.camera;
 
     // 上方向轴配置（默认 Z-UP），据此设置相机 up 向量；
@@ -117,7 +117,7 @@ export class ViewerControl {
     this.controls.update();
 
     // 工具栏（独立类）。Toolbar 不涉及 DOM、不构造按钮，容器与按钮均由外部程序创建并挂载
-    this.toolbar = new Toolbar(this.controls, this.sceneBBox);
+    this.toolbar = new Toolbar(this.controls, this.sceneBBox, this.upAxis);
 
     // ViewCube（独立类，叠加渲染在主画布右上角）
     this.viewCube = new ViewCube(this.renderer.domElement, container, {

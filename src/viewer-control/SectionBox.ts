@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { UpAxis } from './ViewerControl';
+import { UpAxis } from './ViewerControls';
 
 export interface SectionBoxOptions {
   /** 边框线颜色，默认橙色 0xff9f43 */
@@ -24,7 +24,7 @@ export interface SectionBoxOptions {
 /**
  * SectionBox - Revit 风格的剖切框（渲染与交互逻辑独立成类）。
  *
- * - 初始大小与位置由场景包围盒（ViewerControl.sceneBBox）决定，为一个与包围盒重合的长方体；
+ * - 初始大小与位置由场景包围盒（ViewerControls.sceneBBox）决定，为一个与包围盒重合的长方体；
  * - 由 6 个朝内的裁剪平面围成：框外的模型部分被裁掉（可直接用于 renderer.clippingPlanes）；
  * - 内置 TransformControls（translate 模式），拖拽 gizmo 的坐标轴箭头即可平移剖切框，
  *   6 个裁剪平面随之同步移动；中心手柄仅允许在 ZX 平面内移动（Y 固定）；
@@ -33,6 +33,7 @@ export interface SectionBoxOptions {
  * - object3d 为可视化的框线（需由外部加入场景渲染），
  *   gizmoHelper 为 TransformControls 的可视化操作柄（同样需由外部加入场景）；
  *   gizmoHelper 默认隐藏，鼠标悬停到剖切框上时才出现，移开后再次隐藏；
+ *   尺寸箭头优先：悬停在箭头上时隐藏并禁用 gizmo，避免两者同时响应；
  * - 框线比裁剪边界向内收缩了一个极小量，避免被自己的裁剪平面裁掉。
  */
 export class SectionBox {
@@ -276,11 +277,17 @@ export class SectionBox {
     const hoverBox = this.raycaster.intersectObject(this.hitBox, false).length > 0;
     const hoverArrow = this.pickArrow();
     this.setHoveredArrow(hoverArrow);
-    // 已显示时鼠标悬停在 gizmo 手柄上（axis 非空）、拖拽中或悬停在尺寸箭头上均保持可见，
+    // 箭头优先：悬停在尺寸箭头上时禁用（隐藏）TransformControls，
+    // 避免箭头与 gizmo 手柄重叠时两者同时响应；正在拖拽 gizmo 时除外
+    if (hoverArrow !== null && !this.transformControls.dragging) {
+      this.setGizmoVisible(false);
+      return;
+    }
+    // 已显示时鼠标悬停在 gizmo 手柄上（axis 非空）或拖拽中均保持可见，
     // 避免移出盒体瞬间 gizmo 消失导致拖拽中断
     const hoverGizmo =
       this.gizmoVisible && (this.transformControls.axis !== null || this.transformControls.dragging);
-    this.setGizmoVisible(hoverBox || hoverGizmo || hoverArrow !== null);
+    this.setGizmoVisible(hoverBox || hoverGizmo);
   }
 
   // ---------- 尺寸箭头（+X / +Y / +Z 面的宽度调节手柄） ----------
