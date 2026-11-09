@@ -2,6 +2,15 @@ import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { UpAxis } from './ViewerControls';
 
+/** 尺寸箭头在屏幕上的固定显示长度（像素） */
+const ARROW_SCREEN_LENGTH_PX = 60;
+
+/** 尺寸箭头几何的基准长度（沿局部 +Y 生成，世界单位，缩放前） */
+const ARROW_BASE_LENGTH = 1;
+
+/** 临时向量（避免每帧分配） */
+const _arrowWorldPos = new THREE.Vector3();
+
 export interface SectionBoxOptions {
   /** 边框线颜色，默认橙色 0xff9f43 */
   borderColor?: number;
@@ -29,7 +38,8 @@ export interface SectionBoxOptions {
  * - 内置 TransformControls（translate 模式），拖拽 gizmo 的坐标轴箭头即可平移剖切框，
  *   6 个裁剪平面随之同步移动；中心手柄仅允许在 ZX 平面内移动（Y 固定）；
  * - +X / +Y / +Z 面中心各有一个尺寸箭头，沿轴拖拽箭头可调整剖切框在该轴上的宽度
- *   （负方向的面保持不动）；
+ *   （负方向的面保持不动）；箭头在屏幕上的显示长度固定（60 像素），由渲染循环
+ *   每帧调用 updateArrowScreenSize 维持，任意场景尺寸 / 相机距离下均可见可点；
  * - object3d 为可视化的框线（需由外部加入场景渲染），
  *   gizmoHelper 为 TransformControls 的可视化操作柄（同样需由外部加入场景）；
  *   gizmoHelper 默认隐藏，鼠标悬停到剖切框上时才出现，移开后再次隐藏；
@@ -73,9 +83,13 @@ export class SectionBox {
   private lastClientY = -1;
   /** 拖拽开始 / 结束回调（外部用于暂停 OrbitControls） */
   private readonly onDraggingChange?: (dragging: boolean) => void;
-  /** +X / +Y / +Z 面中心各一个尺寸箭头（含杆与锥头），沿轴拖拽调整该轴宽度 */
+  /** +X / +Y / +Z 面中心各一个尺寸箭头（含杆、锥头与命中代理），沿轴拖拽调整该轴宽度 */
   private readonly arrowRoot = new THREE.Group();
   private readonly arrows: THREE.Group[] = [];
+  /** 命中代理共用材质（不可见但可被射线拾取） */
+  private readonly arrowHitMaterial = new THREE.MeshBasicMaterial({ visible: false });
+  /** 箭头当前的世界显示长度（世界单位），由 updateArrowScreenSize 每帧更新 */
+  private arrowWorldLength = 0;
   /** 当前箭头拖拽状态（null 表示未在拖拽箭头） */
   private arrowDrag: {
     axis: 'x' | 'y' | 'z';
@@ -233,10 +247,16 @@ export class SectionBox {
     this.hitBox.geometry.dispose();
     (this.hitBox.material as THREE.Material).dispose();
     for (const arrow of this.arrows) {
-      for (const child of arrow.children) (child as THREE.Mesh).geometry.dispose();
+      for (const child of arrow.children) {
+        const mesh = child as THREE.Mesh;
+        mesh.geometry.dispose();
+        // 命中代理共用 arrowHitMaterial，单独释放，避免重复释放箭头自身的材质
+        if (mesh.material !== arrow.userData.material) (mesh.material as THREE.Material).dispose();
+      }
       (arrow.userData.material as THREE.Material).dispose();
     }
     this.arrows.length = 0;
+    this.arrowHitMaterial.dispose();
     this.object3d.removeFromParent();
     this.gizmoHelper.removeFromParent();
   }
@@ -298,7 +318,11 @@ export class SectionBox {
     z: new THREE.Vector3(0, 0, 1),
   };
 
-  /** 创建三个轴的尺寸箭头（杆 + 锥头），大小固定，并在 +X / +Y / +Z 面中心定位 */
+  /**
+   * 创建三个轴的尺寸箭头（杆 + 锥头 + 不可见命中代理）。
+   * 几何按 ARROW_BASE_LENGTH 基准长度生成，实际显示大小由
+   * updateArrowScreenSize 每帧按相机距离缩放（屏幕上恒定 ARROW_SCREEN_LENGTH_PX 像素）。
+   */
   private buildArrows(): void {
     const defs: Array<{
       axis: 'x' | 'y' | 'z';
@@ -310,12 +334,9 @@ export class SectionBox {
       { axis: 'y', base: 0x53b353, highlight: 0x9be89b, rot: [0, 0, 0] },
       { axis: 'z', base: 0x5279e0, highlight: 0x9ab8ff, rot: [Math.PI / 2, 0, 0] }, // 局部 +Y 旋到 +Z
     ];
-    const maxDim = Math.max(this.size.x, this.size.y, this.size.z);
-    const radius = THREE.MathUtils.clamp(maxDim * 0.008, 0.015, 0.05);
-    // 箭头总长在创建时按初始场景尺寸确定，之后保持不变（拖拽调宽时不改变箭头大小）
-    const total = THREE.MathUtils.clamp(maxDim * 0.18, 0.2, 1.2);
-    const coneLen = total * 0.32;
-    const shaftLen = total - coneLen;
+    const coneLen = ARROW_BASE_LENGTH * 0.32;
+    const shaftLen = ARROW_BASE_LENGTH - coneLen;
+    const radius = ARROW_BASE_LENGTH * 0.045;
     for (const def of defs) {
       const material = new THREE.MeshBasicMaterial({ color: def.base });
       // renderer.clippingPlanes 是全局裁剪，会把框外（箭头所在处）逐像素裁掉；
@@ -330,8 +351,14 @@ export class SectionBox {
       shaft.position.y = shaftLen / 2;
       const cone = new THREE.Mesh(new THREE.ConeGeometry(radius * 2.4, coneLen, 20), material);
       cone.position.y = shaftLen + coneLen / 2;
+      // 不可见的放大命中代理（material.visible = false 不参与渲染，但仍可被射线拾取）
+      const hit = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius * 3, radius * 3, ARROW_BASE_LENGTH, 8),
+        this.arrowHitMaterial,
+      );
+      hit.position.y = ARROW_BASE_LENGTH / 2;
       const arrow = new THREE.Group();
-      arrow.add(shaft, cone);
+      arrow.add(shaft, cone, hit);
       arrow.rotation.set(...def.rot);
       arrow.userData = {
         axis: def.axis,
@@ -342,21 +369,55 @@ export class SectionBox {
       this.arrowRoot.add(arrow);
       this.arrows.push(arrow);
     }
+    // 首帧渲染前的兜底尺寸：按初始场景尺寸给定（随后每帧被屏幕尺寸更新覆盖）
+    this.arrowWorldLength = THREE.MathUtils.clamp(this.size.length() * 0.18, 0.2, 1.2);
+    for (const arrow of this.arrows) {
+      arrow.scale.setScalar(this.arrowWorldLength / ARROW_BASE_LENGTH);
+    }
     this.layoutArrows();
   }
 
-  /** 按当前尺寸更新箭头位置（对应面中心）；箭头大小不变 */
+  /**
+   * 固定尺寸箭头在屏幕上的显示长度（ARROW_SCREEN_LENGTH_PX 像素）：
+   * 依据箭头到相机的距离换算每像素对应的世界单位数，反推整体缩放系数。
+   * 由渲染循环每帧调用，相机移动 / 缩放时箭头在屏幕上的大小保持不变。
+   * @param camera 当前渲染相机（支持透视 / 正交）
+   * @param viewportHeightPx 视口高度（像素）
+   */
+  public updateArrowScreenSize(camera: THREE.Camera, viewportHeightPx: number): void {
+    if (viewportHeightPx <= 0) return;
+    for (const arrow of this.arrows) {
+      const distance = camera.position.distanceTo(arrow.getWorldPosition(_arrowWorldPos));
+      const visibleHeight = this.visibleHeightAt(camera, distance);
+      if (visibleHeight === null) return;
+      this.arrowWorldLength = (ARROW_SCREEN_LENGTH_PX * visibleHeight) / viewportHeightPx;
+      arrow.scale.setScalar(this.arrowWorldLength / ARROW_BASE_LENGTH);
+    }
+    this.layoutArrows();
+  }
+
+  /** 按相机类型换算指定距离处视口高度对应的世界单位数（不支持的类型返回 null） */
+  private visibleHeightAt(camera: THREE.Camera, distance: number): number | null {
+    if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      const persp = camera as THREE.PerspectiveCamera;
+      return (2 * Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2) * distance) / persp.zoom;
+    }
+    if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      const ortho = camera as THREE.OrthographicCamera;
+      return (ortho.top - ortho.bottom) / ortho.zoom;
+    }
+    return null;
+  }
+
+  /** 按当前尺寸更新箭头位置（对应面中心）；箭头随 updateArrowScreenSize 缩放 */
   private layoutArrows(): void {
     for (const arrow of this.arrows) {
       const axis = arrow.userData.axis as 'x' | 'y' | 'z';
       const s = this.size[axis];
       // 垂直于轴的少量偏移，避免与 TransformControls 的同轴手柄重叠：
-      // X 轴箭头沿 Y 偏移，Y 轴箭头沿 X 偏移，Z 轴箭头沿 X 偏移
-      const offset = THREE.MathUtils.clamp(
-        Math.max(this.size.x, this.size.y, this.size.z) * 0.12,
-        0.05,
-        0.6,
-      );
+      // X 轴箭头沿 Y 偏移，Y 轴箭头沿 X 偏移，Z 轴箭头沿 X 偏移。
+      // 偏移量随箭头的屏幕固定尺寸等比缩放，保证任意缩放下不与手柄重合
+      const offset = this.arrowWorldLength * 0.35;
       const offsetY = axis === 'x' ? offset : 0;
       const offsetX = axis === 'y' || axis === 'z' ? offset : 0;
       arrow.position.set(

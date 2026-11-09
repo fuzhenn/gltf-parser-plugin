@@ -334,6 +334,16 @@ export class Toolbar {
     this.clippingPlane.updateHandleScreenSize(this.controls.object, rect.height);
   }
 
+  /**
+   * 每帧更新剖切框尺寸箭头的屏幕显示尺寸（固定 60 像素长度），
+   * 由外部渲染循环在渲染前调用；未创建剖切框时为空操作。
+   */
+  public updateSectionBoxArrowScreenSize(): void {
+    if (this.disposed || !this.sectionBox || !this.canvas) return;
+    const rect = this.canvas.getBoundingClientRect();
+    this.sectionBox.updateArrowScreenSize(this.controls.object, rect.height);
+  }
+
   public getClippingPlanes(): THREE.Plane[] {
     return this.clippingPlane ? [this.clippingPlane.getPlane()] : [];
   }

@@ -195,6 +195,7 @@ export class ViewerControls {
     if (this.viewCubeEnabled) this.viewCube.update(this.camera);
 
     this.toolbar.updateClippingPlaneScreenSize();
+    this.toolbar.updateSectionBoxArrowScreenSize();
     this.toolbar.getSectionBox()?.updatePlanes();
   }
 
