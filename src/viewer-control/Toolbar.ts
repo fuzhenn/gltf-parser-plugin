@@ -131,7 +131,7 @@ export class Toolbar {
     }
   };
 
-  constructor(controls: OrbitControls, sceneBBox?: THREE.Box3 | null, upAxis: UpAxis = 'Z_UP') {
+  constructor(controls: OrbitControls, sceneBBox?: THREE.Box3 | null, upAxis: UpAxis = 'z') {
     this.controls = controls;
     this.sceneBBox = sceneBBox ?? null;
     this.upAxis = upAxis;

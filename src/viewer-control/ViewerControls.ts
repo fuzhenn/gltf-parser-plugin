@@ -3,8 +3,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { ViewCube } from './ViewCube';
 import { Toolbar, CameraMode } from './Toolbar';
 
-/** 世界坐标上方向轴：'Y_UP' 表示 Y 轴向上，'Z_UP' 表示 Z 轴向上 */
-export type UpAxis = 'Y_UP' | 'Z_UP';
+/** 世界坐标上方向轴：'y' 表示 Y 轴向上，'z' 表示 Z 轴向上 */
+export type UpAxis = 'y' | 'z';
 
 export interface ViewerControlsOptions {
   /**
@@ -23,9 +23,9 @@ export interface ViewerControlsOptions {
   camera: THREE.PerspectiveCamera;
   /**
    * 世界坐标的上方向轴。
-   * - 'Y_UP'：Y 轴向上（three.js 默认习惯），相机 up = (0,1,0)；
-   * - 'Z_UP'：Z 轴向上（CAD 常用习惯），相机 up = (0,0,1)；
-   * 默认 'Z_UP'。仅构造时生效，不支持运行时切换。
+   * - 'y'：Y 轴向上（three.js 默认习惯），相机 up = (0,1,0)；
+   * - 'z'：Z 轴向上（CAD 常用习惯），相机 up = (0,0,1)；
+   * 默认 'z'。仅构造时生效，不支持运行时切换。
    */
   upAxis?: UpAxis;
   /**
@@ -103,8 +103,8 @@ export class ViewerControls {
 
     // 上方向轴配置（默认 Z-UP），据此设置相机 up 向量；
     // 必须在构造 OrbitControls 之前设置，OrbitControls 会基于 camera.up 缓存内部旋转基准
-    this.upAxis = options.upAxis ?? 'Z_UP';
-    if (this.upAxis === 'Z_UP') {
+    this.upAxis = options.upAxis ?? 'z';
+    if (this.upAxis === 'z') {
       this.camera.up.set(0, 0, 1);
     } else {
       this.camera.up.set(0, 1, 0);
@@ -244,7 +244,7 @@ export class ViewerControls {
 
   /** 世界方向 → Y-UP 基准系方向（原位修改并返回）。内部球坐标计算统一在该基准系进行 */
   private worldToYUp(v: THREE.Vector3): THREE.Vector3 {
-    if (this.upAxis === 'Y_UP') return v;
+    if (this.upAxis === 'y') return v;
     // 绕 X 轴 -90°：(x,y,z) → (x,z,-y)，使世界 +Z（Z-UP 的上方向）映射为 +Y
     // 注意：-y 需把 -0 归一为 0。否则上/下方向 (0,0,±1) 映射后 z 分量为 -0，
     // Spherical.setFromVector3 中 atan2(0, -0) 返回 π（而非 0），
@@ -255,7 +255,7 @@ export class ViewerControls {
 
   /** Y-UP 基准系方向 → 世界方向（worldToYUp 的逆变换，原位修改并返回） */
   private yUpToWorld(v: THREE.Vector3): THREE.Vector3 {
-    if (this.upAxis === 'Y_UP') return v;
+    if (this.upAxis === 'y') return v;
     const { x, y, z } = v;
     return v.set(x, -z, y);
   }

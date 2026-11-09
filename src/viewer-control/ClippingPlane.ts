@@ -15,9 +15,9 @@ export interface ClippingPlaneOptions {
   borderColor?: number;
   /**
    * 世界坐标的上方向轴。
-   * - 'Y_UP'：Y 轴向上（three.js 默认习惯），相机 up = (0,1,0)；
-   * - 'Z_UP'：Z 轴向上（CAD 常用习惯），相机 up = (0,0,1)；
-   * 默认 'Z_UP'。仅构造时生效，不支持运行时切换。
+   * - 'y'：Y 轴向上（three.js 默认习惯），相机 up = (0,1,0)；
+   * - 'z'：Z 轴向上（CAD 常用习惯），相机 up = (0,0,1)；
+   * 默认 'z'。仅构造时生效，不支持运行时切换。
    *
    * axis 参数始终按世界坐标轴解释（剖切 Z = 世界 Z 面），不随 upAxis 换算。
    */
@@ -69,7 +69,7 @@ export class ClippingPlane {
   constructor(sceneBBox: THREE.Box3, axis: ClippingAxis, options: ClippingPlaneOptions = {}) {
     this.sceneBBox = sceneBBox.clone();
     // axis 参数按世界坐标轴直接解释（剖切 Z = 世界 Z 面），不随 upAxis 换算
-    this.upAxis = options.upAxis ?? 'Z_UP';
+    this.upAxis = options.upAxis ?? 'z';
     this.axis = axis;
     this.normalSign = options.flip ? -1 : 1;
     // 初始位置：按旧的沿轴位置比例换算为沿（未旋转，即世界轴方向）法线的偏移量

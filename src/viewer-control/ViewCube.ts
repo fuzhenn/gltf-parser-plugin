@@ -6,10 +6,10 @@ export interface ViewCubeOptions {
   /** 距容器右上角的边距（像素），默认 10 */
   margin?: number;
   /**
-   * 世界坐标的上方向轴：'Y_UP'（默认）或 'Z_UP'。
+   * 世界坐标的上方向轴：'y'（默认）或 'z'。
    * 决定各面标签/世界方向的对应关系及立方体的对齐旋转，需与主相机 up 向量一致。
    */
-  upAxis?: 'Y_UP' | 'Z_UP';
+  upAxis?: 'y' | 'z';
   /** 点击某个面时回调：direction 为相机应处于目标点的世界方向，label 为面的中文标识 */
   onFaceClick?: (direction: THREE.Vector3, label: string) => void;
   /**
@@ -59,7 +59,7 @@ export class ViewCube {
   private visible = true;
   private disposed = false;
   /** 世界坐标上方向轴（构造时确定） */
-  private upAxis: 'Y_UP' | 'Z_UP';
+  private upAxis: 'y' | 'z';
   /** Z-UP 时把立方体从 Y-UP 惯例对齐到 Z-UP 的旋转（绕 X 轴 +90°），Y-UP 时为单位旋转 */
   private upAlignQuat = new THREE.Quaternion();
 
@@ -78,8 +78,8 @@ export class ViewCube {
 
     // 上方向轴：Z-UP 时用绕 X 轴 +90° 的对齐旋转，使立方体局部 +Y 对齐世界 +Z，
     // 保证各侧面文字在对应正视方向下保持直立（与 Y-UP 时的表现一致）
-    this.upAxis = options.upAxis ?? 'Y_UP';
-    if (this.upAxis === 'Z_UP') {
+    this.upAxis = options.upAxis ?? 'y';
+    if (this.upAxis === 'z') {
       this.upAlignQuat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
     }
 
@@ -88,7 +88,7 @@ export class ViewCube {
     // 0:+X, 1:-X, 2:+Y, 3:-Y, 4:+Z, 5:-Z；
     // normal 为该面对应的世界方向（随 upAxis 变化），点击时作为目标相机方向回调
     const faceDefs: Array<{ normal: THREE.Vector3; label: string }> =
-      this.upAxis === 'Z_UP'
+      this.upAxis === 'z'
         ? [
             { normal: new THREE.Vector3(1, 0, 0), label: '右' }, // +X
             { normal: new THREE.Vector3(-1, 0, 0), label: '左' }, // -X
@@ -153,7 +153,7 @@ export class ViewCube {
     // 立方体姿态 = 相机姿态的逆；Z-UP 时再左乘对齐旋转（绕 X 轴 +90°），
     // 使立方体局部 +Y 对齐世界 +Z
     this.cube.quaternion.copy(camera.quaternion).invert();
-    if (this.upAxis === 'Z_UP') this.cube.quaternion.multiply(this.upAlignQuat);
+    if (this.upAxis === 'z') this.cube.quaternion.multiply(this.upAlignQuat);
   }
 
   /** 在主画布右上角以 scissor 视口叠加渲染 ViewCube（需在主场景渲染完成之后调用） */
