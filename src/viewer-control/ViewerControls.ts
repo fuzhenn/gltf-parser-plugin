@@ -103,7 +103,7 @@ export class ViewerControls {
 
     // 上方向轴配置（默认 Z-UP），据此设置相机 up 向量；
     // 必须在构造 OrbitControls 之前设置，OrbitControls 会基于 camera.up 缓存内部旋转基准
-    this.upAxis = options.upAxis ?? 'z';
+    this.upAxis = options.upAxis ?? 'y';
     if (this.upAxis === 'z') {
       this.camera.up.set(0, 0, 1);
     } else {
