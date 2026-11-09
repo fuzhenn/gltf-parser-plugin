@@ -201,19 +201,26 @@ export class GLTFParserPlugin {
   };
 
   /**
-   * 只补处理"可见且样式代数落后"的瓦片；
-   * 不可见的过期瓦片留到变可见时再处理。
+   * 每帧补处理可见瓦片：
+   * - 样式：只处理"可见且样式代数落后"的瓦片；不可见的过期瓦片留到变可见时再处理。
+   * - 剖切：幂等写入 clippingPlanes，覆盖新加载 / LRU 复现瓦片及样式新创建的
+   *   split mesh（样式先行，剖切随后，保证新材质同帧被覆盖）。
    */
   private _onUpdateAfterCB = () => {
-    const styleHelper = this._styleHelper;
-    const visibleTiles = this._tiles?.visibleTiles as
+    const tiles = this._tiles;
+    if (!tiles) return;
+    const visibleTiles = tiles.visibleTiles as
       | Set<{ engineData?: { scene?: Object3D } }>
       | undefined;
-    if (!styleHelper || !visibleTiles) return;
+    if (!visibleTiles) return;
 
+    const styleHelper = this._styleHelper;
+    const clippingHelper = this._clippingPlanesHelper;
     for (const tile of visibleTiles) {
       const scene = tile?.engineData?.scene;
-      if (scene) styleHelper.applySceneIfStale(scene);
+      if (!scene) continue;
+      if (styleHelper) styleHelper.applySceneIfStale(scene);
+      clippingHelper.applyToScene(scene);
     }
   };
 

@@ -1,5 +1,5 @@
 export { GLTFParserPlugin } from "./plugin";
-export { ViewerControl } from './viewer-control/ViewerControl';
+export { ViewerControls } from "./viewer-control/ViewerControls";
 export { loadPmiModel } from "./loader/pmi-loader";
 export type { PmiNode, PmiModel, FeatureIds } from "./loader/pmi-loader";
 export type {
