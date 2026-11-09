@@ -23,9 +23,9 @@ export interface SectionBoxOptions {
   onDraggingChange?: (dragging: boolean) => void;
     /**
    * 世界坐标的上方向轴。
-   * - 'Y_UP'：Y 轴向上（three.js 默认习惯），相机 up = (0,1,0)；
-   * - 'Z_UP'：Z 轴向上（CAD 常用习惯），相机 up = (0,0,1)；
-   * 默认 'Z_UP'。仅构造时生效，不支持运行时切换。
+   * - 'y'：Y 轴向上（three.js 默认习惯），相机 up = (0,1,0)；
+   * - 'z'：Z 轴向上（CAD 常用习惯），相机 up = (0,0,1)；
+   * 默认 'z'。仅构造时生效，不支持运行时切换。
    */
   upAxis?: UpAxis;
 }
@@ -110,7 +110,7 @@ export class SectionBox {
     this.camera = camera;
     this.domElement = domElement;
     this.onDraggingChange = options.onDraggingChange;
-    this.upAxis = options.upAxis ?? 'Z_UP';
+    this.upAxis = options.upAxis ?? 'z';
 
     // 剖切框尺寸：取场景包围盒大小，防止零尺寸导致裁剪退化
     const raw = sceneBBox.getSize(new THREE.Vector3());
@@ -264,9 +264,9 @@ export class SectionBox {
   private onObjectChange = (): void => {
     // 仅中心手柄（XYZ）约束在 ZX 平面内移动；Y 轴手柄（及含 Y 的平面手柄）可正常沿 Y 移动
     if (this.dragAxis === 'XYZ') {
-      if (this.upAxis === 'Y_UP') {
+      if (this.upAxis === 'y') {
         this.object3d.position.y = this.dragStartY;
-      } else if (this.upAxis === 'Z_UP') {
+      } else if (this.upAxis === 'z') {
         this.object3d.position.z = this.dragStartZ;
       }
     }
