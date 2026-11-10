@@ -42,6 +42,9 @@ importers:
       eslint:
         specifier: 10.14.0
         version: 10.14.0
+      three-mesh-bvh:
+        specifier: ^0.9.18
+        version: 0.9.18(three@0.187.0)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -971,6 +974,11 @@ packages:
 
   std-env@4.3.0:
     resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
+
+  three-mesh-bvh@0.9.18:
+    resolution: {integrity: sha512-S76hOBnsSG4jsuEyCu98K63klONG4NwJANabPY1LUD5l7oUgu2xtKC0IwnX/XyPzo4YZ1D7ZU+gHVA479UdQmA==}
+    peerDependencies:
+      three: '>= 0.159.0'
 
   three@0.187.0:
     resolution: {integrity: sha512-Qiu7R+Cmh8CstZsY1uJOSWnVlfo7ZtNLV7mF8Jltk3LB3AtDu9cRZlcnRKkAk8Y4z6KKw35z7Y7Urd7jWY8etA==}
@@ -1955,6 +1963,10 @@ snapshots:
   source-map-js@1.2.2: {}
 
   std-env@4.3.0: {}
+
+  three-mesh-bvh@0.9.18(three@0.187.0):
+    dependencies:
+      three: 0.187.0
 
   three@0.187.0: {}
 
