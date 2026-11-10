@@ -237,8 +237,9 @@ export class Toolbar {
     const dir = options.direction
       ? options.direction.clone().normalize()
       : cam.position.clone().sub(this.controls.target);
-    // 方向退化为零向量（如相机恰在目标点上）时兜底取对角方向
-    if (dir.lengthSq() < 1e-12) dir.set(1, 1, 1).normalize();
+    // addScaledVector 前必须归一化，否则实际位移 = |当前偏移| × dist，相机会飞出视野
+    if (dir.lengthSq() < 1e-12) dir.set(1, 1, 1);
+    dir.normalize();
 
     // 包围盒最大边长，据此按相机 FOV 反推观察距离
     const size = sceneBox.getSize(new THREE.Vector3());

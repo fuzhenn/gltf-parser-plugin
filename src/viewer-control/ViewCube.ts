@@ -123,7 +123,9 @@ export class ViewCube {
     );
     this.cube.add(edges);
 
-    this.camera = new THREE.OrthographicCamera(-1.15, 1.15, 1.15, -1.15, 0.1, 10);
+    // 立方体半对角线 ≈ 1.386（BoxGeometry 边长 1.6），
+    // 视口范围需覆盖完整对角线并留少许边距，否则旋转后顶点会被裁掉
+    this.camera = new THREE.OrthographicCamera(-1.45, 1.45, 1.45, -1.45, 0.1, 10);
     this.camera.position.set(0, 0, 4);
     this.camera.lookAt(0, 0, 0);
 
