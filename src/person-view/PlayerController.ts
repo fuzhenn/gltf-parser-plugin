@@ -5,7 +5,10 @@
  *   1. 维护玩家状态（位置 / 速度 / 朝向 / 着地 / 飞行 等）；
  *   2. 绑定玩家相关按键（Space 跳跃缓冲 / F 飞行切换 / R 回出生点）；
  *   3. 每帧推进物理与移动（步行碰撞滑行、台阶跨越、跳跃、飞行）；
- *   4. 每帧更新第三人称相机（平滑跟随 / 落地缓冲 / 防穿墙 / 动态 FOV）。
+ *   4. 每帧同步第三人称角色模型（person.update 由 update 内部调用）；
+ *   5. 每帧更新第三人称相机（平滑跟随 / 落地缓冲 / 防穿墙 / 动态 FOV）；
+ *   5. exitThirdPerson() 退出第三人称 / enterThirdPerson() 恢复第三人称（OrbitControls
+ *      的创建销毁由外部经 onViewToggle 回调处理；FOV 在激活时从相机读取、退出时恢复）；toggleView(isActive?) / V 键随时切换。
  *
  * 用法：
  *   const player = new Player({ camera, config: CONFIG, collidersBounds });
@@ -18,7 +21,7 @@
  *   player.spawnPoint = findSpawn(player);       // findSpawn 定义在 main.ts（经 player.collision 探测）
  *   player.resetToSpawn();
  *   // 主循环中：
- *   if (!paused) player.update(dt);              // 内部每帧增量构建碰撞数据（登记由业务代码控制）
+ *   if (!paused) player.update(dt);              // 内部每帧同步角色模型、更新相机并增量构建碰撞数据（登记由业务代码控制）
  * ------------------------------------------------------------
  */
 import * as THREE from 'three';
@@ -90,6 +93,8 @@ export interface PlayerOptions {
   config: GameConfig;
   /** 碰撞世界初始包围盒（世界范围，用于出生点探测与掉出场景保护） */
   collidersBounds: THREE.Box3;
+  /** 视角模式切换回调（true=激活玩家第三人称控制，false=退出，交由外部 OrbitControls 处理） */
+  onViewToggle?: (isActive: boolean) => void;
 }
 
 /** 朝向基向量：Y-UP 与 Z-UP 共用同一套 yaw 约定（yaw=0 朝水平 -h1 方向） */
@@ -156,10 +161,20 @@ export class Player {
   /** 落地缓冲下压量 */
   landDip = 0;
   landDipVel = 0;
-  /** 当前动态 FOV */
+  /** 基线 FOV：激活（含构造时）从 camera.fov 读取，退出第三人称时恢复给相机 */
+  fovBase = 75;
+  /** 当前动态 FOV（围绕 fovBase 平滑过渡；退出第三人称时恢复 fovBase） */
   fovCurrent = 75;
+  /** 玩家是否激活（第三人称控制；false 时相机交给外部创建的 OrbitControls） */
+  isActive = true;
+  /** 视角模式切换回调（退出/进入第三人称时触发；OrbitControls 创建销毁由外部处理） */
+  onViewToggle: ((isActive: boolean) => void) | null = null;
+  /** 已绑定的按键取消订阅函数（退出第三人称时用于解绑） */
+  private _unbinds: Array<() => void> = [];
+  /** KeyV（视角切换）的取消订阅函数：该键在任何模式下都保持有效 */
+  private _unbindToggle: (() => void) | null = null;
 
-  constructor({ camera, config, collidersBounds }: PlayerOptions) {
+  constructor({ camera, config, collidersBounds, onViewToggle }: PlayerOptions) {
     /* 合并默认值：传入项优先（charUrl / animClips 为必填，不经默认合并） */
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.collision = new CollisionWorld({
@@ -174,6 +189,10 @@ export class Player {
       preventKeys: ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyQ', 'KeyE']
     });
     this.camera = camera;
+    /* 激活：从相机读取基线 FOV，动态 FOV 围绕它过渡 */
+    this.fovBase = camera.fov;
+    this.fovCurrent = camera.fov;
+    this.onViewToggle = onViewToggle ?? null;
 
     /* 上轴配置：同步到自身的派生量与角色模型（碰撞世界已在构造时传入 upAxis） */
     this.upAxis = this.config.upAxis;
@@ -188,12 +207,17 @@ export class Player {
     this.bindInput();
   }
 
-  /** 绑定玩家相关按键 */
+  /** 绑定玩家相关按键（记录取消订阅函数，便于退出第三人称时解绑；KeyV 永远保持绑定） */
   bindInput(): void {
     const kb = this.keyboard;
-    kb.onPress('Space', () => { this.jumpBuffer = 0.16; });
-    kb.onPress('KeyF', () => { this.fly = !this.fly; this.vel.set(0, 0, 0); this.vy = 0; this.hovering = false; this.jumping = false; });
-    kb.onPress('KeyR', () => this.resetToSpawn());
+    this._unbinds = [
+      kb.onPress('Space', () => { this.jumpBuffer = 0.16; }),
+      kb.onPress('KeyF', () => { this.fly = !this.fly; this.vel.set(0, 0, 0); this.vy = 0; this.hovering = false; this.jumping = false; }),
+      kb.onPress('KeyR', () => this.resetToSpawn())
+    ];
+    /* KeyV 独立绑定：第三人称与 OrbitControls 模式下都能切换视角 */
+    this._unbindToggle?.();
+    this._unbindToggle = kb.onPress('KeyV', () => this.toggleView());
   }
 
   /* ================= 碰撞世界门面 ================= */
@@ -239,11 +263,72 @@ export class Player {
    * @param dy 垂直位移（e.movementY）
    */
   look(dx: number, dy: number): void {
+    if (!this.isActive) return;   // 未激活时视角由 OrbitControls 接管
     const sens = this.config.lookSensitivity;
     this.yaw -= dx * sens;
     this.pitch -= dy * sens;
     const lim = Math.PI / 2 - 0.02;
     this.pitch = Math.max(-lim, Math.min(lim, this.pitch));
+  }
+
+  /* ================= 第三人称 / three 默认交互切换 ================= */
+
+  /**
+   * 退出第三人称视角（OrbitControls 创建由 onViewToggle 回调方处理；FOV 在此处恢复为激活时记录的基线值）：
+   *   1. 解绑玩家移动按键，清空按键状态；
+   *   2. 退出指针锁定，把鼠标还给页面。
+   */
+  exitThirdPerson(): void {
+    if (!this.isActive) return;
+    this.isActive = false;
+    for (const off of this._unbinds) off();
+    this._unbinds = [];
+    this.keyboard.clear();
+
+    /* 恢复激活前相机的 FOV（消除第三人称动态 FOV 残留） */
+    if (Math.abs(this.camera.fov - this.fovBase) > 0.01) {
+      this.camera.fov = this.fovBase;
+      this.camera.updateProjectionMatrix();
+    }
+    this.fovCurrent = this.fovBase;
+
+    /* 释放指针锁定（main.ts 的 pointerlockchange 已按 isActive 守卫，不会弹出暂停遮罩） */
+    if (document.pointerLockElement) document.exitPointerLock();
+
+    this.onViewToggle?.(false);
+  }
+
+  /** 恢复第三人称视角：OrbitControls 销毁由回调方处理；按当前相机方向恢复 yaw/pitch，保证视角连续 */
+  enterThirdPerson(): void {
+    if (this.isActive) return;
+    this.isActive = true;
+    /* 激活：从当前相机读取基线 FOV（退出时恢复该值），动态 FOV 围绕它过渡 */
+    this.fovBase = this.camera.fov;
+    this.fovCurrent = this.camera.fov;
+    this.onViewToggle?.(true);
+
+    /* 由当前相机视线方向反推 yaw / pitch（与 updateCamera 的正推公式互为逆运算） */
+    this.camera.getWorldDirection(_lookDir);
+    const lim = Math.PI / 2 - 0.02;
+    this.pitch = Math.max(-lim, Math.min(lim, Math.asin(THREE.MathUtils.clamp(_lookDir.getComponent(this._upIdx), -1, 1))));
+    if (this._upIdx === 2) {
+      this.yaw = Math.atan2(-_lookDir.x, -_lookDir.y);
+    } else {
+      this.yaw = Math.atan2(-_lookDir.x, -_lookDir.z);
+    }
+
+    this.bindInput();
+    this.updateCamera(1);   // 立即让相机回到角色身后的第三人称机位
+  }
+
+  /**
+   * 切换激活状态（第三人称 / three 默认交互 OrbitControls）。
+   * @param isActive 可选：true 强制进入第三人称，false 强制退出；不传则取反当前状态
+   */
+  toggleView(isActive?: boolean): void {
+    const next = isActive ?? !this.isActive;
+    if (next) this.enterThirdPerson();
+    else this.exitThirdPerson();
   }
 
   resetToSpawn(): void {
@@ -258,6 +343,9 @@ export class Player {
     this.smoothY = up0;
     this.landDip = 0;
     this.landDipVel = 0;
+    /* 立即同步角色模型到出生点，并让相机直接就位（避免开场 / 回出生点时从原点飞过来） */
+    if (this.person) this.person.update(0, this, false);
+    this.updateCamera(1);
   }
 
   /** 依据当前朝向与按键得出水平期望方向，同时刷新 _fwd / _right */
@@ -299,15 +387,20 @@ export class Player {
     this.groundY = this.pos.getComponent(this._upIdx);
   }
 
-  /** 每帧推进物理与移动 */
+  /** 每帧推进物理与移动，随后同步角色模型与第三人称相机 */
   update(dt: number): void {
+    if (!this.isActive) return;   // OrbitControls 模式下玩家物理暂停
     const cfg = this.config;
     this.refreshCollision();   // 清空 + 重新登记 + 增量构建（碰撞查询前保证索引最新）
     const wish = this.readWishDir();
     const running = this.keyboard.hasAny('ShiftLeft', 'ShiftRight');
     const upIdx = this._upIdx, h1Idx = this._h1Idx;
 
-    if (this.fly) { this.updateFly(dt, running); return; }
+    if (this.fly) {
+      this.updateFly(dt, running);
+      this.syncVisual(dt);
+      return;
+    }
 
     /* --- 水平加速度（水平两轴：x 与 h1） --- */
     const maxSpeed = running ? cfg.runSpeed : cfg.walkSpeed;
@@ -399,6 +492,14 @@ export class Player {
 
     /* --- 掉出场景保护 --- */
     if (this.pos.getComponent(upIdx) < this.collision.worldBounds.min.getComponent(upIdx) - 80) this.resetToSpawn();
+
+    this.syncVisual(dt);
+  }
+
+  /** 每帧同步角色模型姿态与第三人称相机（物理更新后调用，避免使用上一帧位置） */
+  private syncVisual(dt: number): void {
+    if (this.person) this.person.update(dt, this);
+    this.updateCamera(dt);
   }
 
   /**
@@ -406,6 +507,8 @@ export class Player {
    * @param dt 帧间隔（秒）；初始化让相机直接就位时可传 1
    */
   updateCamera(dt: number): void {
+    /* 退出第三人称后相机交给外部的 OrbitControls，本方法不接管机位 */
+    if (!this.isActive) return;
     /* 脚底高度平滑：贴地/上台阶时缓动跟随，空中精确跟随，避免台阶抬升与落地造成镜头跳动 */
     const posUp = this.pos.getComponent(this._upIdx);
     if (this.grounded && !this.fly) {
@@ -452,7 +555,7 @@ export class Player {
 
     const spdH = Math.hypot(this.vel.x, this.vel.getComponent(this._h1Idx));
     const running = this.keyboard.hasAny('ShiftLeft', 'ShiftRight');
-    const targetFov = this.fly ? 78 : (running && spdH > 1 ? 82 : 75);
+    const targetFov = this.fovBase + (this.fly ? 3 : (running && spdH > 1 ? 7 : 0));
     this.fovCurrent += (targetFov - this.fovCurrent) * (1 - Math.exp(-6 * dt));
     if (Math.abs(this.camera.fov - this.fovCurrent) > 0.01) {
       this.camera.fov = this.fovCurrent;

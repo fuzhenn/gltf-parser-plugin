@@ -11,7 +11,7 @@
  *   // Z-UP 世界传 upAxis: 'z'，模型会自动立起并绕世界上轴旋转
  *   await person.load();                    // 载入模型与动画
  *   scene.add(person.root);                 // 由外部把角色根节点挂到场景
- *   person.update(dt, player, !paused);     // 主循环中每帧调用
+ *   person.update(dt, player);              // 由 Player.update 内部每帧调用（advanceAnim 默认 true）
  * ------------------------------------------------------------
  */
 import * as THREE from 'three';
