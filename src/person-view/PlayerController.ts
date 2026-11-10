@@ -10,18 +10,17 @@
  *   6. exitThirdPerson() 退出第三人称 / enterThirdPerson() 恢复第三人称（OrbitControls
  *      的创建销毁由外部经 onViewToggle 回调处理；FOV 在激活时从相机读取、退出时恢复）；
  *   7. toggleView(isActive?) 切换第三人称 / OrbitControls 视角（已绑定 V 键，任何模式下均可用；
- *      isActive=true 强制进入、false 强制退出，不传则取反当前状态）。
+ *      isActive=true 强制进入、false 强制退出，不传则取反当前状态）；
+ *   8. initialize(object3d) 封装初始化流程：登记碰撞体 → 加载角色模型 → 构建碰撞数据 → 定位出生点并就位
+ *      （DOM 相关操作如进度展示、错误提示、启动渲染循环由外部处理）。
  *
  * 用法：
  *   const player = new Player({ camera, config: CONFIG, collidersBounds });
  *   scene.add(player.object3D);                 // 角色模型容器由外部挂到场景
  *   // collidersBounds（THREE.Box3）为碰撞世界初始包围盒，需在场景与碰撞体就绪后计算传入
  *   // 支持 Y-UP（默认）与 Z-UP：在 CONFIG 中传 upAxis: 'z' 即可，会同步到碰撞世界与角色模型
- *   player.addColliders(gltf.scene);            // 登记碰撞体（自动收集子网格并缓存）
- *   await player.buildCollision({ onProgress }); // 构建碰撞数据（幂等，可重复调用）
- *   player.clearColliders();                     // 需要更换碰撞体时清空后重新 addColliders
- *   player.spawnPoint = findSpawn(player);       // findSpawn 定义在 main.ts（经 player.collision 探测）
- *   player.resetToSpawn();
+ *   await player.initialize(gltf.scene, { onProgress }); // 一步完成：登记碰撞体 → 加载角色模型 → 构建碰撞数据 → 定位出生点并就位
+ *   player.clearColliders();                     // 需要更换碰撞体时清空后重新 initialize / addColliders
  *   player.toggleView(false);                    // 手动切换视角（可选；内部已绑定 V 键随时切换）
  *                                                // isActive=true 强制进入第三人称、false 强制退出，不传则取反当前状态
  *   // 主循环中：
@@ -31,7 +30,7 @@
 import * as THREE from 'three';
 import { CollisionWorld, type UpAxis, type Penetration } from './CollisionWorld';
 
-/** 穿透检测结果（转发 collision.ts 的类型，供 main.ts 的 findSpawn 使用） */
+/** 穿透检测结果（转发 collision.ts 的类型，供 Player.findSpawn 使用） */
 export type { Penetration };
 import { Person, type AnimClipNames } from './PersonModel';
 import { Keyboard } from './KeyBind';
@@ -211,6 +210,38 @@ export class Player {
     this.bindInput();
   }
 
+  /**
+   * 初始化玩家（原 main.ts init 中的非 DOM 逻辑）：
+   *   登记碰撞体 → 加载第三人称角色模型 → 构建碰撞数据 → 自动定位出生点并就位。
+   * @param colliderRoot 碰撞体根节点（连同其所有后代网格登记为碰撞体；调用前请确保 matrixWorld 已更新）
+   * @param opts.onProgress 加载进度回调（progress∈[0,1]，tip 为提示文案），外部可用来更新 DOM 加载条
+   */
+  async initialize(colliderRoot: THREE.Object3D, opts: { onProgress?: (progress: number, tip: string) => void } = {}): Promise<void> {
+    const progress = opts.onProgress ?? (() => {});
+
+    /* 登记所有碰撞体（自动收集子网格并缓存） */
+    this.addColliders(colliderRoot);
+
+    /* 加载第三人称角色模型（失败则进入无角色模式，不阻塞初始化） */
+    progress(0.62, '加载角色模型…');
+    if (this.person) {
+      try {
+        await this.person.load();
+      } catch (err) {
+        console.warn('角色模型加载失败，进入无角色模式', err);
+      }
+    }
+
+    /* 构建碰撞数据（增量 / 幂等） */
+    await this.buildCollision({ onProgress: progress });
+
+    /* 自动寻找出生点并就位（内部同步角色到出生点并让相机直接就位，避免开场从原点飞过来） */
+    progress(0.99, '定位出生点…');
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    this.spawnPoint = this.findSpawn();
+    this.resetToSpawn();
+  }
+
   /** 绑定玩家相关按键（记录取消订阅函数，便于退出第三人称时解绑；KeyV 永远保持绑定） */
   bindInput(): void {
     const kb = this.keyboard;
@@ -240,6 +271,19 @@ export class Player {
    */
   clearColliders(): void {
     this.collision.clear();
+  }
+
+  /**
+   * 刷新碰撞体：清空现有碰撞体 → 登记传入 group（连同其所有后代网格）→ 重新构建碰撞数据。
+   * 适用于整体更换碰撞体来源的场景（如场景切换 / 动态建筑更新）。
+   * @param group 碰撞体根节点（调用前请确保其 matrixWorld 已更新）
+   * @param opts.onProgress 构建进度回调
+   * @returns BVH 是否可用
+   */
+  async refreshColliders(group: THREE.Object3D | null, opts: { onProgress?: (progress: number, tip: string) => void } = {}): Promise<boolean> {
+    this.clearColliders();
+    this.addColliders(group);
+    return this.buildCollision(opts);
   }
 
   /**
@@ -350,6 +394,45 @@ export class Player {
     /* 立即同步角色模型到出生点，并让相机直接就位（避免开场 / 回出生点时从原点飞过来） */
     if (this.person) this.person.update(0, this, false);
     this.updateCamera(1);
+  }
+
+  /** 自动寻找一个「脚下有地面且没被建筑包住」的出生点（原 main.ts 的 findSpawn，经 this.collision 探测） */
+  private findSpawn(): THREE.Vector3 {
+    const collision = this.collision;
+    const bounds = collision.worldBounds;
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const span = Math.min(Math.max(size.x, size.z) * 0.5, 120);
+    const probeTop = bounds.max.y + 5;
+    const pen: Penetration = { has: false, depth: 0, dx: 0, dy: 0, dz: 0 };
+    const N = 5;
+    let fallback: THREE.Vector3 | null = null;
+
+    for (let ring = 0; ring < 3; ring++) {
+      const s = span * (1 + ring * 0.7);
+      const meshes = collision.queryNearby(center.x, center.z, s + 40).slice();
+      for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+          const x = center.x + (i / (N - 1) - 0.5) * s;
+          const z = center.z + (j / (N - 1) - 0.5) * s;
+          const hit = collision.castDown(x, z, probeTop, probeTop - bounds.min.y + 10, meshes);
+          if (!hit) continue;
+          const y = hit.point.y;
+          if (!fallback) fallback = new THREE.Vector3(x, y, z);
+          let blocked = false;
+          for (const h of collision.collideHeights) {
+            for (const m of meshes) {
+              pen.has = false; pen.depth = 0;
+              collision.collideMesh(m, x, y + h, z, collision.radius + 0.05, y + collision.stepHeight, pen);
+              if (pen.has && pen.depth > 0.02) { blocked = true; break; }
+            }
+            if (blocked) break;
+          }
+          if (!blocked) return new THREE.Vector3(x, y, z);
+        }
+      }
+    }
+    return fallback || new THREE.Vector3(center.x, bounds.min.y + 2, center.z);
   }
 
   /** 依据当前朝向与按键得出水平期望方向，同时刷新 _fwd / _right */
