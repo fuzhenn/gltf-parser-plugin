@@ -121,7 +121,7 @@ export class ViewerControls {
 
     // ViewCube（独立类，叠加渲染在主画布右上角）
     this.viewCube = new ViewCube(this.renderer.domElement, container, {
-      size: 120,
+      size: 60,
       margin: 10,
       upAxis: this.upAxis,
       onFaceClick: (dir) => this.flyToDirection(dir),
