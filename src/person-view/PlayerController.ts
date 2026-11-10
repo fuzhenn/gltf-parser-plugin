@@ -7,8 +7,10 @@
  *   3. 每帧推进物理与移动（步行碰撞滑行、台阶跨越、跳跃、飞行）；
  *   4. 每帧同步第三人称角色模型（person.update 由 update 内部调用）；
  *   5. 每帧更新第三人称相机（平滑跟随 / 落地缓冲 / 防穿墙 / 动态 FOV）；
- *   5. exitThirdPerson() 退出第三人称 / enterThirdPerson() 恢复第三人称（OrbitControls
- *      的创建销毁由外部经 onViewToggle 回调处理；FOV 在激活时从相机读取、退出时恢复）；toggleView(isActive?) / V 键随时切换。
+ *   6. exitThirdPerson() 退出第三人称 / enterThirdPerson() 恢复第三人称（OrbitControls
+ *      的创建销毁由外部经 onViewToggle 回调处理；FOV 在激活时从相机读取、退出时恢复）；
+ *   7. toggleView(isActive?) 切换第三人称 / OrbitControls 视角（已绑定 V 键，任何模式下均可用；
+ *      isActive=true 强制进入、false 强制退出，不传则取反当前状态）。
  *
  * 用法：
  *   const player = new Player({ camera, config: CONFIG, collidersBounds });
@@ -20,6 +22,8 @@
  *   player.clearColliders();                     // 需要更换碰撞体时清空后重新 addColliders
  *   player.spawnPoint = findSpawn(player);       // findSpawn 定义在 main.ts（经 player.collision 探测）
  *   player.resetToSpawn();
+ *   player.toggleView(false);                    // 手动切换视角（可选；内部已绑定 V 键随时切换）
+ *                                                // isActive=true 强制进入第三人称、false 强制退出，不传则取反当前状态
  *   // 主循环中：
  *   if (!paused) player.update(dt);              // 内部每帧同步角色模型、更新相机并增量构建碰撞数据（登记由业务代码控制）
  * ------------------------------------------------------------
