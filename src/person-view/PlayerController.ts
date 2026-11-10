@@ -11,8 +11,9 @@
  *      的创建销毁由外部经 onViewToggle 回调处理；FOV 在激活时从相机读取、退出时恢复）；
  *   7. toggleView(isActive?) 切换第三人称 / OrbitControls 视角（已绑定 V 键，任何模式下均可用；
  *      isActive=true 强制进入、false 强制退出，不传则取反当前状态）；
- *   8. initialize(object3d) 封装初始化流程：登记碰撞体 → 加载角色模型 → 构建碰撞数据 → 定位出生点并就位
- *      （DOM 相关操作如进度展示、错误提示、启动渲染循环由外部处理）。
+ *   8. initialize(object3d, opts?) 封装初始化流程：登记碰撞体 → 加载角色模型 → 构建碰撞数据 → 定位出生点并就位
+ *      （opts.spawnPoint 指定出生点，合法时直接使用，否则回退到 findSpawn 自动寻找；
+ *       DOM 相关操作如进度展示、错误提示、启动渲染循环由外部处理）。
  *
  * 用法：
  *   const player = new Player({ camera, config: CONFIG, collidersBounds });
@@ -212,11 +213,12 @@ export class Player {
 
   /**
    * 初始化玩家（原 main.ts init 中的非 DOM 逻辑）：
-   *   登记碰撞体 → 加载第三人称角色模型 → 构建碰撞数据 → 自动定位出生点并就位。
+   *   登记碰撞体 → 加载第三人称角色模型 → 构建碰撞数据 → 定位出生点并就位。
    * @param colliderRoot 碰撞体根节点（连同其所有后代网格登记为碰撞体；调用前请确保 matrixWorld 已更新）
+   * @param opts.spawnPoint 指定出生点（可选）：合法时直接使用，不合法（不在世界内 / 脚下无地面 / 被碰撞体卡住）则回退到 findSpawn 自动寻找
    * @param opts.onProgress 加载进度回调（progress∈[0,1]，tip 为提示文案），外部可用来更新 DOM 加载条
    */
-  async initialize(colliderRoot: THREE.Object3D, opts: { onProgress?: (progress: number, tip: string) => void } = {}): Promise<void> {
+  async initialize(colliderRoot: THREE.Object3D, opts: { spawnPoint?: THREE.Vector3; onProgress?: (progress: number, tip: string) => void } = {}): Promise<void> {
     const progress = opts.onProgress ?? (() => {});
 
     /* 登记所有碰撞体（自动收集子网格并缓存） */
@@ -235,11 +237,41 @@ export class Player {
     /* 构建碰撞数据（增量 / 幂等） */
     await this.buildCollision({ onProgress: progress });
 
-    /* 自动寻找出生点并就位（内部同步角色到出生点并让相机直接就位，避免开场从原点飞过来） */
+    /* 定位出生点并就位（内部同步角色到出生点并让相机直接就位，避免开场从原点飞过来）：
+       指定出生点合法时直接使用，否则回退到自动寻找 */
     progress(0.99, '定位出生点…');
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
-    this.spawnPoint = this.findSpawn();
+    const spawn = opts.spawnPoint;
+    this.spawnPoint = (spawn && this.isSpawnValid(spawn)) ? spawn : this.findSpawn();
     this.resetToSpawn();
+  }
+
+  /**
+   * 校验一个出生点是否合法（与 findSpawn 的挑选标准一致）：
+   *   1. 位于碰撞世界包围盒内；
+   *   2. 脚下（沿上方向下 2.5m 内）有地面；
+   *   3. 身体各高度处没有被碰撞体卡住。
+   */
+  isSpawnValid(spawn: THREE.Vector3): boolean {
+    const collision = this.collision;
+    /* 必须在世界包围盒内 */
+    if (collision.worldBounds.containsPoint(spawn) === false) return false;
+
+    /* 脚下必须有地面（超过 stepHeight 一点的容差，允许略微贴地） */
+    const meshes = collision.queryNearby(spawn.x, spawn.z, PLAYER.radius + 1.6);
+    const hit = collision.castDown(spawn.x, spawn.z, spawn.y, 2.5, meshes);
+    if (!hit) return false;
+
+    /* 身体各高度处不得被碰撞体穿透（复用 findSpawn 的 blocked 判定） */
+    const pen: Penetration = { has: false, depth: 0, dx: 0, dy: 0, dz: 0 };
+    for (const h of collision.collideHeights) {
+      for (const m of meshes) {
+        pen.has = false; pen.depth = 0;
+        collision.collideMesh(m, spawn.x, spawn.y + h, spawn.z, collision.radius + 0.05, spawn.y + collision.stepHeight, pen);
+        if (pen.has && pen.depth > 0.02) return false;
+      }
+    }
+    return true;
   }
 
   /** 绑定玩家相关按键（记录取消订阅函数，便于退出第三人称时解绑；KeyV 永远保持绑定） */
