@@ -71,6 +71,8 @@ export interface GameConfig {
   upAxis?: UpAxis;
   /** Person 模型缩放（默认 1，等比缩放角色模型） */
   personScale?: number;
+  /** 角色模型原生朝向：'+z'（glTF 惯例，默认）或 '-z'（如 Soldier.glb） */
+  personFacing?: '+z' | '-z';
 }
 
 /** GameConfig 可选字段默认值（不含必填的 charUrl / animClips）：构造 Player 时与传入配置合并 */
@@ -87,7 +89,8 @@ export const DEFAULT_CONFIG: Required<Omit<GameConfig, 'charUrl' | 'animClips'>>
   gridCell: 16,
   camDist: 4.2,
   upAxis: 'y',
-  personScale: 1
+  personScale: 1,
+  personFacing: '+z'
 };
 
 export interface PlayerOptions {
@@ -205,7 +208,7 @@ export class Player {
     this.up.set(0, 0, 0).setComponent(this._upIdx, 1);
 
     this.person = this.config.charUrl
-      ? new Person({ url: this.config.charUrl, parent: this.object3D, walkSpeed: this.config.walkSpeed, upAxis: this.upAxis, animClips: this.config.animClips, scale: this.config.personScale })
+      ? new Person({ url: this.config.charUrl, parent: this.object3D, walkSpeed: this.config.walkSpeed, upAxis: this.upAxis, animClips: this.config.animClips, scale: this.config.personScale, facing: this.config.personFacing })
       : null;
 
     this.bindInput();
@@ -277,6 +280,9 @@ export class Player {
   /** 绑定玩家相关按键（记录取消订阅函数，便于退出第三人称时解绑；KeyV 永远保持绑定） */
   bindInput(): void {
     const kb = this.keyboard;
+    /* 先解绑旧回调再重绑：外部直接改 isActive 绕过 exitThirdPerson 时，避免重复注册
+       （重复注册会让 fly 这类取反型回调被触发两次，等于没生效） */
+    for (const off of this._unbinds) off();
     this._unbinds = [
       kb.onPress('Space', () => { this.jumpBuffer = 0.16; }),
       kb.onPress('KeyF', () => { this.fly = !this.fly; this.vel.set(0, 0, 0); this.vy = 0; this.hovering = false; this.jumping = false; }),

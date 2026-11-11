@@ -62,6 +62,8 @@ export interface PersonOptions {
   animClips?: Partial<AnimClipNames>;
   /** 角色模型缩放（默认 1，等比缩放模型） */
   scale?: number;
+  /** 模型原生朝向：'+z'（glTF 惯例，默认）或 '-z'（如 Soldier.glb） */
+  facing?: '+z' | '-z';
 }
 
 /** 把角度归一到 (-PI, PI] */
@@ -90,14 +92,17 @@ export class Person {
   animClips: AnimClipNames;
   /** 角色模型缩放 */
   scale: number;
+  /** 模型原生朝向约定 */
+  facing: '+z' | '-z';
 
-  constructor({ url, parent, walkSpeed, upAxis = 'y', animClips, scale = 1 }: PersonOptions) {
+  constructor({ url, parent, walkSpeed, upAxis = 'y', animClips, scale = 1, facing = '+z' }: PersonOptions) {
     this.url = url;
     this.parent = parent;
     this.walkSpeed = walkSpeed;
     this.upAxis = upAxis;
     this.animClips = { ...DEFAULT_ANIM_CLIPS, ...animClips };
     this.scale = scale;
+    this.facing = facing;
   }
 
   /** 切换动画：淡入新动作、淡出旧动作（名称不区分大小写） */
@@ -110,8 +115,9 @@ export class Person {
     this.current = next;
   }
 
-  /** 载入角色模型，并准备 idle / walking / running / jump 动画 */
+  /** 载入角色模型，并准备 idle / walking / running / jump 动画（已加载时直接返回，防止重复创建模型实例） */
   async load(): Promise<void> {
+    if (this.root) return;
     const gltf = await new GLTFLoader().loadAsync(this.url);
     const model = gltf.scene;
     model.scale.setScalar(this.scale);
@@ -150,6 +156,8 @@ export class Person {
     this.root.position.copy(player.pos);
 
     const zUp = this.upAxis === 'z';
+    /* 模型原生朝向与朝向公式（按 +Z 约定编写）相差 180° 时，统一叠加偏移修正 */
+    const yawOffset = this.facing === '-z' ? Math.PI : 0;
     /* 水平速度：水平两轴为 Y-UP (x,z) / Z-UP (x,y) */
     const spdH = zUp ? Math.hypot(player.vel.x, player.vel.y) : Math.hypot(player.vel.x, player.vel.z);
     let targetYaw = this.yaw;
@@ -157,14 +165,16 @@ export class Person {
 
     if (player.fly) {
       /* 飞行时面向镜头前方（两种 up 轴下与 Player 的 yaw 约定保持一致） */
-      targetYaw = zUp ? -player.yaw : player.yaw + Math.PI;
+      targetYaw = zUp ? -player.yaw + yawOffset : player.yaw + Math.PI + yawOffset;
       anim = spdH > 0.6 ? this.animClips.walking : this.animClips.idle;
     } else if (player.jumping) {
       /* 仅空格起跳后播放 Jump 动画；悬空行走（无地面保持高度）不进入 Jump */
       anim = this.actions[this.animClips.jump.toLowerCase()] ? this.animClips.jump : null;
     } else if (spdH > 0.5) {
       /* 面向移动方向；速度超过步行上限则切换为跑步动画 */
-      targetYaw = zUp ? Math.atan2(player.vel.x, -player.vel.y) : Math.atan2(player.vel.x, player.vel.z);
+      targetYaw = zUp
+        ? Math.atan2(player.vel.x, -player.vel.y) + yawOffset
+        : Math.atan2(player.vel.x, player.vel.z) + yawOffset;
       anim = (spdH > this.walkSpeed + 0.4) ? this.animClips.running : this.animClips.walking;
     } else {
       anim = this.animClips.idle;
