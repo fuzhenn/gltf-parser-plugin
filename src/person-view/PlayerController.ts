@@ -69,6 +69,8 @@ export interface GameConfig {
   camDist?: number;
   /** 世界上方向轴：'y'（默认，Y-UP）或 'z'（Z-UP） */
   upAxis?: UpAxis;
+  /** 碰撞数据构建时每帧的处理时间预算（毫秒，默认 4）：每帧至少处理一个模型，超出即让出到下一帧 */
+  bvhFrameBudgetMs?: number;
   /** Person 模型缩放（默认 1，等比缩放角色模型） */
   personScale?: number;
   /** 角色模型原生朝向：'+z'（glTF 惯例，默认）或 '-z'（如 Soldier.glb） */
@@ -89,6 +91,7 @@ export const DEFAULT_CONFIG: Required<Omit<GameConfig, 'charUrl' | 'animClips'>>
   gridCell: 16,
   camDist: 4.2,
   upAxis: 'y',
+  bvhFrameBudgetMs: 4,
   personScale: 1,
   personFacing: '+z'
 };
@@ -189,6 +192,7 @@ export class Player {
       stepHeight: this.config.stepHeight,
       radius: PLAYER.radius,
       upAxis: this.config.upAxis,
+      frameBudgetMs: this.config.bvhFrameBudgetMs,
       worldBounds: collidersBounds
     });
     this.keyboard = new Keyboard({
