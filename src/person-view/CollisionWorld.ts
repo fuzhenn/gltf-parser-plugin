@@ -74,6 +74,8 @@ export interface CollisionWorldOptions {
   targetLeafSize?: number;
   /** 世界上方向轴：'y'（默认，Y-UP）或 'z'（Z-UP） */
   upAxis?: UpAxis;
+  /** 世界包围盒（外部指定）：传入后不再按网格汇总，build/clear 均以此为准 */
+  worldBounds?: THREE.Box3;
 }
 
 /** 脚下多点采样偏移（单位为玩家半径的倍数；两轴为水平面两轴：Y-UP 为 x/z，Z-UP 为 x/y） */
@@ -115,6 +117,8 @@ export class CollisionWorld {
   private _bvhFailed = false;
   /** 世界包围盒是否需要按缓存重算 */
   private _boundsDirty = false;
+  /** 外部指定的世界包围盒（非空时 _rebuildBounds / clear 均以此为准，不再按网格汇总） */
+  private _boundsOverride: THREE.Box3 | null = null;
 
   /** 已登记的网格，避免同一个 mesh 被重复 add */
   private _registered = new Set<THREE.Mesh>();
@@ -145,7 +149,8 @@ export class CollisionWorld {
     radius = 0.35,
     collideHeights = [0.45, 1.0, 1.55],
     targetLeafSize = 10,
-    upAxis = 'y'
+    upAxis = 'y',
+    worldBounds
   }: CollisionWorldOptions = {}) {
     this.gridCell = gridCell;
     this.stepHeight = stepHeight;
@@ -153,6 +158,9 @@ export class CollisionWorld {
     this.collideHeights = collideHeights.slice();
     this.targetLeafSize = targetLeafSize;
     this.upAxis = upAxis;
+    /* 外部指定的世界包围盒：优先于按网格汇总的结果 */
+    this._boundsOverride = worldBounds ? worldBounds.clone() : null;
+    if (this._boundsOverride) this.worldBounds.copy(this._boundsOverride);
   }
 
   /** 世界上方向轴。修改时会同步派生量（向下射线方向 / 水平面两轴 / 兜底射线方向） */
@@ -246,8 +254,13 @@ export class CollisionWorld {
     this._boundsDirty = true;
   }
 
-  /** 按各网格缓存重新汇总世界包围盒 */
+  /** 按各网格缓存重新汇总世界包围盒（有外部指定 worldBounds 时以外部为准） */
   private _rebuildBounds(): void {
+    if (this._boundsOverride) {
+      this.worldBounds.copy(this._boundsOverride);
+      this._boundsDirty = false;
+      return;
+    }
     const b = this.worldBounds;
     b.makeEmpty();
     for (const m of this.meshes) {
@@ -282,12 +295,6 @@ export class CollisionWorld {
     return true;
   }
 
-  /** 用某个对象树直接覆盖世界包围盒（用于兜底场景） */
-  setBoundsFromObject(root: THREE.Object3D): THREE.Box3 {
-    this.worldBounds.setFromObject(root);
-    return this.worldBounds;
-  }
-
   /**
    * 清空当前登记的全部碰撞体与空间索引。
    *
@@ -310,7 +317,9 @@ export class CollisionWorld {
     this._registered.clear();
     this.grid.clear();
     this.largeMeshes.length = 0;
-    this.worldBounds.makeEmpty();
+    /* 有外部指定的世界包围盒时恢复之，否则清空 */
+    if (this._boundsOverride) this.worldBounds.copy(this._boundsOverride);
+    else this.worldBounds.makeEmpty();
     this._boundsDirty = false;
   }
 

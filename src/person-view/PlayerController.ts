@@ -188,10 +188,9 @@ export class Player {
       gridCell: this.config.gridCell,
       stepHeight: this.config.stepHeight,
       radius: PLAYER.radius,
-      upAxis: this.config.upAxis
+      upAxis: this.config.upAxis,
+      worldBounds: collidersBounds
     });
-    /* 初始碰撞包围盒：覆盖碰撞世界按网格汇总的世界范围 */
-    this.collision.worldBounds.copy(collidersBounds);
     this.keyboard = new Keyboard({
       preventKeys: ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyQ', 'KeyE']
     });
