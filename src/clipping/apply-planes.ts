@@ -1,4 +1,4 @@
-import { Material, Mesh, Object3D, Plane } from "three";
+import { Line, Material, Mesh, Object3D, Plane, Points } from "three";
 
 /**
  * 对指定 Object3D 子树内所有 mesh 材质写入 clippingPlanes。
@@ -11,7 +11,9 @@ export function applyClippingPlanesToObject3D(
   planes: Plane[] | null,
 ): void {
   root.traverse((obj) => {
-    if (!(obj instanceof Mesh)) return;
+    // LineSegments/Line/Points 也支持 clippingPlanes（LineBasicMaterial/PointsMaterial）
+    if (!(obj instanceof Mesh || obj instanceof Line || obj instanceof Points))
+      return;
     const materials = Array.isArray(obj.material)
       ? obj.material
       : [obj.material];
