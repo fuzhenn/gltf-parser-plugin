@@ -300,7 +300,7 @@ export class Player {
    * 注意：调用前请确保该对象的 matrixWorld 已更新。
    */
   addColliders(object: THREE.Object3D | null): THREE.Mesh[] {
-    return this.collision.add(object);
+    return this.collision.addFromObject(object);
   }
 
   /**
