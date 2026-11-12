@@ -21,7 +21,7 @@
  *   // collidersBounds（THREE.Box3）为碰撞世界初始包围盒，需在场景与碰撞体就绪后计算传入
  *   // 支持 Y-UP（默认）与 Z-UP：在 CONFIG 中传 upAxis: 'z' 即可，会同步到碰撞世界与角色模型
  *   await player.initialize(gltf.scene, { onProgress }); // 一步完成：登记碰撞体 → 加载角色模型 → 构建碰撞数据 → 定位出生点并就位
- *   player.clearColliders();                     // 需要更换碰撞体时清空后重新 initialize / addColliders
+ *   player.clearColliders();                     // 需要更换碰撞体时清空后重新 initialize / refreshColliders
  *   player.toggleView(false);                    // 手动切换视角（可选；内部已绑定 V 键随时切换）
  *                                                // isActive=true 强制进入第三人称、false 强制退出，不传则取反当前状态
  *   // 主循环中：
@@ -224,8 +224,8 @@ export class Player {
   async initialize(colliderRoot: THREE.Object3D, opts: { spawnPoint?: THREE.Vector3; onProgress?: (progress: number, tip: string) => void } = {}): Promise<void> {
     const progress = opts.onProgress ?? (() => {});
 
-    /* 登记所有碰撞体（自动收集子网格并缓存） */
-    this.addColliders(colliderRoot);
+    /* 登记所有碰撞体（子网格扁平化后按与相机的距离排序，逐个登记） */
+    this.registerColliders(colliderRoot);
 
     /* 加载第三人称角色模型（失败则进入无角色模式，不阻塞初始化） */
     progress(0.62, '加载角色模型…');
@@ -296,15 +296,44 @@ export class Player {
   /* ================= 碰撞世界门面 ================= */
 
   /**
-   * 登记一个碰撞体（连同它的所有后代网格）。重复登记会被自动忽略。
-   * 注意：调用前请确保该对象的 matrixWorld 已更新。
+   * 把传入对象及其所有子节点整理成扁平的 mesh 数组，按与相机的距离由近到远排序，
+   * 再逐个传给 collision.add 登记（登记顺序即 build 顺序 → 近处网格优先建索引与 BVH）。
+   * 重复登记会被自动忽略。注意：调用前请确保该对象的 matrixWorld 已更新。
    */
-  addColliders(object: THREE.Object3D | null): THREE.Mesh[] {
-    return this.collision.addFromObject(object);
+  private registerColliders(object: THREE.Object3D | null): THREE.Mesh[] {
+    const added: THREE.Mesh[] = [];
+    if (!object || !object.isObject3D) return added;
+
+    /* 1. 扁平化：收集全部后代 Mesh */
+    const meshes: THREE.Mesh[] = [];
+    object.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
+    });
+    if (!meshes.length) return added;
+
+    /* 2. 按包围球中心与相机的距离升序排序（近 → 远） */
+    const camPos = this.camera.position;
+    const center = new THREE.Vector3();
+    const entries = meshes.map((mesh) => {
+      const g = mesh.geometry;
+      if (g && !g.boundingSphere) g.computeBoundingSphere();
+      const bs = g ? g.boundingSphere : null;
+      if (bs) center.copy(bs.center).applyMatrix4(mesh.matrixWorld);
+      else mesh.getWorldPosition(center);
+      return { mesh, d2: center.distanceToSquared(camPos) };
+    });
+    entries.sort((a, b) => a.d2 - b.d2);
+
+    /* 3. 逐个登记 */
+    for (const { mesh } of entries) {
+      const r = this.collision.add(mesh);
+      if (r.length) added.push(mesh);
+    }
+    return added;
   }
 
   /**
-   * 清空已登记的全部碰撞体（含空间索引），由业务代码决定何时重新 addColliders。
+   * 清空已登记的全部碰撞体（含空间索引），由业务代码决定何时重新登记。
    * 网格上的碰撞缓存（包围盒 / BVH）会保留，重新 add + build 后无需重建 BVH。
    */
   clearColliders(): void {
@@ -312,15 +341,15 @@ export class Player {
   }
 
   /**
-   * 刷新碰撞体：清空现有碰撞体 → 登记传入 group（连同其所有后代网格）→ 重新构建碰撞数据。
-   * 适用于整体更换碰撞体来源的场景（如场景切换 / 动态建筑更新）。
+   * 刷新碰撞体：清空现有碰撞体 → 登记传入 group（扁平化为 mesh 数组并按与相机的距离排序后逐个登记）
+   * → 重新构建碰撞数据。适用于整体更换碰撞体来源的场景（如场景切换 / 动态建筑更新）。
    * @param group 碰撞体根节点（调用前请确保其 matrixWorld 已更新）
    * @param opts.onProgress 构建进度回调
    * @returns BVH 是否可用
    */
   async refreshColliders(group: THREE.Object3D | null, opts: { onProgress?: (progress: number, tip: string) => void } = {}): Promise<boolean> {
     this.clearColliders();
-    this.addColliders(group);
+    this.registerColliders(group);
     return this.buildCollision(opts);
   }
 
