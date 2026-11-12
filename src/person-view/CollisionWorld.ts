@@ -23,6 +23,8 @@
  * 增量构建：
  *   build() 是幂等的，可以每帧调用。每个网格的处理结果缓存在 mesh.userData.collisionCache，
  *   已处理过的网格会被跳过，只为新增（或 invalidate 过的）网格计算包围盒 / 铺网格 / 建 BVH。
+ *   构建受每帧时间预算限制（frameBudgetMs，默认 4ms）：每帧至少处理一个模型，
+ *   预算用完即让出到下一帧，未处理完的模型由后续帧继续（requestAnimationFrame 保证持续推进）。
  *   若动态物体移动或换了几何，调用 world.invalidate(mesh)（换几何时同时把 cv.bvh 置回 false）即可。
  *
  * 每帧「清空 + 重新登记」：
@@ -76,6 +78,8 @@ export interface CollisionWorldOptions {
   upAxis?: UpAxis;
   /** 世界包围盒（外部指定）：传入后不再按网格汇总，build/clear 均以此为准 */
   worldBounds?: THREE.Box3;
+  /** build 每帧的处理时间预算（毫秒），每帧至少处理一个模型，超出即让出到下一帧 */
+  frameBudgetMs?: number;
 }
 
 /** 脚下多点采样偏移（单位为玩家半径的倍数；两轴为水平面两轴：Y-UP 为 x/z，Z-UP 为 x/y） */
@@ -91,6 +95,8 @@ export class CollisionWorld {
   radius: number;
   collideHeights: number[];
   targetLeafSize: number;
+  /** build 每帧的处理时间预算（毫秒），每帧至少处理一个模型（可在运行期直接修改） */
+  frameBudgetMs: number;
 
   /** 上方向轴内部值：'y' | 'z'（通过 upAxis 存取器修改，会同步派生量） */
   private _upAxis: UpAxis = 'y';
@@ -119,6 +125,11 @@ export class CollisionWorld {
   private _boundsDirty = false;
   /** 外部指定的世界包围盒（非空时 _rebuildBounds / clear 均以此为准，不再按网格汇总） */
   private _boundsOverride: THREE.Box3 | null = null;
+
+  /** 进行中的 build Promise（防止外部每帧重复调用导致重入） */
+  private _buildPromise: Promise<boolean> | null = null;
+  /** 当前帧预算的计时起点 */
+  private _frameStart = 0;
 
   /** 已登记的网格，避免同一个 mesh 被重复 add */
   private _registered = new Set<THREE.Mesh>();
@@ -150,6 +161,7 @@ export class CollisionWorld {
     collideHeights = [0.45, 1.0, 1.55],
     targetLeafSize = 10,
     upAxis = 'y',
+    frameBudgetMs = 4,
     worldBounds
   }: CollisionWorldOptions = {}) {
     this.gridCell = gridCell;
@@ -157,6 +169,7 @@ export class CollisionWorld {
     this.radius = radius;
     this.collideHeights = collideHeights.slice();
     this.targetLeafSize = targetLeafSize;
+    this.frameBudgetMs = frameBudgetMs;
     this.upAxis = upAxis;
     /* 外部指定的世界包围盒：优先于按网格汇总的结果 */
     this._boundsOverride = worldBounds ? worldBounds.clone() : null;
@@ -328,31 +341,64 @@ export class CollisionWorld {
   /**
    * 构建碰撞数据（增量 / 幂等：可安全地在每一帧调用）
    *
+   * - 防重入：外部可以每帧重复调用（requestAnimationFrame 保证每帧执行），
+   *   同一时刻只会存在一个构建流程，构建期间重复调用会直接返回进行中的 Promise；
+   * - 时间预算：每帧的处理时间不超过 frameBudgetMs（默认 4ms，可配置），
+   *   且每帧至少处理一个模型；预算用完即让出到下一帧，未处理完的模型由后续帧继续。
+   *
    * 依赖 mesh.userData.collisionCache 中的标记来判断网格是否已处理：
    *   - 已 indexed 的网格不会再被铺进空间索引；
    *   - 已 bvh 的网格不会再构建 BVH；
    *   - 没有新增内容时直接返回，不做任何遍历以外的开销。
    * 因此「每帧 add 一批不同的 mesh + 每帧 build」也不会重复处理旧网格。
    *
-   * @param options.onProgress 进度回调
+   * @param options.onProgress 进度回调（构建期间重复调用时，以首次调用的回调为准）
    * @returns BVH 是否可用
    */
-  async build({ onProgress }: { onProgress?: (progress: number, tip: string) => void } = {}): Promise<boolean> {
+  build({ onProgress }: { onProgress?: (progress: number, tip: string) => void } = {}): Promise<boolean> {
+    if (this._buildPromise) return this._buildPromise;
+    const p = this._buildCore(onProgress).finally(() => { this._buildPromise = null; });
+    this._buildPromise = p;
+    return p;
+  }
+
+  /** 记录当前帧预算的计时起点 */
+  private _startBudget(): void {
+    this._frameStart = performance.now();
+  }
+
+  /**
+   * 当前帧预算是否已用完。
+   * @param processed 本帧已处理的模型数（保证每帧至少处理一个模型，0 时永不让出）
+   */
+  private _budgetExceeded(processed: number): boolean {
+    if (processed <= 0) return false;
+    return performance.now() - this._frameStart >= this.frameBudgetMs;
+  }
+
+  private async _buildCore(onProgress?: (progress: number, tip: string) => void): Promise<boolean> {
     const report = onProgress || ((): void => {});
+    this._startBudget();
+    let processed = 0;                     // 本帧已处理的模型数
 
     /* --- 1. 增量铺进空间索引：只处理还没有缓存的网格 --- */
     let newCount = 0;
-    for (const m of this.meshes) {
+    for (let i = 0; i < this.meshes.length; i++) {
+      const m = this.meshes[i];
       const cv = m.userData.collisionCache as CollisionCache | undefined;
       if (cv && cv.indexed) continue;        // 已处理过 → 跳过
       this._indexMesh(m);
       newCount++;
+      processed++;
+      if (this._budgetExceeded(processed)) { // 预算用完 → 让出到下一帧继续
+        report(0.62, '建立空间索引…');
+        await nextFrame();
+        this._startBudget();
+        processed = 0;
+      }
     }
     if (this._boundsDirty) this._rebuildBounds();
-    if (newCount > 0) {
-      report(0.62, '建立空间索引…');
-      if (newCount > 8) await nextFrame();
-    }
+    if (newCount > 0) report(0.62, '建立空间索引…');
 
     /* --- 2. 增量构建 BVH：只为还没有 BVH 的网格 --- */
     const pending: THREE.Mesh[] = [];
@@ -370,6 +416,8 @@ export class CollisionWorld {
     if (this._bvhFailed) return this.bvhReady;
 
     await nextFrame();
+    this._startBudget();
+    processed = 0;
     report(0.66, '构建碰撞体 BVH…');
     try {
       const bvhMod = await import('three-mesh-bvh');
@@ -384,9 +432,12 @@ export class CollisionWorld {
         const m = pending[i];
         m.geometry.computeBoundsTree({ targetLeafSize: this.targetLeafSize });
         (m.userData.collisionCache as CollisionCache).bvh = true;
-        if (i % 8 === 0) {
-          report(0.66 + (i / total) * 0.32, `构建碰撞体 BVH ${i} / ${total}`);
+        processed++;
+        if (this._budgetExceeded(processed)) { // 预算用完 → 让出到下一帧继续
+          report(0.66 + ((i + 1) / total) * 0.32, `构建碰撞体 BVH ${i + 1} / ${total}`);
           await nextFrame();
+          this._startBudget();
+          processed = 0;
         }
       }
       this.bvhReady = true;
