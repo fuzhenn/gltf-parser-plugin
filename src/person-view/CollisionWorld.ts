@@ -13,8 +13,7 @@
  * 典型用法：
  *   const world = new CollisionWorld({ gridCell: 16, stepHeight: 0.5, radius: 0.35 });
  *   world.upAxis = 'z';               // 可选：Z-UP 世界（默认 Y-UP）
- *   world.addFromObject(gltf.scene);  // 传入根节点，递归收集其中所有 Mesh（含子节点）
- *                                     // world.add(mesh) 只登记单个 Mesh，不遍历子节点
+ *   world.add(mesh);                  // 逐个登记 Mesh（不遍历子节点；业务侧可先按与相机的距离排序）
  *   await world.build({ onProgress: (p, tip) => setProgress(p, tip) });
  *   const meshes = world.queryNearby(px, pz, radius + 1.6);
  *   world.resolvePenetration(pos, meshes, pos.y);
@@ -28,7 +27,7 @@
  *
  * 每帧「清空 + 重新登记」：
  *   world.clear();                                   // 只清 mesh 与空间索引
- *   world.addFromObject(gltf.scene);                 // 再次传入根节点即可（子节点自动收集）
+ *   world.add(mesh);                                 // 逐个重新登记（同样不遍历子节点）
  *   await world.build();                             // 只重铺索引，不会重复构建 BVH
  * ------------------------------------------------------------
  */
@@ -187,7 +186,8 @@ export class CollisionWorld {
   /**
    * 登记单个网格作为碰撞体（不遍历子节点）。
    *
-   * 只登记传入的 Mesh 本身；需要连同后代网格一起登记时，请使用 addFromObject(root)。
+   * 只登记传入的 Mesh 本身；若要登记一个对象树，请在业务侧把其所有子节点整理成
+   * 扁平 mesh 数组（可按与相机的距离排序）后逐个调用本方法。
    * 重复登记会被自动忽略。
    *
    * 注意：请确保调用前该对象的 matrixWorld 已更新（如 scene.add 后 updateMatrixWorld(true)），
@@ -280,23 +280,6 @@ export class CollisionWorld {
     cv.indexed = false;
     this._boundsDirty = true;
     return true;
-  }
-
-  /**
-   * 从对象树中自动收集所有 Mesh 并登记（add 的带过滤版本）
-   * @param filter 返回 false 则跳过
-   * @returns 本次新登记到的网格
-   */
-  addFromObject(root: THREE.Object3D | null, filter?: (mesh: THREE.Mesh) => boolean): THREE.Mesh[] {
-    const added: THREE.Mesh[] = [];
-    if (!root || !root.isObject3D) return added;
-    root.traverse((o) => {
-      if (!(o as THREE.Mesh).isMesh) return;
-      const mesh = o as THREE.Mesh;
-      if (filter && !filter(mesh)) return;
-      if (this._addMesh(mesh)) added.push(mesh);
-    });
-    return added;
   }
 
   /** 用某个对象树直接覆盖世界包围盒（用于兜底场景） */
