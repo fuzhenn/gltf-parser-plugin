@@ -389,6 +389,10 @@ export class GLTFParserPlugin {
     this._clippingPlanesHelper.setClippingPlanes(planes);
   }
 
+  getRootBoundingBox() {
+    return this._structureHelper.getRootBoundingBox();
+  }
+
   /**
    * Plugin disposal
    */

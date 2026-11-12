@@ -167,6 +167,16 @@ export class StructureHelper {
     return bboxArrayToBox3(node?.bbox);
   }
 
+  /**
+   * 根节点包围盒：取结构数据根级 `children[0].box`
+   * （`[minX,minY,minZ,maxX,maxY,maxZ]`，与 `bbox` / `selectByBox` 坐标系一致）
+   * @returns 结构未就绪或缺少有效 box 时返回 `null`
+   */
+  getRootBoundingBox(): Box3 | null {
+    const structureData = this._syncStructureFromTileset();
+    return bboxArrayToBox3(structureData?.trees?.[structureData.defaultTree || 0]?.children?.[0]?.bbox);
+  }
+
   /** 计算给定 OID 集合的几何中心（世界坐标系与结构 bbox 一致） */
   getCenterByOids(oids: readonly number[]): Vector3 | null {
     if (!this._getTiles() || oids.length === 0) return null;
