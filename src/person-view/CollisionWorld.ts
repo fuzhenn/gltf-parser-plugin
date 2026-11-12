@@ -71,7 +71,7 @@ export interface CollisionWorldOptions {
   /** 碰撞体沿身体轴的采样高度（相对脚底，沿上轴方向） */
   collideHeights?: number[];
   /** BVH 叶子节点最大三角面数 */
-  maxLeafTris?: number;
+  targetLeafSize?: number;
   /** 世界上方向轴：'y'（默认，Y-UP）或 'z'（Z-UP） */
   upAxis?: UpAxis;
 }
@@ -88,7 +88,7 @@ export class CollisionWorld {
   stepHeight: number;
   radius: number;
   collideHeights: number[];
-  maxLeafTris: number;
+  targetLeafSize: number;
 
   /** 上方向轴内部值：'y' | 'z'（通过 upAxis 存取器修改，会同步派生量） */
   private _upAxis: UpAxis = 'y';
@@ -144,14 +144,14 @@ export class CollisionWorld {
     stepHeight = 0.5,
     radius = 0.35,
     collideHeights = [0.45, 1.0, 1.55],
-    maxLeafTris = 10,
+    targetLeafSize = 10,
     upAxis = 'y'
   }: CollisionWorldOptions = {}) {
     this.gridCell = gridCell;
     this.stepHeight = stepHeight;
     this.radius = radius;
     this.collideHeights = collideHeights.slice();
-    this.maxLeafTris = maxLeafTris;
+    this.targetLeafSize = targetLeafSize;
     this.upAxis = upAxis;
   }
 
@@ -396,7 +396,7 @@ export class CollisionWorld {
       const total = pending.length;
       for (let i = 0; i < total; i++) {
         const m = pending[i];
-        m.geometry.computeBoundsTree({ maxLeafTris: this.maxLeafTris });
+        m.geometry.computeBoundsTree({ targetLeafSize: this.targetLeafSize });
         (m.userData.collisionCache as CollisionCache).bvh = true;
         if (i % 8 === 0) {
           report(0.66 + (i / total) * 0.32, `构建碰撞体 BVH ${i} / ${total}`);
