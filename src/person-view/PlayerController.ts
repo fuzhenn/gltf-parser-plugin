@@ -651,6 +651,8 @@ export class Player {
     if (this.pos.getComponent(upIdx) < this.collision.worldBounds.min.getComponent(upIdx) - 80) this.resetToSpawn();
 
     this.syncVisual(dt);
+
+    this.camera.updateMatrixWorld();
   }
 
   /** 每帧同步角色模型姿态与第三人称相机（物理更新后调用，避免使用上一帧位置） */
