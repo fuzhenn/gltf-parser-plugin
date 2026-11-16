@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { DistanceMeasure, type DistanceMeasureOptions, type DistanceMeasurement } from './DistanceMeasure';
 import { ClippingPlane, type ClippingAxis } from './ClippingPlane';
+import { PointCoordinateMarker } from './PointCoordinateMarker';
 import { SectionBox, type SectionBoxOptions } from './SectionBox';
 import type { UpAxis } from './ViewerControls';
 
@@ -57,6 +59,16 @@ export class Toolbar {
   private clippingPlane: ClippingPlane | null = null;
   /** 当前剖切框，null 表示未创建 */
   private sectionBox: SectionBox | null = null;
+  /** 点位坐标拾取标签（点击模型显示该点 xyz 坐标的白色圆角框），null 表示未创建 */
+  private pointCoordinateMarker: PointCoordinateMarker | null = null;
+  /** 点位坐标拾取目标（最近一次开启时传入的模型对象），便于关闭后无需重复传入再次开启 */
+  private pointCoordinateTargets: THREE.Object3D[] | null = null;
+  /** 距离测量工具，null 表示未创建 */
+  private distanceMeasure: DistanceMeasure | null = null;
+  /** 距离测量拾取目标（最近一次开启时传入的模型对象），便于关闭后无需重复传入再次开启 */
+  private distanceMeasureTargets: THREE.Object3D[] | null = null;
+  /** 距离测量显示配置（最近一次开启时传入的单位 / 换算系数 / 小数位） */
+  private distanceMeasureOptions: DistanceMeasureOptions = {};
 
   /**
    * 缩放模式下的缩放速度（默认 1）。
@@ -394,10 +406,122 @@ export class Toolbar {
     return this.sectionBox ? this.sectionBox.getPlanes() : [];
   }
 
+  /**
+   * 开启 / 关闭点位坐标拾取：开启后点击模型表面，会在命中点处显示一个
+   * 白色圆角框（内含该点世界坐标 xyz），框锚定在拾取点上、跟随相机视角转动。
+   *
+   * targets 为参与射线拾取的模型对象（场景根节点或网格数组，递归拾取）。
+   * 关闭时 targets 可省略；再次开启时若省略 targets，沿用最近一次传入的对象。
+   * 返回操作是否生效（已释放、缺少画布或开启时无拾取目标则返回 false）。
+   */
+  public setPointCoordinateEnabled(enabled: boolean, targets?: THREE.Object3D | THREE.Object3D[]): boolean {
+    if (this.disposed || !this.canvas) return false;
+    if (enabled) {
+      if (targets !== undefined) {
+        this.pointCoordinateTargets = Array.isArray(targets) ? targets.slice() : [targets];
+      }
+      if (!this.pointCoordinateTargets || this.pointCoordinateTargets.length === 0) return false;
+      if (!this.pointCoordinateMarker) {
+        this.pointCoordinateMarker = new PointCoordinateMarker(this.canvas, this.controls);
+      }
+      this.pointCoordinateMarker.enable(this.pointCoordinateTargets);
+    } else {
+      this.pointCoordinateMarker?.disable();
+    }
+    return true;
+  }
+
+  /** 是否已开启点位坐标拾取 */
+  public isPointCoordinateEnabled(): boolean {
+    return this.pointCoordinateMarker?.isEnabled() ?? false;
+  }
+
+  /** 当前拾取点（世界坐标）；未开启或未拾取时返回 null */
+  public getPointCoordinatePoint(): THREE.Vector3 | null {
+    return this.pointCoordinateMarker?.getPoint() ?? null;
+  }
+
+  /**
+   * 每帧更新点位坐标标签的屏幕位置（拾取点投影随相机视角变化），
+   * 由外部渲染循环在渲染前调用；未开启时为空操作。
+   */
+  public updatePointCoordinateMarker(): void {
+    if (this.disposed) return;
+    this.pointCoordinateMarker?.update();
+  }
+
+  /**
+   * 开启 / 关闭距离测量（类似 Autodesk Viewer 的 Measure 功能）：开启后左键
+   * 依次点击模型表面两点生成一条测量（线段 + 两端圆点 + 带单位的距离标签），
+   * 可连续测量，所有测量结果同时保留；按 Esc 清除当前未完成的拾取点。
+   *
+   * targets 为参与射线拾取的模型对象（场景根节点或网格数组，递归拾取）。
+   * 关闭时 targets 可省略；再次开启时若省略 targets，沿用最近一次传入的对象。
+   * options 为显示配置（单位 / 换算系数 / 小数位），缺省沿用最近一次传入的配置；
+   * 默认单位 mm、换算系数 1、3 位小数。再次开启时会清除全部旧测量。
+   * 关闭测量仅停止拾取，已完成的测量仍显示，可用 clearDistanceMeasurements 清除。
+   * 返回操作是否生效（已释放、缺少画布或开启时无拾取目标则返回 false）。
+   */
+  public setDistanceMeasureEnabled(
+    enabled: boolean,
+    targets?: THREE.Object3D | THREE.Object3D[],
+    options?: DistanceMeasureOptions,
+  ): boolean {
+    if (this.disposed || !this.canvas) return false;
+    if (!enabled) {
+      this.distanceMeasure?.disable();
+      return true;
+    }
+    if (targets !== undefined) {
+      this.distanceMeasureTargets = Array.isArray(targets) ? targets.slice() : [targets];
+    }
+    if (!this.distanceMeasureTargets || this.distanceMeasureTargets.length === 0) return false;
+    if (options) {
+      this.distanceMeasureOptions = { ...this.distanceMeasureOptions, ...options };
+    }
+    if (!this.distanceMeasure) {
+      this.distanceMeasure = new DistanceMeasure(this.canvas, this.controls, this.distanceMeasureOptions);
+    } else {
+      this.distanceMeasure.setOptions(this.distanceMeasureOptions);
+    }
+    this.distanceMeasure.enable(this.distanceMeasureTargets);
+    return true;
+  }
+
+  /** 是否已开启距离测量 */
+  public isDistanceMeasureEnabled(): boolean {
+    return this.distanceMeasure?.isEnabled() ?? false;
+  }
+
+  /** 清除全部测量结果（含未完成的拾取点） */
+  public clearDistanceMeasurements(): void {
+    this.distanceMeasure?.clear();
+  }
+
+  /** 当前全部测量结果（端点世界坐标与换算后的距离）；无测量时返回空数组 */
+  public getDistanceMeasurements(): DistanceMeasurement[] {
+    return this.distanceMeasure?.getMeasurements() ?? [];
+  }
+
+  /**
+   * 每帧更新测量线段、端点圆点与距离标签的屏幕位置（端点投影随相机视角变化），
+   * 由外部渲染循环在渲染前调用；无测量条目时为空操作。
+   */
+  public updateDistanceMeasure(): void {
+    if (this.disposed) return;
+    this.distanceMeasure?.update();
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.removeClippingPlane();
     this.removeSectionBox();
+    this.pointCoordinateMarker?.dispose();
+    this.pointCoordinateMarker = null;
+    this.pointCoordinateTargets = null;
+    this.distanceMeasure?.dispose();
+    this.distanceMeasure = null;
+    this.distanceMeasureTargets = null;
     const el = this.canvas;
     if (el) {
       el.removeEventListener('pointerdown', this.onPointerDown);

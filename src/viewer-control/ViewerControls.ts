@@ -196,6 +196,8 @@ export class ViewerControls {
 
     this.toolbar.updateClippingPlaneScreenSize();
     this.toolbar.updateSectionBoxArrowScreenSize();
+    this.toolbar.updatePointCoordinateMarker();
+    this.toolbar.updateDistanceMeasure();
     this.toolbar.getSectionBox()?.updatePlanes();
   }
 
