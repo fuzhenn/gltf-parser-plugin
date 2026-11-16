@@ -198,6 +198,7 @@ export class ViewerControls {
     this.toolbar.updateSectionBoxArrowScreenSize();
     this.toolbar.updatePointCoordinateMarker();
     this.toolbar.updateDistanceMeasure();
+    this.toolbar.updateAngleMeasure();
     this.toolbar.getSectionBox()?.updatePlanes();
   }
 
