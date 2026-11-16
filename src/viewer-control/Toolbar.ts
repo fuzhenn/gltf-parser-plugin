@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { DistanceMeasure, type DistanceMeasureOptions, type DistanceMeasurement } from './DistanceMeasure';
+import { AngleMeasure, type AngleMeasureOptions, type AngleMeasurement } from './AngleMeasure';
 import { ClippingPlane, type ClippingAxis } from './ClippingPlane';
 import { PointCoordinateMarker } from './PointCoordinateMarker';
 import { SectionBox, type SectionBoxOptions } from './SectionBox';
@@ -69,6 +70,12 @@ export class Toolbar {
   private distanceMeasureTargets: THREE.Object3D[] | null = null;
   /** 距离测量显示配置（最近一次开启时传入的单位 / 换算系数 / 小数位） */
   private distanceMeasureOptions: DistanceMeasureOptions = {};
+  /** 角度测量工具，null 表示未创建 */
+  private angleMeasure: AngleMeasure | null = null;
+  /** 角度测量拾取目标（最近一次开启时传入的模型对象），便于关闭后无需重复传入再次开启 */
+  private angleMeasureTargets: THREE.Object3D[] | null = null;
+  /** 角度测量显示配置（最近一次开启时传入的单位 / 小数位） */
+  private angleMeasureOptions: AngleMeasureOptions = {};
 
   /**
    * 缩放模式下的缩放速度（默认 1）。
@@ -512,6 +519,71 @@ export class Toolbar {
     this.distanceMeasure?.update();
   }
 
+  /**
+   * 开启 / 关闭角度测量（类似 Autodesk Viewer 的角度测量）：开启后左键依次
+   * 点击模型表面三个点生成一条角度测量 —— 中间一次点击为角度顶点，另两次
+   * 点击为两条边的端点；渲染为顶点到两端点的两条线段、顶点处一段圆弧与
+   * 三个端点圆点，弧线外侧显示带度数符号的角度标签。可连续测量，所有测量
+   * 结果同时保留；按 Esc 清除当前未完成的拾取点。
+   *
+   * targets 为参与射线拾取的模型对象（场景根节点或网格数组，递归拾取）。
+   * 关闭时 targets 可省略；再次开启时若省略 targets，沿用最近一次传入的对象。
+   * options 为显示配置（单位 / 小数位），缺省沿用最近一次传入的配置；
+   * 默认单位 °、1 位小数。再次开启时会清除全部旧测量。
+   * 关闭测量仅停止拾取，已完成的测量仍显示，可用 clearAngleMeasurements 清除。
+   * 返回操作是否生效（已释放、缺少画布或开启时无拾取目标则返回 false）。
+   */
+  public setAngleMeasureEnabled(
+    enabled: boolean,
+    targets?: THREE.Object3D | THREE.Object3D[],
+    options?: AngleMeasureOptions,
+  ): boolean {
+    if (this.disposed || !this.canvas) return false;
+    if (!enabled) {
+      this.angleMeasure?.disable();
+      return true;
+    }
+    if (targets !== undefined) {
+      this.angleMeasureTargets = Array.isArray(targets) ? targets.slice() : [targets];
+    }
+    if (!this.angleMeasureTargets || this.angleMeasureTargets.length === 0) return false;
+    if (options) {
+      this.angleMeasureOptions = { ...this.angleMeasureOptions, ...options };
+    }
+    if (!this.angleMeasure) {
+      this.angleMeasure = new AngleMeasure(this.canvas, this.controls, this.angleMeasureOptions);
+    } else {
+      this.angleMeasure.setOptions(this.angleMeasureOptions);
+    }
+    this.angleMeasure.enable(this.angleMeasureTargets);
+    return true;
+  }
+
+  /** 是否已开启角度测量 */
+  public isAngleMeasureEnabled(): boolean {
+    return this.angleMeasure?.isEnabled() ?? false;
+  }
+
+  /** 清除全部角度测量结果（含未完成的拾取点） */
+  public clearAngleMeasurements(): void {
+    this.angleMeasure?.clear();
+  }
+
+  /** 当前全部角度测量结果（顶点 / 边端点世界坐标与夹角度数）；无测量时返回空数组 */
+  public getAngleMeasurements(): AngleMeasurement[] {
+    return this.angleMeasure?.getMeasurements() ?? [];
+  }
+
+  /**
+   * 每帧更新角度测量的线段、弧线、端点圆点与角度标签的屏幕位置
+   * （端点投影随相机视角变化），由外部渲染循环在渲染前调用；无测量条目
+   * 时为空操作。
+   */
+  public updateAngleMeasure(): void {
+    if (this.disposed) return;
+    this.angleMeasure?.update();
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.removeClippingPlane();
@@ -522,6 +594,9 @@ export class Toolbar {
     this.distanceMeasure?.dispose();
     this.distanceMeasure = null;
     this.distanceMeasureTargets = null;
+    this.angleMeasure?.dispose();
+    this.angleMeasure = null;
+    this.angleMeasureTargets = null;
     const el = this.canvas;
     if (el) {
       el.removeEventListener('pointerdown', this.onPointerDown);
