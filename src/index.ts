@@ -3,6 +3,7 @@ export { Player } from "./person-view/PlayerController";
 export type { GameConfig, PlayerOptions } from "./person-view/PlayerController";
 export type { AnimClipNames } from "./person-view/PersonModel";
 export { ViewerControls } from "./viewer-control/ViewerControls";
+export type { DistanceMeasureOptions, DistanceMeasurement } from "./viewer-control/DistanceMeasure";
 export { loadPmiModel } from "./loader/pmi-loader";
 export type { PmiNode, PmiModel, FeatureIds } from "./loader/pmi-loader";
 export type {
