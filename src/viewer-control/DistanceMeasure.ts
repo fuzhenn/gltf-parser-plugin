@@ -8,7 +8,7 @@ const CLICK_MOVE_THRESHOLD_PX = 4;
 const ENDPOINT_RADIUS = 4;
 
 export interface DistanceMeasureOptions {
-  /** 距离显示单位名称；默认 'mm' */
+  /** 距离显示单位名称；默认 'm' */
   unit?: string;
   /** 模型单位 → 显示单位的换算系数（显示距离 = 模型距离 × unitScale）；默认 1 */
   unitScale?: number;
@@ -97,7 +97,7 @@ export class DistanceMeasure {
   constructor(canvas: HTMLElement, controls: OrbitControls, options: DistanceMeasureOptions = {}) {
     this.canvas = canvas;
     this.controls = controls;
-    this.unit = options.unit ?? 'mm';
+    this.unit = options.unit ?? 'm';
     this.unitScale = options.unitScale ?? 1;
     this.decimals = options.decimals ?? 3;
 
