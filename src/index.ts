@@ -5,6 +5,7 @@ export type { AnimClipNames } from "./person-view/PersonModel";
 export { ViewerControls } from "./viewer-control/ViewerControls";
 export type { DistanceMeasureOptions, DistanceMeasurement } from "./viewer-control/DistanceMeasure";
 export type { AngleMeasureOptions, AngleMeasurement } from "./viewer-control/AngleMeasure";
+export type { RectMeasureOptions, RectMeasurement } from "./viewer-control/RectDistanceMeasure";
 export { loadPmiModel } from "./loader/pmi-loader";
 export type { PmiNode, PmiModel, FeatureIds } from "./loader/pmi-loader";
 export type {

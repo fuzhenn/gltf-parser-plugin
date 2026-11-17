@@ -199,6 +199,7 @@ export class ViewerControls {
     this.toolbar.updatePointCoordinateMarker();
     this.toolbar.updateDistanceMeasure();
     this.toolbar.updateAngleMeasure();
+    this.toolbar.updateRectMeasure();
     this.toolbar.getSectionBox()?.updatePlanes();
   }
 
