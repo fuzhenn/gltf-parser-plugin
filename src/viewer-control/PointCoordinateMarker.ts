@@ -15,6 +15,8 @@ export interface PointCoordinateMarkerOptions {
   showDot?: boolean;
   /** 同时保留的最大点位标记数量，超出后移除最早的标记；默认 10 */
   maxMarkers?: number;
+  /** 是否开启鼠标悬停预览：开启后鼠标移动时在鼠标位置临时显示半透明 marker 图标与命中点坐标；默认 true */
+  hoverPreview?: boolean;
 }
 
 /** 单个点位标记：拾取点世界坐标 + 对应的坐标框与小圆点 DOM 元素 */
@@ -41,6 +43,12 @@ interface MarkerEntry {
  * 点击与拖拽区分：按下与抬起位移小于 CLICK_MOVE_THRESHOLD_PX 才视为
  * 点击拾取，超过阈值视为旋转 / 平移等轨道拖拽，不触发拾取。
  *
+ * 悬停预览（hoverPreview，默认开启）：开启后鼠标在画布上移动时对鼠标位置
+ * 做射线拾取，命中模型表面则在鼠标位置临时显示一个半透明的 marker 图标
+ * （小圆点 + 坐标框，整体半透明以示与已拾取标记的区别），框内为命中点的
+ * 世界坐标；未命中模型、鼠标移出画布或正在拖拽时隐藏预览。预览元素直接
+ * 跟随鼠标的视口坐标定位，不做投影计算，仅作为拾取结果的即时反馈。
+ *
  * 覆盖层使用 position: fixed 定位，坐标直接取视口坐标，不依赖画布父容器
  * 的定位方式；覆盖层与内部元素均设置 pointer-events: none，不拦截画布的
  * 鼠标事件。
@@ -50,6 +58,7 @@ export class PointCoordinateMarker {
   private controls: OrbitControls;
   private showDot: boolean;
   private maxMarkers: number;
+  private hoverPreview: boolean;
   /** 射线拾取目标（模型的根节点或网格对象数组），enable() 时传入 */
   private targets: THREE.Object3D[] = [];
   private raycaster = new THREE.Raycaster();
@@ -60,6 +69,10 @@ export class PointCoordinateMarker {
   // ---------- DOM ----------
   /** 覆盖层容器（fixed 定位锚点，内部元素按视口坐标绝对定位） */
   private overlay: HTMLDivElement;
+  /** 悬停预览的半透明小圆点（跟随鼠标位置），null 表示未开启悬停预览 */
+  private hoverDot: HTMLDivElement | null = null;
+  /** 悬停预览的半透明坐标框（跟随鼠标位置），null 表示未开启悬停预览 */
+  private hoverLabel: HTMLDivElement | null = null;
 
   // ---------- 点击检测状态 ----------
   /** 已按下的左键指针 id，null 表示未按下 */
@@ -72,6 +85,7 @@ export class PointCoordinateMarker {
     this.controls = controls;
     this.showDot = options.showDot ?? true;
     this.maxMarkers = Math.max(1, options.maxMarkers ?? DEFAULT_MAX_MARKERS);
+    this.hoverPreview = options.hoverPreview ?? true;
 
     // 覆盖层：fixed 定位、尺寸为零、不拦截鼠标事件，仅作为子元素的定位锚点
     this.overlay = document.createElement('div');
@@ -87,10 +101,59 @@ export class PointCoordinateMarker {
 
     document.body.append(this.overlay);
 
+    if (this.hoverPreview) this.createHoverElements();
+
     // 点击检测监听（挂在画布上；OrbitControls 拖拽期间对画布做指针捕获，
     // 抬起事件仍会派发到画布）
     this.canvas.addEventListener('pointerdown', this.onPointerDown);
     this.canvas.addEventListener('pointerup', this.onPointerUp);
+    if (this.hoverPreview) {
+      this.canvas.addEventListener('pointermove', this.onPointerMove);
+      this.canvas.addEventListener('pointerleave', this.onPointerLeave);
+    }
+  }
+
+  /** 创建悬停预览的半透明 marker 元素（小圆点 + 坐标框，跟随鼠标位置） */
+  private createHoverElements(): void {
+    this.hoverDot = document.createElement('div');
+    Object.assign(this.hoverDot.style, {
+      position: 'absolute',
+      transform: 'translate(-50%, -50%)',
+      width: '10px',
+      height: '10px',
+      borderRadius: '50%',
+      background: 'rgba(255, 255, 255, 0.35)',
+      border: '2px solid rgba(0, 0, 0, 0.25)',
+      boxSizing: 'border-box',
+      opacity: '0.55',
+      pointerEvents: 'none',
+      display: 'none',
+    } as CSSStyleDeclaration);
+
+    this.hoverLabel = document.createElement('div');
+    Object.assign(this.hoverLabel.style, {
+      position: 'absolute',
+      transform: 'translate(-50%, -100%)',
+      background: '#ffffff',
+      borderRadius: '8px',
+      padding: '5px 10px',
+      border: '1px solid rgba(0, 0, 0, 0.12)',
+      boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
+      color: '#333333',
+      font: '12px/1.5 Consolas, Menlo, monospace',
+      whiteSpace: 'nowrap',
+      opacity: '0.55',
+      pointerEvents: 'none',
+      display: 'none',
+    } as CSSStyleDeclaration);
+
+    this.overlay.append(this.hoverDot, this.hoverLabel);
+  }
+
+  /** 隐藏悬停预览的 marker 元素 */
+  private hideHover(): void {
+    if (this.hoverDot) this.hoverDot.style.display = 'none';
+    if (this.hoverLabel) this.hoverLabel.style.display = 'none';
   }
 
   /** 创建一个新的标记元素组（白色圆角坐标框 + 可选小圆点） */
@@ -152,6 +215,7 @@ export class PointCoordinateMarker {
   public disable(): void {
     this.enabled = false;
     this.downPointerId = null;
+    this.hideHover();
   }
 
   /** 是否已开启拾取 */
@@ -181,6 +245,8 @@ export class PointCoordinateMarker {
   public dispose(): void {
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
+    this.canvas.removeEventListener('pointermove', this.onPointerMove);
+    this.canvas.removeEventListener('pointerleave', this.onPointerLeave);
     this.clear();
     this.overlay.remove();
     this.enabled = false;
@@ -209,17 +275,55 @@ export class PointCoordinateMarker {
     this.pick(event);
   };
 
-  /** 对指针位置做射线拾取：命中模型则新增点位标记，未命中则清除全部标记 */
-  private pick(event: PointerEvent): void {
+  /**
+   * 鼠标移动时的悬停预览：对鼠标位置做射线拾取，命中模型则在鼠标位置临时
+   * 显示半透明 marker 图标与命中点坐标；未命中或拖拽中隐藏预览。
+   */
+  private onPointerMove = (event: PointerEvent): void => {
+    if (!this.enabled || !this.hoverPreview) return;
+    // 拖拽（旋转 / 平移）期间隐藏预览，避免干扰
+    if (event.pointerType !== 'mouse' || event.buttons !== 0) {
+      this.hideHover();
+      return;
+    }
+    const hit = this.raycastAt(event.clientX, event.clientY);
+    if (!hit) {
+      this.hideHover();
+      return;
+    }
+
+    this.hoverLabel!.textContent = `X: ${hit.x.toFixed(COORD_DECIMALS)}  Y: ${hit.y.toFixed(COORD_DECIMALS)}  Z: ${hit.z.toFixed(COORD_DECIMALS)}`;
+    this.hoverDot!.style.left = `${event.clientX}px`;
+    this.hoverDot!.style.top = `${event.clientY}px`;
+    // 坐标框锚定在小圆点上方（间距 12px），不遮挡鼠标位置
+    this.hoverLabel!.style.left = `${event.clientX}px`;
+    this.hoverLabel!.style.top = `${event.clientY - 12}px`;
+    this.hoverDot!.style.display = 'block';
+    this.hoverLabel!.style.display = 'block';
+  };
+
+  /** 鼠标移出画布时隐藏悬停预览 */
+  private onPointerLeave = (): void => {
+    this.hideHover();
+  };
+
+  /** 对视口坐标位置做射线拾取：命中模型返回命中点世界坐标，否则返回 null */
+  private raycastAt(clientX: number, clientY: number): THREE.Vector3 | null {
     const rect = this.canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
+    if (rect.width <= 0 || rect.height <= 0) return null;
     const ndc = new THREE.Vector2(
-      ((event.clientX - rect.left) / rect.width) * 2 - 1,
-      -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(ndc, this.controls.object);
     const hits = this.raycaster.intersectObjects(this.targets, true);
-    if (hits.length === 0) {
+    return hits.length > 0 ? hits[0].point.clone() : null;
+  }
+
+  /** 对指针位置做射线拾取：命中模型则新增点位标记，未命中则清除全部标记 */
+  private pick(event: PointerEvent): void {
+    const hit = this.raycastAt(event.clientX, event.clientY);
+    if (!hit) {
       // 点击空白处：清除全部标记
       this.clear();
       this.update();
@@ -232,7 +336,7 @@ export class PointCoordinateMarker {
     }
 
     const marker = this.createMarkerElements();
-    marker.point.copy(hits[0].point);
+    marker.point.copy(hit);
     this.markers.push(marker);
     this.updateLabelText(marker);
     // 立即刷新一次位置，无需等待下一帧
