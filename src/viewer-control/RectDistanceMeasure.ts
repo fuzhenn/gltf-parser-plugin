@@ -43,8 +43,8 @@ interface RectEntry {
   dimCD: SVGLineElement;
   dotA: SVGCircleElement;
   dotB: SVGCircleElement;
-  /** 距离数值标签（HTML，锚定在 C 处） */
-  label: HTMLDivElement;
+  /** CD 尺寸线中点的距离文本框（HTML，跟随尺寸线中点） */
+  dimLabel: HTMLDivElement;
 }
 
 /**
@@ -111,8 +111,8 @@ export class RectDistanceMeasure {
   private previewLineBC: SVGLineElement;
   private previewLineDA: SVGLineElement;
   private previewDimCD: SVGLineElement;
-  /** 预览阶段的距离标签（跟随鼠标位置 C） */
-  private previewLabel: HTMLDivElement;
+  /** 预览阶段 CD 尺寸线中点的距离文本框 */
+  private previewDimLabel: HTMLDivElement;
 
   // ---------- 点击检测状态 ----------
   /** 已按下的左键指针 id，null 表示未按下 */
@@ -183,10 +183,10 @@ export class RectDistanceMeasure {
     this.previewDimCD = this.createDimLine();
     this.previewGroup.append(this.previewLineAB, this.previewLineBC, this.previewLineDA, this.previewDimCD);
     this.previewGroup.style.display = 'none';
-    this.previewLabel = this.createLabel();
+    this.previewDimLabel = this.createLabel();
 
     this.svg.append(this.pendingDotA, this.pendingDotB, this.previewGroup);
-    this.overlay.append(this.svg, this.previewLabel);
+    this.overlay.append(this.svg, this.previewDimLabel);
     document.body.append(this.overlay);
 
     // 点击检测与鼠标移动监听（挂在画布上；OrbitControls 拖拽期间对画布做指针
@@ -235,7 +235,7 @@ export class RectDistanceMeasure {
   public clear(): void {
     for (const entry of this.entries) {
       entry.group.remove();
-      entry.label.remove();
+      entry.dimLabel.remove();
     }
     this.entries = [];
     this.setPending(null, null);
@@ -260,7 +260,7 @@ export class RectDistanceMeasure {
     window.removeEventListener('keydown', this.onKeyDown);
     this.setCanvasCursor(null);
     this.clear();
-    this.previewLabel.remove();
+    this.previewDimLabel.remove();
     this.overlay.remove();
     this.disposed = true;
   }
@@ -383,10 +383,13 @@ export class RectDistanceMeasure {
     group.append(lineAB, lineBC, lineDA, dimCD, dotA, dotB);
     this.svg.append(group);
 
-    const label = this.createLabel();
+    const dimLabel = this.createLabel();
+    this.overlay.append(dimLabel);
 
     const distance = a.distanceTo(b) * this.unitScale;
-    const entry: RectEntry = { a, b, c, distance, group, lineAB, lineBC, lineDA, dimCD, dotA, dotB, label };
+    const entry: RectEntry = {
+      a, b, c, distance, group, lineAB, lineBC, lineDA, dimCD, dotA, dotB, dimLabel,
+    };
     this.updateEntryLabel(entry);
     this.entries.push(entry);
   }
@@ -433,12 +436,12 @@ export class RectDistanceMeasure {
     return dot;
   }
 
-  /** 创建距离标签（白色圆角框风格与 DistanceMeasure 一致，锚点在 C 处上方） */
+  /** 创建距离文本框（白色圆角框风格与 DistanceMeasure 一致，居中于 CD 尺寸线中点） */
   private createLabel(): HTMLDivElement {
     const label = document.createElement('div');
     Object.assign(label.style, {
       position: 'absolute',
-      transform: 'translate(-50%, -100%)',
+      transform: 'translate(-50%, -50%)',
       background: '#ffffff',
       borderRadius: '8px',
       padding: '4px 9px',
@@ -455,7 +458,7 @@ export class RectDistanceMeasure {
 
   /** 按当前显示配置刷新条目的标签文本 */
   private updateEntryLabel(entry: RectEntry): void {
-    entry.label.textContent = `${entry.distance.toFixed(this.decimals)} ${this.unit}`;
+    entry.dimLabel.textContent = `${entry.distance.toFixed(this.decimals)} ${this.unit}`;
   }
 
   /** 记录 / 清除未完成的拾取点（pendingDot 与预览橡皮筋跟随显示） */
@@ -465,7 +468,7 @@ export class RectDistanceMeasure {
     this.pendingDotA.style.display = a !== null ? 'block' : 'none';
     this.pendingDotB.style.display = b !== null ? 'block' : 'none';
     this.previewGroup.style.display = 'none';
-    this.previewLabel.style.display = 'none';
+    this.previewDimLabel.style.display = 'none';
   }
 
   // ---------- 每帧更新 ----------
@@ -501,11 +504,11 @@ export class RectDistanceMeasure {
       // 任一角点转到相机背后时投影会翻转错位，整条隐藏
       if (!a || !b || !c || !d) {
         entry.group.style.display = 'none';
-        entry.label.style.display = 'none';
+        entry.dimLabel.style.display = 'none';
         continue;
       }
       entry.group.style.display = 'block';
-      entry.label.style.display = 'block';
+      entry.dimLabel.style.display = 'block';
 
       // 三条实线边（CD 不画普通边，用双端箭头尺寸线表达）
       this.setLine(entry.lineAB, a, b);
@@ -517,9 +520,9 @@ export class RectDistanceMeasure {
       entry.dotB.setAttribute('cx', `${b.x}`);
       entry.dotB.setAttribute('cy', `${b.y}`);
 
-      // 距离标签锚定在 C 处上方
-      entry.label.style.left = `${c.x}px`;
-      entry.label.style.top = `${c.y}px`;
+      // CD 尺寸线中点文本框居中于 C-D 中点
+      entry.dimLabel.style.left = `${(c.x + d.x) / 2}px`;
+      entry.dimLabel.style.top = `${(c.y + d.y) / 2}px`;
     }
   }
 
@@ -564,7 +567,7 @@ export class RectDistanceMeasure {
     if (!a || !b || !c || !d) return;
 
     this.previewGroup.style.display = 'block';
-    this.previewLabel.style.display = 'block';
+    this.previewDimLabel.style.display = 'block';
     this.setLine(this.previewLineAB, a, b);
     this.setLine(this.previewLineBC, b, c);
     this.setLine(this.previewLineDA, d, a);
@@ -572,9 +575,9 @@ export class RectDistanceMeasure {
 
     // 距离 = |AB|（CD 与 AB 等长，尺寸线在鼠标位置直观展示该长度）
     const distance = this.pendingA!.distanceTo(this.pendingB!) * this.unitScale;
-    this.previewLabel.textContent = `${distance.toFixed(this.decimals)} ${this.unit}`;
-    this.previewLabel.style.left = `${c.x}px`;
-    this.previewLabel.style.top = `${c.y}px`;
+    this.previewDimLabel.textContent = `${distance.toFixed(this.decimals)} ${this.unit}`;
+    this.previewDimLabel.style.left = `${(c.x + d.x) / 2}px`;
+    this.previewDimLabel.style.top = `${(c.y + d.y) / 2}px`;
   }
 
   /** 写入线段两端屏幕坐标 */
