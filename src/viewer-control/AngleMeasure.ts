@@ -89,6 +89,14 @@ export class AngleMeasure {
   private pendingPoints: THREE.Vector3[] = [];
   /** 待完成拾取点的圆点标记（随 pendingPoints 增减显示） */
   private pendingDots: SVGCircleElement[] = [];
+  /** 待完成状态两个已拾取点（A、B）之间的连线 */
+  private pendingLine: SVGLineElement;
+  /** 橡皮筋预览线：拾取进行中从已选锚点连到当前鼠标位置，随鼠标移动 */
+  private rubberLine: SVGLineElement;
+  /** 最近一次鼠标的视口坐标（无记录 / 鼠标离开画布时隐藏预览线） */
+  private mouseX = 0;
+  private mouseY = 0;
+  private hasMousePos = false;
   /** 开启前的画布 cursor，disable / dispose 时恢复 */
   private prevCursor: string | null = null;
 
@@ -137,10 +145,26 @@ export class AngleMeasure {
     this.overlay.append(this.svg);
     document.body.append(this.overlay);
 
+    // 待完成拾取点连线：蓝色实线，与正式测量边线同款
+    this.pendingLine = this.createEdgeLine();
+    this.pendingLine.style.display = 'none';
+    this.svg.append(this.pendingLine);
+
+    // 橡皮筋预览线：蓝色虚线，区分于正式测量边线
+    this.rubberLine = document.createElementNS('http://www.w3.org/2000/svg', 'line') as SVGLineElement;
+    this.rubberLine.setAttribute('stroke', '#1e88e5');
+    this.rubberLine.setAttribute('stroke-width', '2');
+    this.rubberLine.setAttribute('stroke-dasharray', '6 4');
+    this.rubberLine.style.display = 'none';
+    this.svg.append(this.rubberLine);
+
     // 点击检测监听（挂在画布上；OrbitControls 拖拽期间对画布做指针捕获，
     // 抬起事件仍会派发到画布）
     this.canvas.addEventListener('pointerdown', this.onPointerDown);
     this.canvas.addEventListener('pointerup', this.onPointerUp);
+    // 跟踪鼠标位置（驱动橡皮筋预览线）
+    this.canvas.addEventListener('pointermove', this.onPointerMove);
+    this.canvas.addEventListener('pointerleave', this.onPointerLeave);
     // Esc 清除未完成拾取点（挂在 window 上：焦点可能不在画布上）
     window.addEventListener('keydown', this.onKeyDown);
   }
@@ -202,6 +226,8 @@ export class AngleMeasure {
     if (this.disposed) return;
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
+    this.canvas.removeEventListener('pointermove', this.onPointerMove);
+    this.canvas.removeEventListener('pointerleave', this.onPointerLeave);
     window.removeEventListener('keydown', this.onKeyDown);
     this.setCanvasCursor(null);
     this.clear();
@@ -231,6 +257,18 @@ export class AngleMeasure {
     const moved = Math.hypot(event.clientX - this.downX, event.clientY - this.downY);
     if (moved > CLICK_MOVE_THRESHOLD_PX) return;
     this.pick(event);
+  };
+
+  /** 跟踪鼠标位置，供橡皮筋预览线使用 */
+  private onPointerMove = (event: PointerEvent): void => {
+    this.mouseX = event.clientX;
+    this.mouseY = event.clientY;
+    this.hasMousePos = true;
+  };
+
+  /** 鼠标离开画布时隐藏橡皮筋预览线（位置已过期） */
+  private onPointerLeave = (): void => {
+    this.hasMousePos = false;
   };
 
   /** Esc 清除当前未完成的拾取点 */
@@ -377,6 +415,9 @@ export class AngleMeasure {
     for (let i = 0; i < this.pendingDots.length; i++) {
       this.pendingDots[i].style.display = i < points.length ? 'block' : 'none';
     }
+    // 清空拾取点时同步隐藏预览线与连线
+    if (points.length < 2) this.pendingLine.style.display = 'none';
+    if (points.length === 0) this.rubberLine.style.display = 'none';
   }
 
   // ---------- 每帧更新 ----------
@@ -406,6 +447,42 @@ export class AngleMeasure {
       } else {
         dot.style.display = 'none';
       }
+    }
+
+    // 已拾取两个点（A、B）时绘制两点之间的实线连线；任一端点转到相机背后时隐藏
+    if (this.pendingPoints.length === 2) {
+      const pa = this.projectToScreen(this.pendingPoints[0], camera, camDir, rect, _screenA);
+      const pb = this.projectToScreen(this.pendingPoints[1], camera, camDir, rect, _screenB);
+      if (pa && pb) {
+        this.pendingLine.setAttribute('x1', `${pa.x}`);
+        this.pendingLine.setAttribute('y1', `${pa.y}`);
+        this.pendingLine.setAttribute('x2', `${pb.x}`);
+        this.pendingLine.setAttribute('y2', `${pb.y}`);
+        this.pendingLine.style.display = 'block';
+      } else {
+        this.pendingLine.style.display = 'none';
+      }
+    }
+
+    // 橡皮筋预览线：已有 1 个点时连到该点（A），已有 2 个点时连到顶点（B），
+    // 另一端始终跟随当前鼠标位置
+    if (this.hasMousePos && this.pendingPoints.length > 0) {
+      const anchorIndex = this.pendingPoints.length === 1 ? 0 : 1;
+      const anchor = this.projectToScreen(
+        this.pendingPoints[anchorIndex], camera, camDir, rect, _screenR,
+      );
+      if (anchor) {
+        this.rubberLine.setAttribute('x1', `${anchor.x}`);
+        this.rubberLine.setAttribute('y1', `${anchor.y}`);
+        this.rubberLine.setAttribute('x2', `${this.mouseX}`);
+        this.rubberLine.setAttribute('y2', `${this.mouseY}`);
+        this.rubberLine.style.display = 'block';
+      } else {
+        // 锚点转到相机背后，投影会翻转错位，隐藏预览线
+        this.rubberLine.style.display = 'none';
+      }
+    } else {
+      this.rubberLine.style.display = 'none';
     }
 
     for (const entry of this.entries) {
@@ -529,3 +606,4 @@ const _v2 = new THREE.Vector3();
 const _screenA = { x: 0, y: 0 };
 const _screenB = { x: 0, y: 0 };
 const _screenV = { x: 0, y: 0 };
+const _screenR = { x: 0, y: 0 };
