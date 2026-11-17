@@ -422,10 +422,13 @@ export class Toolbar {
 
   /**
    * 开启 / 关闭点位坐标拾取：开启后点击模型表面，会在命中点处显示一个
-   * 白色圆角框（内含该点世界坐标 xyz），框锚定在拾取点上、跟随相机视角转动。
+   * 白色圆角框（内含该点世界坐标 xyz），框锚定在拾取点上、跟随相机视角
+   * 转动。支持多点：每次点击新增一个标记，多个标记同时保留（上限 10，
+   * 超出后移除最早标记）；点击模型以外的空白处清除全部标记。
    *
    * targets 为参与射线拾取的模型对象（场景根节点或网格数组，递归拾取）。
    * 关闭时 targets 可省略；再次开启时若省略 targets，沿用最近一次传入的对象。
+   * 关闭仅停止拾取，已显示的标记保留，可用 clearPointCoordinate() 清除。
    * 返回操作是否生效（已释放、缺少画布或开启时无拾取目标则返回 false）。
    */
   public setPointCoordinateEnabled(enabled: boolean, targets?: THREE.Object3D | THREE.Object3D[]): boolean {
@@ -450,9 +453,19 @@ export class Toolbar {
     return this.pointCoordinateMarker?.isEnabled() ?? false;
   }
 
-  /** 当前拾取点（世界坐标）；未开启或未拾取时返回 null */
+  /** 最近一次拾取点（世界坐标）；未开启或未拾取时返回 null */
   public getPointCoordinatePoint(): THREE.Vector3 | null {
     return this.pointCoordinateMarker?.getPoint() ?? null;
+  }
+
+  /** 全部拾取点（世界坐标，按拾取顺序）；未开启或无拾取点时返回空数组 */
+  public getPointCoordinatePoints(): THREE.Vector3[] {
+    return this.pointCoordinateMarker?.getPoints() ?? [];
+  }
+
+  /** 清除全部已显示的点位坐标标记 */
+  public clearPointCoordinate(): void {
+    this.pointCoordinateMarker?.clear();
   }
 
   /**
