@@ -22,7 +22,7 @@ export interface RectMeasurement {
   a: THREE.Vector3;
   /** 第一条边的终点 B（世界坐标，模型表面拾取） */
   b: THREE.Vector3;
-  /** 第三次点击时鼠标射线与固定平面的交点 C（世界坐标） */
+  /** 第三次点击落定的对角点 C（世界坐标，C = A + L·u；D = C + (B − A)） */
   c: THREE.Vector3;
   /** A、B 两点间距离（显示单位下） */
   distance: number;
@@ -37,8 +37,8 @@ interface RectEntry {
   /** 该条目的 SVG 分组（三条实线边 + CD 双端箭头线 + A/B 端点圆点） */
   group: SVGGElement;
   lineAB: SVGLineElement;
-  lineBC: SVGLineElement;
-  lineDA: SVGLineElement;
+  lineAC: SVGLineElement;
+  lineBD: SVGLineElement;
   /** CD 尺寸线（双端箭头，长度恒等于 |AB|） */
   dimCD: SVGLineElement;
   dotA: SVGCircleElement;
@@ -52,18 +52,27 @@ interface RectEntry {
  * measure 交互）。
  *
  * 三段式交互：开启后监听画布上的鼠标左键点击，第一、二次点击均在射线命中
- * 模型表面时拾取点 A、B；此后移动鼠标出现橡皮筋预览 —— 过 A 点、垂直于当前
- * 相机视线方向的固定平面 Π 上取鼠标射线交点 C，由 D = C − (B − A) 得到平行
- * 四边形 A-B-C-D（CD ∥ AB 且 |CD| = |AB|，即 AB 线段被"平移"到鼠标位置），
- * 预览绘制为虚线的 AB / BC / DA 三条边与 CD 双端箭头尺寸线，C 处（鼠标位置）
- * 显示 |AB| 的距离标签；第三次点击冻结当前 C，落定为实线 markup。
+ * 模型表面时拾取点 A、B（三点定矩形，A、B 保持模型表面真实坐标，测量值即
+ * 真实 |AB|）；此后移动鼠标出现橡皮筋预览 —— 取矩形"进深"方向
+ * u = normalize(AB × 视线)，u 同时垂直于 AB 与视线方向，因而平行于屏幕平面，
+ * 即矩形平面总取"含 AB 且最正对相机"的那个；沿 u 从 A、B 各推出 L 得
+ * C = A + L·u、D = B + L·u，构成矩形 A-B-D-C（AB ∥ CD、AC ∥ BD），四点严格
+ * 共面，三维空间中 AB ⊥ AC、AB ⊥ BD、AC ⊥ CD 严格成立；L 取鼠标射线与
+ * "过 A、垂直视线"固定平面 Π 的交点在 u 上的投影长度，即矩形宽窄随鼠标离
+ * AB 的距离变化。预览绘制为虚线的 AB / AC / BD 三条边与 CD 双端箭头尺寸线，
+ * CD 中点（鼠标一侧）显示 |AB| 的距离标签；第三次点击冻结当前 C（D 由
+ * D = C + (B − A) 确定）落定为实线 markup。
+ *
+ * 由于 A、B 取自模型表面而非屏幕，矩形平面一般不平行于屏幕，因此屏幕上的
+ * 三处垂直为近似值（正交相机下精确成立，透视相机下仅因射线不平行而有极轻微
+ * 偏差），三维空间内则精确成立。
  *
  * 渲染采用 SVG/DOM 覆盖层（fixed 定位，与 DistanceMeasure 完全同一思路）：
  * 线段 / 箭头 / 圆点绘制在覆盖层 <svg> 上（双端箭头用 SVG marker），数值标签
  * 用 HTML 圆角框。每帧把 A、B、C、D 的世界坐标投影到屏幕坐标并更新节点位置
- * —— 落定的 markup 锚定在三维空间、跟随相机视角转动；任一角点转到相机背后
- * 时自动隐藏对应条目。覆盖层始终显示在模型之上（不被模型遮挡），且不拦截
- * 画布的鼠标事件。
+ * —— 落定的 markup 锚定在三维空间、跟随相机视角转动，ABCD 四点的三维坐标
+ * 在测量完成后不再改变；任一角点转到相机背后时自动隐藏对应条目。覆盖层始终
+ * 显示在模型之上（不被模型遮挡），且不拦截画布的鼠标事件。
  *
  * 预览阶段缓存鼠标 NDC，每帧用当前相机重新求 C —— 相机旋转时橡皮筋始终
  * 正对视角，C 的投影与鼠标位置严格重合。
@@ -108,8 +117,8 @@ export class RectDistanceMeasure {
   /** 预览橡皮筋分组（虚线 AB / BC / DA + CD 双端箭头线），仅预览阶段显示 */
   private previewGroup: SVGGElement;
   private previewLineAB: SVGLineElement;
-  private previewLineBC: SVGLineElement;
-  private previewLineDA: SVGLineElement;
+  private previewLineAC: SVGLineElement;
+  private previewLineBD: SVGLineElement;
   private previewDimCD: SVGLineElement;
   /** 预览阶段 CD 尺寸线中点的距离文本框 */
   private previewDimLabel: HTMLDivElement;
@@ -178,10 +187,10 @@ export class RectDistanceMeasure {
     // 预览橡皮筋分组：虚线三条边 + CD 双端箭头尺寸线（默认隐藏）
     this.previewGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g') as SVGGElement;
     this.previewLineAB = this.createPreviewLine();
-    this.previewLineBC = this.createPreviewLine();
-    this.previewLineDA = this.createPreviewLine();
+    this.previewLineAC = this.createPreviewLine();
+    this.previewLineBD = this.createPreviewLine();
     this.previewDimCD = this.createDimLine();
-    this.previewGroup.append(this.previewLineAB, this.previewLineBC, this.previewLineDA, this.previewDimCD);
+    this.previewGroup.append(this.previewLineAB, this.previewLineAC, this.previewLineBD, this.previewDimCD);
     this.previewGroup.style.display = 'none';
     this.previewDimLabel = this.createLabel();
 
@@ -336,7 +345,7 @@ export class RectDistanceMeasure {
       return;
     }
 
-    // 第三个点：C 取鼠标射线与固定平面 Π（过 A、垂直视线）的交点，落定条目
+    // 第三个点：沿进深方向 u 落定对角点 C（见 resolveC），D 随之确定并冻结
     const c = new THREE.Vector3();
     const resolved =
       this.resolveC(ndcX, ndcY, c) ||
@@ -348,21 +357,56 @@ export class RectDistanceMeasure {
   }
 
   /**
-   * 求鼠标射线与固定平面 Π 的交点 C。Π 过点 A（pendingA）、法线为当前相机
-   * 视线方向；透视相机下鼠标射线与视线同向，交点恒存在（除非射线恰与平面
-   * 平行的退化情况，此时返回 false）。
+   * 求矩形"进深"方向 u（A → C、B → D 的单位方向）：u = normalize(AB × 视线)，
+   * 同时垂直于 AB 与视线方向，因而平行于屏幕平面 —— 矩形平面总取"含 AB 且最
+   * 正对相机"的那个，三维空间中 AB ⊥ AC、AB ⊥ BD、AC ⊥ CD 严格成立。
+   *
+   * AB 近乎正对相机（与视线平行）时叉积退化，退回取相机上方向在 AB 垂面内的
+   * 分量（此时矩形平面无法正对相机，屏幕上只能看到近似一条边）。
+   */
+  private resolveRectAxis(ab: THREE.Vector3, viewDir: THREE.Vector3, out: THREE.Vector3): boolean {
+    const lenSq = ab.lengthSq();
+    if (lenSq < 1e-12) return false;
+    out.crossVectors(ab, viewDir);
+    if (out.lengthSq() > lenSq * 1e-8) {
+      out.normalize();
+      return true;
+    }
+    // 退化：AB 与视线近乎平行，改用相机上方向（或 X 轴）构造 AB 的垂直方向
+    const up = this.controls.object.up;
+    out.copy(up).addScaledVector(ab, -up.dot(ab) / lenSq);
+    if (out.lengthSq() < 1e-12) {
+      out.set(1, 0, 0).addScaledVector(ab, -ab.x / lenSq);
+    }
+    if (out.lengthSq() < 1e-12) return false;
+    out.normalize();
+    return true;
+  }
+
+  /**
+   * 求对角点 C = A + L·u（D 由 D = C + (B − A) 得到，A-B-D-C 为严格矩形）。
+   *
+   * L 取鼠标射线与固定平面 Π（过 A、法线为当前视线方向）的交点在 u 上的投影
+   * 长度 —— 鼠标离 AB 越远，矩形越宽；乘积后 C 落在 Π 内（u ⊥ 视线），矩形
+   * 因此始终位于"过 A 且正对相机"的深度上。透视 / 正交相机下光线与 Π 都不
+   * 平行，仅在极端退化情况下返回 false。
    */
   private resolveC(ndcX: number, ndcY: number, out: THREE.Vector3): boolean {
-    if (this.pendingA === null) return false;
+    if (this.pendingA === null || this.pendingB === null) return false;
     const camera = this.controls.object;
     const viewDir = camera.getWorldDirection(_viewDir);
+    // 进深方向只取决于 AB 与视线，与鼠标位置无关
+    const ab = _v2.subVectors(this.pendingB, this.pendingA);
+    if (!this.resolveRectAxis(ab, viewDir, _axis)) return false;
     this.raycaster.setFromCamera(_ndc.set(ndcX, ndcY), camera);
     const ray = this.raycaster.ray;
     const denom = viewDir.dot(ray.direction);
     if (Math.abs(denom) < 1e-6) return false;
-    const t = viewDir.dot(_v1.subVectors(this.pendingA, ray.origin)) / denom;
-    if (t <= 0) return false;
-    out.copy(ray.origin).addScaledVector(ray.direction, t);
+    const dist = viewDir.dot(_v1.subVectors(this.pendingA, ray.origin)) / denom;
+    if (dist <= 0) return false;
+    _hit.copy(ray.origin).addScaledVector(ray.direction, dist);
+    const length = _hit.sub(this.pendingA).dot(_axis);
+    out.copy(this.pendingA).addScaledVector(_axis, length);
     return true;
   }
 
@@ -373,14 +417,14 @@ export class RectDistanceMeasure {
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g') as SVGGElement;
 
     const lineAB = this.createEdgeLine();
-    const lineBC = this.createEdgeLine();
-    const lineDA = this.createEdgeLine();
+    const lineAC = this.createEdgeLine();
+    const lineBD = this.createEdgeLine();
     const dimCD = this.createDimLine();
 
     const dotA = this.createEndpointDot();
     const dotB = this.createEndpointDot();
 
-    group.append(lineAB, lineBC, lineDA, dimCD, dotA, dotB);
+    group.append(lineAB, lineAC, lineBD, dimCD, dotA, dotB);
     this.svg.append(group);
 
     const dimLabel = this.createLabel();
@@ -388,7 +432,7 @@ export class RectDistanceMeasure {
 
     const distance = a.distanceTo(b) * this.unitScale;
     const entry: RectEntry = {
-      a, b, c, distance, group, lineAB, lineBC, lineDA, dimCD, dotA, dotB, dimLabel,
+      a, b, c, distance, group, lineAB, lineAC, lineBD, dimCD, dotA, dotB, dimLabel,
     };
     this.updateEntryLabel(entry);
     this.entries.push(entry);
@@ -491,12 +535,13 @@ export class RectDistanceMeasure {
     this.layoutPendingDot(this.pendingA, this.pendingDotA, camera, camDir, rect, _screenA);
     this.layoutPendingDot(this.pendingB, this.pendingDotB, camera, camDir, rect, _screenB);
 
-    // 预览橡皮筋：由缓存鼠标 NDC 重算 C，推导 D = C − (B − A) 并投影绘制
+    // 预览橡皮筋：由缓存鼠标 NDC 重算 C，推导 D = C + (B − A) 并投影绘制
     this.updatePreview(camera, camDir, rect);
 
     for (const entry of this.entries) {
-      // D = C − (B − A)，ABCD 为平行四边形（CD ∥ AB 且 |CD| = |AB|）
-      const d3 = _entryD.copy(entry.c).sub(_v1.subVectors(entry.b, entry.a));
+      // A-B-D-C 为矩形：D = C + (B − A)，故 CD ∥ AB 且 |CD| = |AB|，四点共面
+      // （C、D 在落定时冻结，之后三维坐标不再改变）
+      const d3 = _entryD.copy(entry.c).add(_v1.subVectors(entry.b, entry.a));
       const a = this.projectToScreen(entry.a, camera, camDir, rect, _screenA);
       const b = this.projectToScreen(entry.b, camera, camDir, rect, _screenB);
       const c = this.projectToScreen(entry.c, camera, camDir, rect, _screenC);
@@ -510,10 +555,10 @@ export class RectDistanceMeasure {
       entry.group.style.display = 'block';
       entry.dimLabel.style.display = 'block';
 
-      // 三条实线边（CD 不画普通边，用双端箭头尺寸线表达）
+      // 三条实线边 AB / AC / BD（CD 是 AB 的平行对边，用双端箭头尺寸线表达）
       this.setLine(entry.lineAB, a, b);
-      this.setLine(entry.lineBC, b, c);
-      this.setLine(entry.lineDA, d, a);
+      this.setLine(entry.lineAC, a, c);
+      this.setLine(entry.lineBD, b, d);
       this.setLine(entry.dimCD, c, d);
       entry.dotA.setAttribute('cx', `${a.x}`);
       entry.dotA.setAttribute('cy', `${a.y}`);
@@ -561,7 +606,7 @@ export class RectDistanceMeasure {
 
     const a = this.projectToScreen(this.pendingA!, camera, camDir, rect, _screenA);
     const b = this.projectToScreen(this.pendingB!, camera, camDir, rect, _screenB);
-    const d3 = _previewD.copy(_previewC).sub(_v1.subVectors(this.pendingB!, this.pendingA!));
+    const d3 = _previewD.copy(_previewC).add(_v1.subVectors(this.pendingB!, this.pendingA!));
     const c = this.projectToScreen(_previewC, camera, camDir, rect, _screenC);
     const d = this.projectToScreen(d3, camera, camDir, rect, _screenD);
     if (!a || !b || !c || !d) return;
@@ -569,8 +614,8 @@ export class RectDistanceMeasure {
     this.previewGroup.style.display = 'block';
     this.previewDimLabel.style.display = 'block';
     this.setLine(this.previewLineAB, a, b);
-    this.setLine(this.previewLineBC, b, c);
-    this.setLine(this.previewLineDA, d, a);
+    this.setLine(this.previewLineAC, a, c);
+    this.setLine(this.previewLineBD, b, d);
     this.setLine(this.previewDimCD, c, d);
 
     // 距离 = |AB|（CD 与 AB 等长，尺寸线在鼠标位置直观展示该长度）
@@ -626,6 +671,11 @@ const _projected = new THREE.Vector3();
 const _viewDir = new THREE.Vector3();
 const _ndc = new THREE.Vector2();
 const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+/** 矩形进深方向 u（⊥ AB 且 ∥ 屏幕平面） */
+const _axis = new THREE.Vector3();
+/** 鼠标射线与固定平面 Π 的交点 */
+const _hit = new THREE.Vector3();
 const _entryD = new THREE.Vector3();
 const _previewC = new THREE.Vector3();
 const _previewD = new THREE.Vector3();
