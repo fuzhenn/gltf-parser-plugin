@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { DistanceMeasure, type DistanceMeasureOptions, type DistanceMeasurement } from './DistanceMeasure';
 import { AngleMeasure, type AngleMeasureOptions, type AngleMeasurement } from './AngleMeasure';
+import { RectDistanceMeasure, type RectMeasureOptions, type RectMeasurement } from './RectDistanceMeasure';
 import { ClippingPlane, type ClippingAxis } from './ClippingPlane';
 import { PointCoordinateMarker } from './PointCoordinateMarker';
 import { SectionBox, type SectionBoxOptions } from './SectionBox';
@@ -76,6 +77,12 @@ export class Toolbar {
   private angleMeasureTargets: THREE.Object3D[] | null = null;
   /** 角度测量显示配置（最近一次开启时传入的单位 / 小数位） */
   private angleMeasureOptions: AngleMeasureOptions = {};
+  /** 矩形距离测量工具，null 表示未创建 */
+  private rectMeasure: RectDistanceMeasure | null = null;
+  /** 矩形距离测量拾取目标（最近一次开启时传入的模型对象），便于关闭后无需重复传入再次开启 */
+  private rectMeasureTargets: THREE.Object3D[] | null = null;
+  /** 矩形距离测量显示配置（最近一次开启时传入的单位 / 换算系数 / 小数位） */
+  private rectMeasureOptions: RectMeasureOptions = {};
 
   /**
    * 缩放模式下的缩放速度（默认 1）。
@@ -584,6 +591,71 @@ export class Toolbar {
     this.angleMeasure?.update();
   }
 
+  /**
+   * 开启 / 关闭矩形距离测量（类似 HOOPS Visualize 的 point-to-point measure
+   * 交互）：开启后左键点击模型表面拾取两点 A、B，移动鼠标出现橡皮筋预览
+   * （平行四边形 ABCD，CD ∥ AB 且 |CD| = |AB|，双端箭头尺寸线画在鼠标位置，
+   * 距离标签显示 |AB|）；第三次点击冻结当前位置落定 markup。可连续测量，
+   * 所有测量结果同时保留；按 Esc 分级取消（预览中退回仅保留 A，再按全部清除）。
+   *
+   * targets 为参与射线拾取的模型对象（场景根节点或网格数组，递归拾取）。
+   * 关闭时 targets 可省略；再次开启时若省略 targets，沿用最近一次传入的对象。
+   * options 为显示配置（单位 / 换算系数 / 小数位），缺省沿用最近一次传入的配置；
+   * 默认单位 mm、换算系数 1、3 位小数。再次开启时会清除全部旧测量。
+   * 关闭测量仅停止拾取，已完成的测量仍显示，可用 clearRectMeasurements 清除。
+   * 返回操作是否生效（已释放、缺少画布或开启时无拾取目标则返回 false）。
+   */
+  public setRectMeasureEnabled(
+    enabled: boolean,
+    targets?: THREE.Object3D | THREE.Object3D[],
+    options?: RectMeasureOptions,
+  ): boolean {
+    if (this.disposed || !this.canvas) return false;
+    if (!enabled) {
+      this.rectMeasure?.disable();
+      return true;
+    }
+    if (targets !== undefined) {
+      this.rectMeasureTargets = Array.isArray(targets) ? targets.slice() : [targets];
+    }
+    if (!this.rectMeasureTargets || this.rectMeasureTargets.length === 0) return false;
+    if (options) {
+      this.rectMeasureOptions = { ...this.rectMeasureOptions, ...options };
+    }
+    if (!this.rectMeasure) {
+      this.rectMeasure = new RectDistanceMeasure(this.canvas, this.controls, this.rectMeasureOptions);
+    } else {
+      this.rectMeasure.setOptions(this.rectMeasureOptions);
+    }
+    this.rectMeasure.enable(this.rectMeasureTargets);
+    return true;
+  }
+
+  /** 是否已开启矩形距离测量 */
+  public isRectMeasureEnabled(): boolean {
+    return this.rectMeasure?.isEnabled() ?? false;
+  }
+
+  /** 清除全部矩形距离测量结果（含未完成的拾取点） */
+  public clearRectMeasurements(): void {
+    this.rectMeasure?.clear();
+  }
+
+  /** 当前全部矩形距离测量结果（端点世界坐标与换算后的距离）；无测量时返回空数组 */
+  public getRectMeasurements(): RectMeasurement[] {
+    return this.rectMeasure?.getMeasurements() ?? [];
+  }
+
+  /**
+   * 每帧更新矩形距离测量的边线、尺寸线、端点圆点与距离标签的屏幕位置
+   * （角点投影随相机视角变化），由外部渲染循环在渲染前调用；无测量条目
+   * 且无未完成拾取点时为空操作。
+   */
+  public updateRectMeasure(): void {
+    if (this.disposed) return;
+    this.rectMeasure?.update();
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.removeClippingPlane();
@@ -597,6 +669,9 @@ export class Toolbar {
     this.angleMeasure?.dispose();
     this.angleMeasure = null;
     this.angleMeasureTargets = null;
+    this.rectMeasure?.dispose();
+    this.rectMeasure = null;
+    this.rectMeasureTargets = null;
     const el = this.canvas;
     if (el) {
       el.removeEventListener('pointerdown', this.onPointerDown);
