@@ -8,7 +8,7 @@ const CLICK_MOVE_THRESHOLD_PX = 4;
 const ENDPOINT_RADIUS = 4;
 
 export interface RectMeasureOptions {
-  /** 距离显示单位名称；默认 'mm' */
+  /** 距离显示单位名称；默认 'm' */
   unit?: string;
   /** 模型单位 → 显示单位的换算系数（显示距离 = 模型距离 × unitScale）；默认 1 */
   unitScale?: number;
@@ -132,7 +132,7 @@ export class RectDistanceMeasure {
   constructor(canvas: HTMLElement, controls: OrbitControls, options: RectMeasureOptions = {}) {
     this.canvas = canvas;
     this.controls = controls;
-    this.unit = options.unit ?? 'mm';
+    this.unit = options.unit ?? 'm';
     this.unitScale = options.unitScale ?? 1;
     this.decimals = options.decimals ?? 3;
     // 实例间隔离：marker id 加随机后缀，避免多个实例共用 <defs> 时互相覆盖
@@ -175,7 +175,7 @@ export class RectDistanceMeasure {
     marker.setAttribute('orient', 'auto-start-reverse');
     const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 Z');
-    arrow.setAttribute('fill', '#1e88e5');
+    arrow.setAttribute('fill', '#000000');
     marker.append(arrow);
     defs.append(marker);
     this.svg.append(defs);
@@ -438,23 +438,23 @@ export class RectDistanceMeasure {
     this.entries.push(entry);
   }
 
-  /** 创建测量边线段（蓝色实线） */
+  /** 创建测量边线段（黑色实线） */
   private createEdgeLine(): SVGLineElement {
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line') as SVGLineElement;
-    line.setAttribute('stroke', '#1e88e5');
-    line.setAttribute('stroke-width', '2');
+    line.setAttribute('stroke', '#000000');
+    line.setAttribute('stroke-width', '1');
     line.setAttribute('stroke-linecap', 'round');
     return line;
   }
 
-  /** 创建预览边线段（蓝色虚线） */
+  /** 创建预览边线段（黑色虚线） */
   private createPreviewLine(): SVGLineElement {
     const line = this.createEdgeLine();
     line.setAttribute('stroke-dasharray', '7 5');
     return line;
   }
 
-  /** 创建 CD 尺寸线（蓝色实线，双端箭头） */
+  /** 创建 CD 尺寸线（黑色实线，双端箭头） */
   private createDimLine(): SVGLineElement {
     const line = this.createEdgeLine();
     const url = `url(#${this.arrowMarkerId})`;
@@ -463,12 +463,12 @@ export class RectDistanceMeasure {
     return line;
   }
 
-  /** 创建端点圆点（白色填充蓝色描边） */
+  /** 创建端点圆点（白色填充黑色描边） */
   private createEndpointDot(): SVGCircleElement {
     const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle') as SVGCircleElement;
     dot.setAttribute('r', String(ENDPOINT_RADIUS));
     dot.setAttribute('fill', '#ffffff');
-    dot.setAttribute('stroke', '#1e88e5');
+    dot.setAttribute('stroke', '#000000');
     dot.setAttribute('stroke-width', '2');
     return dot;
   }
@@ -489,9 +489,9 @@ export class RectDistanceMeasure {
       background: '#ffffff',
       borderRadius: '8px',
       padding: '4px 9px',
-      border: '1px solid rgba(30, 136, 229, 0.35)',
+      border: '1px solid #000000',
       boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
-      color: '#1e6bb8',
+      color: '#000000',
       font: '12px/1.5 Consolas, Menlo, monospace',
       whiteSpace: 'nowrap',
       pointerEvents: 'none',
