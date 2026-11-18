@@ -10,17 +10,10 @@ const ENDPOINT_RADIUS = 4;
 /** 测量元素统一颜色（线条 / 箭头 / 文本 / 文本框描边均为黑色） */
 const MEASURE_COLOR = '#000000';
 
-/** 分量段各轴颜色：X 绿、Y 红、Z 蓝（线与标签文字共用，不受统一黑色影响） */
-const AXIS_COLOR = { x: '#2f9e44', y: '#e03131', z: '#1e88e5' } as const;
+/** 各轴颜色：X 绿、Y 红、Z 蓝（分量线与该轴距离文字共用，不受统一黑色影响） */
+const AXIS_COLOR = { y: '#2f9e44', x: '#e03131', z: '#1e88e5' } as const;
 
-/** 分量段标签边框颜色（与轴色同色低透明度） */
-const AXIS_BORDER_COLOR = {
-  x: 'rgba(47, 158, 68, 0.35)',
-  y: 'rgba(224, 49, 49, 0.35)',
-  z: 'rgba(30, 136, 229, 0.35)',
-} as const;
-
-/** 分量段距离小于该值（显示单位）视为零长度，不绘制对应线与标签 */
+/** 分量段距离小于该值（显示单位）视为零长度，不绘制对应线 */
 const AXIS_MIN_DISTANCE = 1e-9;
 
 export interface DistanceMeasureOptions {
@@ -60,18 +53,20 @@ interface MeasureEntry {
   line: SVGLineElement;
   dotStart: SVGCircleElement;
   dotEnd: SVGCircleElement;
-  /** 该条目的距离数值标签（HTML，自动排版，位置锚定在线段中点） */
+  /** 该条目的测量结果文本框（HTML，自动排版，位置锚定在线段中点） */
   label: HTMLDivElement;
+  /** 文本框内总距离行 */
+  labelDistance: HTMLDivElement;
+  /** 文本框内各轴距离行（文字颜色按轴） */
+  labelX: HTMLDivElement;
+  labelY: HTMLDivElement;
+  labelZ: HTMLDivElement;
   /** X 轴分量段 A→C（C = B 在 A 的 Y/Z 上的投影点） */
   lineX: SVGLineElement;
   /** 纵轴分量段 C→D（沿 verticalAxis 配置的轴） */
   lineVert: SVGLineElement;
   /** 剩余轴分量段 D→B */
   lineDiag: SVGLineElement;
-  /** 各轴分量距离标签（HTML，颜色按轴，轴别由前缀 X/Y/Z 区分） */
-  labelX: HTMLDivElement;
-  labelY: HTMLDivElement;
-  labelZ: HTMLDivElement;
   /** 各轴分量距离（显示单位下） */
   dx: number;
   dy: number;
@@ -82,17 +77,19 @@ interface MeasureEntry {
  * DistanceMeasure - 距离测量工具（类似 Autodesk Viewer 的 Measure 功能）。
  *
  * 开启后监听画布上的鼠标左键点击：射线命中模型表面时拾取点。依次点击两个
- * 点即生成一条测量 —— 线段连接两点、两端显示圆点、线段中点上方显示带单位
- * 的距离数值标签。可连续测量，所有测量条目同时保留。
+ * 点即生成一条测量 —— 线段连接两点、两端显示圆点、线段中点上方显示测量结果
+ * 文本框。可连续测量，所有测量条目同时保留。
  *
  * 除 A→B 主线段外，每条测量还绘制轴分量折线：从 A 沿 X 轴画到 C（C 为 B 在
  * A 的 Y/Z 上的投影点），再从 C 沿纵轴（verticalAxis 配置，默认 Y）画到 D，
- * 最后从 D 连线到 B。各分量段中点用文本标签标识该轴距离（分量段的线条与
- * 标签按轴着色：X 绿 / Y 红 / Z 蓝，轴别也由标签前缀 X/Y/Z 区分）；零长度
- * 分量段不绘制。主线段、端点圆点与距离标签统一为黑色。
+ * 最后从 D 连线到 B；零长度分量段不绘制。分量线按轴着色（X 绿 / Y 红 /
+ * Z 蓝），但分量段上不再显示文本。
+ *
+ * 测量结果文本框内依次列出总距离与 X / Y / Z 三个轴上的距离，各轴距离文字
+ * 颜色与对应分量线一致（AXIS_COLOR）；总距离、主线段与端点圆点为黑色。
  *
  * 渲染采用 SVG/DOM 覆盖层（fixed 定位）：线段与圆点绘制在覆盖层 <svg> 上，
- * 数值标签用 HTML 圆角框（与 PointCoordinateMarker 的标签风格一致）。每帧
+ * 结果文本框用 HTML 圆角框（与 PointCoordinateMarker 的标签风格一致）。每帧
  * 把各端点的世界坐标投影到屏幕坐标并更新节点位置 —— 线段锚定在模型表面、
  * 跟随相机视角转动；端点转到相机背后时自动隐藏对应条目。覆盖层始终显示在
  * 模型之上（不被模型遮挡），且不拦截画布的鼠标事件。
@@ -232,9 +229,6 @@ export class DistanceMeasure {
     for (const entry of this.entries) {
       entry.group.remove();
       entry.label.remove();
-      entry.labelX.remove();
-      entry.labelY.remove();
-      entry.labelZ.remove();
     }
     this.entries = [];
     this.setPendingPoint(null);
@@ -321,7 +315,7 @@ export class DistanceMeasure {
 
   // ---------- 条目创建与更新 ----------
 
-  /** 创建一条测量条目（SVG 分组 + 距离标签 + 轴分量折线与标签） */
+  /** 创建一条测量条目（SVG 分组 + 测量结果文本框 + 轴分量折线） */
   private createEntry(start: THREE.Vector3, end: THREE.Vector3): void {
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g') as SVGGElement;
 
@@ -341,7 +335,8 @@ export class DistanceMeasure {
     group.append(line, dotStart, dotEnd, lineX, lineVert, lineDiag);
     this.svg.append(group);
 
-    // 距离标签：白色圆角框风格与 PointCoordinateMarker 一致，文字与边框为黑色
+    // 测量结果文本框：白色圆角框风格与 PointCoordinateMarker 一致，首行为总
+    // 距离（黑色），其后为 X / Y / Z 三个轴上的距离（文字颜色与对应分量线一致）
     const label = document.createElement('div');
     Object.assign(label.style, {
       position: 'absolute',
@@ -356,19 +351,20 @@ export class DistanceMeasure {
       whiteSpace: 'nowrap',
       pointerEvents: 'none',
       display: 'none',
+      textAlign: 'left',
     } as CSSStyleDeclaration);
+    const labelDistance = document.createElement('div');
+    const labelX = this.createAxisValue(AXIS_COLOR.x);
+    const labelY = this.createAxisValue(AXIS_COLOR.y);
+    const labelZ = this.createAxisValue(AXIS_COLOR.z);
+    label.append(labelDistance, labelX, labelY, labelZ);
     this.overlay.append(label);
-
-    // 各轴分量距离标签（颜色按轴：X 绿 / Y 红 / Z 蓝，轴别由前缀 X/Y/Z 区分）
-    const labelX = this.createAxisLabel(AXIS_COLOR.x, AXIS_BORDER_COLOR.x);
-    const labelY = this.createAxisLabel(AXIS_COLOR.y, AXIS_BORDER_COLOR.y);
-    const labelZ = this.createAxisLabel(AXIS_COLOR.z, AXIS_BORDER_COLOR.z);
-    this.overlay.append(labelX, labelY, labelZ);
 
     const distance = start.distanceTo(end) * this.unitScale;
     const entry: MeasureEntry = {
       start, end, distance, group, line, dotStart, dotEnd, label,
-      lineX, lineVert, lineDiag, labelX, labelY, labelZ,
+      labelDistance, labelX, labelY, labelZ,
+      lineX, lineVert, lineDiag,
       dx: 0, dy: 0, dz: 0,
     };
     this.updateAxisDistances(entry);
@@ -395,24 +391,11 @@ export class DistanceMeasure {
     return line;
   }
 
-  /** 创建轴分量距离标签（白色圆角框，文字与边框颜色按轴） */
-  private createAxisLabel(color: string, borderColor: string): HTMLDivElement {
-    const label = document.createElement('div');
-    Object.assign(label.style, {
-      position: 'absolute',
-      transform: 'translate(-50%, -50%)',
-      background: '#ffffff',
-      borderRadius: '8px',
-      padding: '2px 7px',
-      border: `1px solid ${borderColor}`,
-      boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
-      color,
-      font: '12px/1.5 Consolas, Menlo, monospace',
-      whiteSpace: 'nowrap',
-      pointerEvents: 'none',
-      display: 'none',
-    } as CSSStyleDeclaration);
-    return label;
+  /** 创建测量结果文本框内的单轴距离行（文字颜色按轴） */
+  private createAxisValue(color: string): HTMLDivElement {
+    const row = document.createElement('div');
+    row.style.color = color;
+    return row;
   }
 
   /** 按当前换算系数重算条目的各轴分量距离 */
@@ -422,9 +405,9 @@ export class DistanceMeasure {
     entry.dz = Math.abs(entry.end.z - entry.start.z) * this.unitScale;
   }
 
-  /** 按当前显示配置刷新条目的标签文本（主线段 + 各轴分量） */
+  /** 按当前显示配置刷新条目的文本框文本（总距离 + 各轴距离） */
   private updateEntryLabel(entry: MeasureEntry): void {
-    entry.label.textContent = `${entry.distance.toFixed(this.decimals)} ${this.unit}`;
+    entry.labelDistance.textContent = `${entry.distance.toFixed(this.decimals)} ${this.unit}`;
     entry.labelX.textContent = `X:${entry.dx.toFixed(this.decimals)} ${this.unit}`;
     entry.labelY.textContent = `Y:${entry.dy.toFixed(this.decimals)} ${this.unit}`;
     entry.labelZ.textContent = `Z:${entry.dz.toFixed(this.decimals)} ${this.unit}`;
@@ -470,9 +453,9 @@ export class DistanceMeasure {
       if (!a || !b) {
         entry.group.style.display = 'none';
         entry.label.style.display = 'none';
-        this.setAxisSegment(entry.lineX, entry.labelX, null, null, 0);
-        this.setAxisSegment(entry.lineVert, entry.labelY, null, null, 0);
-        this.setAxisSegment(entry.lineDiag, entry.labelZ, null, null, 0);
+        this.setAxisSegment(entry.lineX, null, null, 0);
+        this.setAxisSegment(entry.lineVert, null, null, 0);
+        this.setAxisSegment(entry.lineDiag, null, null, 0);
         continue;
       }
       entry.group.style.display = 'block';
@@ -506,41 +489,36 @@ export class DistanceMeasure {
       const c = this.projectToScreen(_cornerC, camera, camDir, rect, _screenC);
       const d = this.projectToScreen(_cornerD, camera, camDir, rect, _screenD);
 
-      this.setAxisSegment(entry.lineX, entry.labelX, a, c, entry.dx);
+      this.setAxisSegment(entry.lineX, a, c, entry.dx);
       if (this.verticalAxis === 'z') {
-        this.setAxisSegment(entry.lineVert, entry.labelZ, c, d, entry.dz);
-        this.setAxisSegment(entry.lineDiag, entry.labelY, d, b, entry.dy);
+        this.setAxisSegment(entry.lineVert, c, d, entry.dz);
+        this.setAxisSegment(entry.lineDiag, d, b, entry.dy);
       } else {
-        this.setAxisSegment(entry.lineVert, entry.labelY, c, d, entry.dy);
-        this.setAxisSegment(entry.lineDiag, entry.labelZ, d, b, entry.dz);
+        this.setAxisSegment(entry.lineVert, c, d, entry.dy);
+        this.setAxisSegment(entry.lineDiag, d, b, entry.dz);
       }
     }
   }
 
   /**
-   * 布局单个轴分量段：两端投影均可见且分量距离非零时，绘制线段并在其中点
-   * 显示该轴距离标签；否则隐藏对应线段与标签。
+   * 布局单个轴分量段：两端投影均可见且分量距离非零时绘制线段，否则隐藏。
+   * 分量段上不显示文本，各轴距离统一显示在测量结果文本框内。
    */
   private setAxisSegment(
     line: SVGLineElement,
-    label: HTMLDivElement,
     from: { x: number; y: number } | null,
     to: { x: number; y: number } | null,
     distance: number,
   ): void {
     if (from === null || to === null || distance < AXIS_MIN_DISTANCE) {
       line.style.display = 'none';
-      label.style.display = 'none';
       return;
     }
     line.style.display = 'block';
-    label.style.display = 'block';
     line.setAttribute('x1', `${from.x}`);
     line.setAttribute('y1', `${from.y}`);
     line.setAttribute('x2', `${to.x}`);
     line.setAttribute('y2', `${to.y}`);
-    label.style.left = `${(from.x + to.x) / 2}px`;
-    label.style.top = `${(from.y + to.y) / 2}px`;
   }
 
   /** 世界坐标 → 视口坐标；位于相机背后（或正上方）时返回 null */
