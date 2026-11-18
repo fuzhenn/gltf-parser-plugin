@@ -7,7 +7,10 @@ const CLICK_MOVE_THRESHOLD_PX = 4;
 /** 端点圆点半径（像素） */
 const ENDPOINT_RADIUS = 4;
 
-/** 分量段各轴颜色：X 绿、Y 红、Z 蓝（线与标签文字共用） */
+/** 测量元素统一颜色（线条 / 箭头 / 文本 / 文本框描边均为黑色） */
+const MEASURE_COLOR = '#000000';
+
+/** 分量段各轴颜色：X 绿、Y 红、Z 蓝（线与标签文字共用，不受统一黑色影响） */
 const AXIS_COLOR = { x: '#2f9e44', y: '#e03131', z: '#1e88e5' } as const;
 
 /** 分量段标签边框颜色（与轴色同色低透明度） */
@@ -65,7 +68,7 @@ interface MeasureEntry {
   lineVert: SVGLineElement;
   /** 剩余轴分量段 D→B */
   lineDiag: SVGLineElement;
-  /** 各轴分量距离标签（HTML，颜色按轴固定：X 绿 / Y 红 / Z 蓝） */
+  /** 各轴分量距离标签（HTML，颜色按轴，轴别由前缀 X/Y/Z 区分） */
   labelX: HTMLDivElement;
   labelY: HTMLDivElement;
   labelZ: HTMLDivElement;
@@ -84,8 +87,9 @@ interface MeasureEntry {
  *
  * 除 A→B 主线段外，每条测量还绘制轴分量折线：从 A 沿 X 轴画到 C（C 为 B 在
  * A 的 Y/Z 上的投影点），再从 C 沿纵轴（verticalAxis 配置，默认 Y）画到 D，
- * 最后从 D 连线到 B。各分量段中点用文本标签标识该轴距离，颜色固定为
- * X 绿 / Y 红 / Z 蓝；零长度分量段不绘制。
+ * 最后从 D 连线到 B。各分量段中点用文本标签标识该轴距离（分量段的线条与
+ * 标签按轴着色：X 绿 / Y 红 / Z 蓝，轴别也由标签前缀 X/Y/Z 区分）；零长度
+ * 分量段不绘制。主线段、端点圆点与距离标签统一为黑色。
  *
  * 渲染采用 SVG/DOM 覆盖层（fixed 定位）：线段与圆点绘制在覆盖层 <svg> 上，
  * 数值标签用 HTML 圆角框（与 PointCoordinateMarker 的标签风格一致）。每帧
@@ -168,11 +172,11 @@ export class DistanceMeasure {
       overflow: 'visible',
     } as CSSStyleDeclaration);
 
-    // 待完成拾取点圆点（默认隐藏）：白色填充蓝色描边，与测量条目配色一致
+    // 待完成拾取点圆点（默认隐藏）：白色填充黑色描边，与测量条目配色一致
     this.pendingDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle') as SVGCircleElement;
     this.pendingDot.setAttribute('r', String(ENDPOINT_RADIUS));
     this.pendingDot.setAttribute('fill', '#ffffff');
-    this.pendingDot.setAttribute('stroke', '#1e88e5');
+    this.pendingDot.setAttribute('stroke', MEASURE_COLOR);
     this.pendingDot.setAttribute('stroke-width', '2');
     this.pendingDot.style.display = 'none';
 
@@ -322,7 +326,7 @@ export class DistanceMeasure {
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g') as SVGGElement;
 
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line') as SVGLineElement;
-    line.setAttribute('stroke', '#1e88e5');
+    line.setAttribute('stroke', MEASURE_COLOR);
     line.setAttribute('stroke-width', '2');
     line.setAttribute('stroke-linecap', 'round');
 
@@ -337,7 +341,7 @@ export class DistanceMeasure {
     group.append(line, dotStart, dotEnd, lineX, lineVert, lineDiag);
     this.svg.append(group);
 
-    // 距离标签：白色圆角框风格与 PointCoordinateMarker 一致，文字用蓝色呼应测量线
+    // 距离标签：白色圆角框风格与 PointCoordinateMarker 一致，文字与边框为黑色
     const label = document.createElement('div');
     Object.assign(label.style, {
       position: 'absolute',
@@ -345,9 +349,9 @@ export class DistanceMeasure {
       background: '#ffffff',
       borderRadius: '8px',
       padding: '4px 9px',
-      border: '1px solid rgba(30, 136, 229, 0.35)',
+      border: '1px solid rgba(0, 0, 0, 0.35)',
       boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
-      color: '#1e6bb8',
+      color: MEASURE_COLOR,
       font: '12px/1.5 Consolas, Menlo, monospace',
       whiteSpace: 'nowrap',
       pointerEvents: 'none',
@@ -355,7 +359,7 @@ export class DistanceMeasure {
     } as CSSStyleDeclaration);
     this.overlay.append(label);
 
-    // 各轴分量距离标签（颜色按轴固定：X 绿 / Y 红 / Z 蓝）
+    // 各轴分量距离标签（颜色按轴：X 绿 / Y 红 / Z 蓝，轴别由前缀 X/Y/Z 区分）
     const labelX = this.createAxisLabel(AXIS_COLOR.x, AXIS_BORDER_COLOR.x);
     const labelY = this.createAxisLabel(AXIS_COLOR.y, AXIS_BORDER_COLOR.y);
     const labelZ = this.createAxisLabel(AXIS_COLOR.z, AXIS_BORDER_COLOR.z);
@@ -372,12 +376,12 @@ export class DistanceMeasure {
     this.entries.push(entry);
   }
 
-  /** 创建端点圆点（白色填充蓝色描边） */
+  /** 创建端点圆点（白色填充黑色描边） */
   private createEndpointDot(): SVGCircleElement {
     const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle') as SVGCircleElement;
     dot.setAttribute('r', String(ENDPOINT_RADIUS));
     dot.setAttribute('fill', '#ffffff');
-    dot.setAttribute('stroke', '#1e88e5');
+    dot.setAttribute('stroke', MEASURE_COLOR);
     dot.setAttribute('stroke-width', '2');
     return dot;
   }

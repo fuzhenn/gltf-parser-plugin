@@ -13,6 +13,9 @@ const ARC_RADIUS = 22;
 /** 标签相对顶点的偏移间距（像素） */
 const LABEL_OFFSET_PX = 8;
 
+/** 测量元素统一颜色（线条 / 文本 / 文本框描边均为黑色） */
+const MEASURE_COLOR = '#000000';
+
 export interface AngleMeasureOptions {
   /** 角度显示单位名称；默认 '°' */
   unit?: string;
@@ -145,14 +148,14 @@ export class AngleMeasure {
     this.overlay.append(this.svg);
     document.body.append(this.overlay);
 
-    // 待完成拾取点连线：蓝色实线，与正式测量边线同款
+    // 待完成拾取点连线：黑色实线，与正式测量边线同款
     this.pendingLine = this.createEdgeLine();
     this.pendingLine.style.display = 'none';
     this.svg.append(this.pendingLine);
 
-    // 橡皮筋预览线：蓝色虚线，区分于正式测量边线
+    // 橡皮筋预览线：黑色虚线，区分于正式测量边线
     this.rubberLine = document.createElementNS('http://www.w3.org/2000/svg', 'line') as SVGLineElement;
-    this.rubberLine.setAttribute('stroke', '#1e88e5');
+    this.rubberLine.setAttribute('stroke', MEASURE_COLOR);
     this.rubberLine.setAttribute('stroke-width', '2');
     this.rubberLine.setAttribute('stroke-dasharray', '6 4');
     this.rubberLine.style.display = 'none';
@@ -314,20 +317,20 @@ export class AngleMeasure {
 
     // 顶点处夹角弧线：屏幕空间固定半径，d 由每帧 update 重算
     const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path') as SVGPathElement;
-    arc.setAttribute('fill', 'rgba(30, 136, 229, 0.15)');
-    arc.setAttribute('stroke', '#1e88e5');
+    arc.setAttribute('fill', 'rgba(0, 0, 0, 0.12)');
+    arc.setAttribute('stroke', MEASURE_COLOR);
     arc.setAttribute('stroke-width', '2');
 
     const dotVertex = this.createEndpointDot();
     const dotStart = this.createEndpointDot();
     const dotEnd = this.createEndpointDot();
-    // 顶点圆点用实心蓝，与两个边端点（白底蓝边）区分
-    dotVertex.setAttribute('fill', '#1e88e5');
+    // 顶点圆点用实心黑，与两个边端点（白底黑边）区分
+    dotVertex.setAttribute('fill', MEASURE_COLOR);
 
     group.append(lineStart, lineEnd, arc, dotVertex, dotStart, dotEnd);
     this.svg.append(group);
 
-    // 角度标签：白色圆角框风格与 DistanceMeasure 一致，文字用蓝色呼应测量线
+    // 角度标签：白色圆角框风格与 DistanceMeasure 一致，文字与边框为黑色
     const label = document.createElement('div');
     Object.assign(label.style, {
       position: 'absolute',
@@ -335,9 +338,9 @@ export class AngleMeasure {
       background: '#ffffff',
       borderRadius: '8px',
       padding: '4px 9px',
-      border: '1px solid rgba(30, 136, 229, 0.35)',
+      border: '1px solid rgba(0, 0, 0, 0.35)',
       boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
-      color: '#1e6bb8',
+      color: MEASURE_COLOR,
       font: '12px/1.5 Consolas, Menlo, monospace',
       whiteSpace: 'nowrap',
       pointerEvents: 'none',
@@ -364,21 +367,21 @@ export class AngleMeasure {
     this.entries.push(entry);
   }
 
-  /** 创建测量边线段（蓝色实线） */
+  /** 创建测量边线段（黑色实线） */
   private createEdgeLine(): SVGLineElement {
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line') as SVGLineElement;
-    line.setAttribute('stroke', '#1e88e5');
+    line.setAttribute('stroke', MEASURE_COLOR);
     line.setAttribute('stroke-width', '2');
     line.setAttribute('stroke-linecap', 'round');
     return line;
   }
 
-  /** 创建端点圆点（白色填充蓝色描边） */
+  /** 创建端点圆点（白色填充黑色描边） */
   private createEndpointDot(): SVGCircleElement {
     const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle') as SVGCircleElement;
     dot.setAttribute('r', String(ENDPOINT_RADIUS));
     dot.setAttribute('fill', '#ffffff');
-    dot.setAttribute('stroke', '#1e88e5');
+    dot.setAttribute('stroke', MEASURE_COLOR);
     dot.setAttribute('stroke-width', '2');
     return dot;
   }
@@ -405,7 +408,7 @@ export class AngleMeasure {
       const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle') as SVGCircleElement;
       dot.setAttribute('r', String(ENDPOINT_RADIUS));
       dot.setAttribute('fill', '#ffffff');
-      dot.setAttribute('stroke', '#1e88e5');
+      dot.setAttribute('stroke', MEASURE_COLOR);
       dot.setAttribute('stroke-width', '2');
       dot.style.display = 'none';
       this.svg.append(dot);
