@@ -94,9 +94,13 @@ interface MeasureEntry {
  * 跟随相机视角转动；端点转到相机背后时自动隐藏对应条目。覆盖层始终显示在
  * 模型之上（不被模型遮挡），且不拦截画布的鼠标事件。
  *
+ * 临时测量线：第一个点拾取后，从该点向当前鼠标位置绘制一条黑色虚线（跟随
+ * 鼠标实时更新，鼠标移出画布或进行轨道拖拽时隐藏），提示即将生成的测量线；
+ * 补齐第二个点后由正式条目取代。
+ *
  * 点击与拖拽区分：按下与抬起位移小于 CLICK_MOVE_THRESHOLD_PX 才视为拾取
  * 点击，超过阈值视为旋转 / 平移等轨道拖拽，不触发拾取。按 Esc 清除当前
- * 未完成的第一个拾取点。
+ * 未完成的第一个拾取点（临时测量线随之隐藏）。
  *
  * enable / disable 语义：disable 仅停止拾取、清除未完成的拾取点，已完成
  * 的测量保留显示（关闭功能后再次开启仍可见）；再次 enable 时清除全部旧
@@ -129,12 +133,17 @@ export class DistanceMeasure {
   private svg: SVGSVGElement;
   /** 待完成拾取点的圆点标记（第一个点已拾取、等待第二个点时显示） */
   private pendingDot: SVGCircleElement;
+  /** 临时测量线（黑色虚线）：第一个点已拾取后从该点连到当前鼠标位置 */
+  private previewLine: SVGLineElement;
 
   // ---------- 点击检测状态 ----------
   /** 已按下的左键指针 id，null 表示未按下 */
   private downPointerId: number | null = null;
   private downX = 0;
   private downY = 0;
+  /** 鼠标在视口中的最新位置（clientX / clientY），null 表示鼠标不在画布上 */
+  private mouseX: number | null = null;
+  private mouseY = 0;
 
   constructor(canvas: HTMLElement, controls: OrbitControls, options: DistanceMeasureOptions = {}) {
     this.canvas = canvas;
@@ -169,6 +178,14 @@ export class DistanceMeasure {
       overflow: 'visible',
     } as CSSStyleDeclaration);
 
+    // 临时测量线（默认隐藏）：黑色虚线，第一个点拾取后从该点连到鼠标位置
+    this.previewLine = document.createElementNS('http://www.w3.org/2000/svg', 'line') as SVGLineElement;
+    this.previewLine.setAttribute('stroke', MEASURE_COLOR);
+    this.previewLine.setAttribute('stroke-width', '2');
+    this.previewLine.setAttribute('stroke-dasharray', '7 5');
+    this.previewLine.setAttribute('stroke-linecap', 'round');
+    this.previewLine.style.display = 'none';
+
     // 待完成拾取点圆点（默认隐藏）：白色填充黑色描边，与测量条目配色一致
     this.pendingDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle') as SVGCircleElement;
     this.pendingDot.setAttribute('r', String(ENDPOINT_RADIUS));
@@ -177,13 +194,16 @@ export class DistanceMeasure {
     this.pendingDot.setAttribute('stroke-width', '2');
     this.pendingDot.style.display = 'none';
 
-    this.svg.append(this.pendingDot);
+    // 圆点后追加，保证叠在临时测量线之上
+    this.svg.append(this.previewLine, this.pendingDot);
     this.overlay.append(this.svg);
     document.body.append(this.overlay);
 
     // 点击检测监听（挂在画布上；OrbitControls 拖拽期间对画布做指针捕获，
     // 抬起事件仍会派发到画布）
     this.canvas.addEventListener('pointerdown', this.onPointerDown);
+    this.canvas.addEventListener('pointermove', this.onPointerMove);
+    this.canvas.addEventListener('pointerleave', this.onPointerLeave);
     this.canvas.addEventListener('pointerup', this.onPointerUp);
     // Esc 清除未完成拾取点（挂在 window 上：焦点可能不在画布上）
     window.addEventListener('keydown', this.onKeyDown);
@@ -198,7 +218,7 @@ export class DistanceMeasure {
     this.setCanvasCursor('crosshair');
   }
 
-  /** 关闭测量：停止拾取并清除未完成的拾取点；已完成的测量保留显示 */
+  /** 关闭测量：停止拾取并清除未完成的拾取点与临时测量线；已完成的测量保留显示 */
   public disable(): void {
     this.enabled = false;
     this.setCanvasCursor(null);
@@ -250,6 +270,8 @@ export class DistanceMeasure {
   public dispose(): void {
     if (this.disposed) return;
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.canvas.removeEventListener('pointermove', this.onPointerMove);
+    this.canvas.removeEventListener('pointerleave', this.onPointerLeave);
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('keydown', this.onKeyDown);
     this.setCanvasCursor(null);
@@ -269,6 +291,22 @@ export class DistanceMeasure {
     this.downPointerId = event.pointerId;
     this.downX = event.clientX;
     this.downY = event.clientY;
+  };
+
+  /** 缓存鼠标在视口中的位置（临时测量线的末端跟随鼠标） */
+  private onPointerMove = (event: PointerEvent): void => {
+    if (this.disposed || !this.enabled) return;
+    if (event.pointerType !== 'mouse') return;
+    this.mouseX = event.clientX;
+    this.mouseY = event.clientY;
+  };
+
+  /** 鼠标离开画布：清除缓存位置并隐藏临时测量线 */
+  private onPointerLeave = (event: PointerEvent): void => {
+    if (this.disposed) return;
+    if (event.pointerType !== 'mouse') return;
+    this.mouseX = null;
+    this.previewLine.style.display = 'none';
   };
 
   private onPointerUp = (event: PointerEvent): void => {
@@ -413,10 +451,13 @@ export class DistanceMeasure {
     entry.labelZ.textContent = `Z:${entry.dz.toFixed(this.decimals)} ${this.unit}`;
   }
 
-  /** 记录 / 清除未完成的第一个拾取点（pendingDot 跟随显示） */
+  /** 记录 / 清除未完成的第一个拾取点（pendingDot 与临时测量线跟随显示） */
   private setPendingPoint(point: THREE.Vector3 | null): void {
     this.pendingPoint = point;
-    if (point === null) this.pendingDot.style.display = 'none';
+    if (point === null) {
+      this.pendingDot.style.display = 'none';
+      this.previewLine.style.display = 'none';
+    }
   }
 
   // ---------- 每帧更新 ----------
@@ -435,15 +476,32 @@ export class DistanceMeasure {
     if (rect.width <= 0 || rect.height <= 0) return;
 
     // 待完成拾取点圆点（拾取点固定在模型表面，投影随相机视角变化）
+    let pendingScreen: { x: number; y: number } | null = null;
     if (this.pendingPoint !== null) {
       const p = this.projectToScreen(this.pendingPoint, camera, camDir, rect, _screenA);
       if (p) {
+        pendingScreen = p;
         this.pendingDot.setAttribute('cx', `${p.x}`);
         this.pendingDot.setAttribute('cy', `${p.y}`);
         this.pendingDot.style.display = 'block';
       } else {
         this.pendingDot.style.display = 'none';
       }
+    }
+
+    // 临时测量线：起点 → 鼠标位置（轨道拖拽期间隐藏，松开后自动恢复）
+    const dragging =
+      this.downPointerId !== null &&
+      this.mouseX !== null &&
+      Math.hypot(this.mouseX - this.downX, this.mouseY - this.downY) > CLICK_MOVE_THRESHOLD_PX;
+    if (pendingScreen !== null && this.mouseX !== null && !dragging) {
+      this.previewLine.setAttribute('x1', `${pendingScreen.x}`);
+      this.previewLine.setAttribute('y1', `${pendingScreen.y}`);
+      this.previewLine.setAttribute('x2', `${this.mouseX}`);
+      this.previewLine.setAttribute('y2', `${this.mouseY}`);
+      this.previewLine.style.display = 'block';
+    } else {
+      this.previewLine.style.display = 'none';
     }
 
     for (const entry of this.entries) {
