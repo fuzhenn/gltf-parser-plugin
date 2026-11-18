@@ -428,7 +428,8 @@ export class Toolbar {
    *
    * targets 为参与射线拾取的模型对象（场景根节点或网格数组，递归拾取）。
    * 关闭时 targets 可省略；再次开启时若省略 targets，沿用最近一次传入的对象。
-   * 关闭仅停止拾取，已显示的标记保留，可用 clearPointCoordinate() 清除。
+   * 关闭仅停止拾取，已显示的标记保留并继续随相机视角转动（每帧仍会更新
+   * 其屏幕位置），可用 clearPointCoordinate() 清除。
    * 返回操作是否生效（已释放、缺少画布或开启时无拾取目标则返回 false）。
    */
   public setPointCoordinateEnabled(enabled: boolean, targets?: THREE.Object3D | THREE.Object3D[]): boolean {
@@ -470,7 +471,8 @@ export class Toolbar {
 
   /**
    * 每帧更新点位坐标标签的屏幕位置（拾取点投影随相机视角变化），
-   * 由外部渲染循环在渲染前调用；未开启时为空操作。
+   * 由外部渲染循环在渲染前调用；无标记时为空操作。关闭拾取后仍会更新，
+   * 使已显示的标记继续跟随相机视角转动。
    */
   public updatePointCoordinateMarker(): void {
     if (this.disposed) return;
