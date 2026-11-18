@@ -51,7 +51,9 @@ interface MarkerEntry {
  *
  * 覆盖层使用 position: fixed 定位，坐标直接取视口坐标，不依赖画布父容器
  * 的定位方式；覆盖层与内部元素均设置 pointer-events: none，不拦截画布的
- * 鼠标事件。
+ * 鼠标事件。正因为坐标框不拦截鼠标事件，鼠标位于某个坐标框（文本框）上时
+ * 用几何位置判断做规避：此时既不做悬停预览，也不触发点击拾取，避免点中
+ * 标签空白处被判定为"点击模型以外"而清除已有标记。
  */
 export class PointCoordinateMarker {
   private canvas: HTMLElement;
@@ -260,6 +262,8 @@ export class PointCoordinateMarker {
     if (event.pointerType !== 'mouse' || event.button !== 0) return;
     // 已有按键按下（正在其他拖拽交互）时不进入点击判定
     if (event.buttons !== 1) return;
+    // 鼠标位于已有坐标框（文本框）上时不进入点击判定，不影响拾取查询
+    if (this.isOverLabel(event.clientX, event.clientY)) return;
     this.downPointerId = event.pointerId;
     this.downX = event.clientX;
     this.downY = event.clientY;
@@ -272,8 +276,28 @@ export class PointCoordinateMarker {
     // 位移超过阈值视为轨道拖拽（旋转 / 平移），不触发拾取
     const moved = Math.hypot(event.clientX - this.downX, event.clientY - this.downY);
     if (moved > CLICK_MOVE_THRESHOLD_PX) return;
+    // 抬起时鼠标位于坐标框（文本框）上同样不触发拾取
+    if (this.isOverLabel(event.clientX, event.clientY)) return;
     this.pick(event);
   };
+
+  /**
+   * 视口坐标是否落在某个坐标框（文本框）上。坐标框设置了 pointer-events: none
+   * （鼠标事件穿透到画布、不阻塞轨道拖拽），因此这里按元素的屏幕位置做几何
+   * 判断；已隐藏（转到相机背后 / 未显示）的坐标框不参与判断。
+   */
+  private isOverLabel(clientX: number, clientY: number): boolean {
+    for (const marker of this.markers) {
+      const el = marker.label;
+      if (el.style.display === 'none') continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   /**
    * 鼠标移动时的悬停预览：对鼠标位置做射线拾取，命中模型则在鼠标位置临时
@@ -283,6 +307,11 @@ export class PointCoordinateMarker {
     if (!this.enabled || !this.hoverPreview) return;
     // 拖拽（旋转 / 平移）期间隐藏预览，避免干扰
     if (event.pointerType !== 'mouse' || event.buttons !== 0) {
+      this.hideHover();
+      return;
+    }
+    // 鼠标位于已有坐标框（文本框）上时不显示预览，避免遮挡标签
+    if (this.isOverLabel(event.clientX, event.clientY)) {
       this.hideHover();
       return;
     }
@@ -358,11 +387,15 @@ export class PointCoordinateMarker {
 
   /**
    * 每帧更新：把各拾取点投影到屏幕坐标并同步对应圆角框与小圆点的位置，
-   * 由外部渲染循环调用；未开启或无标记时空操作。单个拾取点位于相机背后
-   * （或正上方）时仅隐藏该点的标签，其他标记不受影响。
+   * 由外部渲染循环调用；无标记时空操作。
+   *
+   * 注意：这里不判断 enabled —— 关闭拾取（disable）后已显示的标记需要继续
+   * 跟随相机视角转动，只是不再拾取新的点。
+   *
+   * 单个拾取点位于相机背后（或正上方）时仅隐藏该点的标签，其他标记不受影响。
    */
   public update(): void {
-    if (!this.enabled || this.markers.length === 0) return;
+    if (this.markers.length === 0) return;
 
     const rect = this.canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
