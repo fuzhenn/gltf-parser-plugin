@@ -111,16 +111,18 @@ export class GLTFParserPlugin {
     url: string,
     options?: RequestInit,
   ): Promise<Response | ArrayBuffer | object> {
-    const isJson = url.toLowerCase().endsWith(".json");
-    if (!this._options.useIndexedDB || isJson) {
+    if (!this._options.useIndexedDB) {
       return this._tiles!.fetchData(url, options);
     }
+
+    // json 命中缓存后需包一层 Response，tiles 内部会再调用 res.json() 解析
+    const isJson = url.toLowerCase().endsWith(".json");
 
     try {
       const cachedData = await tileCache.get(url);
 
       if (cachedData) {
-        return cachedData;
+        return isJson ? new Response(cachedData) : cachedData;
       }
 
       const response = await this._tiles!.fetchData(url, options);
@@ -135,7 +137,7 @@ export class GLTFParserPlugin {
         console.warn("[GLTFParserPlugin] Failed to cache data:", err);
       });
 
-      return arrayBuffer;
+      return isJson ? new Response(arrayBuffer) : arrayBuffer;
     } catch (error) {
       return this._tiles!.fetchData(url, options);
     }
