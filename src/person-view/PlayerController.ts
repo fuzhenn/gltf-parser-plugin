@@ -13,7 +13,9 @@
  *      isActive=true 强制进入、false 强制退出，不传则取反当前状态）；
  *   8. initialize(object3d, opts?) 封装初始化流程：登记碰撞体 → 加载角色模型 → 构建碰撞数据 → 定位出生点并就位
  *      （opts.spawnPoint 指定出生点，合法时直接使用，否则回退到 findSpawn 自动寻找；
- *       DOM 相关操作如进度展示、错误提示、启动渲染循环由外部处理）。
+ *       DOM 相关操作如进度展示、错误提示、启动渲染循环由外部处理）；
+ *   9. playAnim(name, opts?) 把角色模型的动画切换为指定 clip（手动指定期间暂停自动状态机，
+ *      releaseAnim() 恢复；animNames 可查询模型内置的 clip 名称）。
  *
  * 用法：
  *   const player = new Player({ camera, config: CONFIG, collidersBounds });
@@ -24,6 +26,8 @@
  *   player.clearColliders();                     // 需要更换碰撞体时清空后重新 initialize / refreshColliders
  *   player.toggleView(false);                    // 手动切换视角（可选；内部已绑定 V 键随时切换）
  *                                                // isActive=true 强制进入第三人称、false 强制退出，不传则取反当前状态
+ *   player.playAnim('wave', { loop: false });    // 手动播放指定 clip（暂停自动状态机）
+ *   player.releaseAnim();                        // 恢复自动状态机
  *   // 主循环中：
  *   if (!paused) player.update(dt);              // 内部每帧同步角色模型、更新相机并增量构建碰撞数据（登记由业务代码控制）
  * ------------------------------------------------------------
@@ -33,7 +37,7 @@ import { CollisionWorld, type UpAxis, type Penetration } from './CollisionWorld'
 
 /** 穿透检测结果（转发 collision.ts 的类型，供 Player.findSpawn 使用） */
 export type { Penetration };
-import { Person, type AnimClipNames } from './PersonModel';
+import { Person, type AnimClipNames, type PlayActionOptions } from './PersonModel';
 import { Keyboard } from './KeyBind';
 
 /** 玩家体型常量（碰撞半径 / 身高 / 视线高度） */
@@ -447,6 +451,38 @@ export class Player {
     const next = isActive ?? !this.isActive;
     if (next) this.enterThirdPerson();
     else this.exitThirdPerson();
+  }
+
+  /* ================= 角色动画（手动指定 clip） ================= */
+
+  /** 角色模型当前可用的 clip 名称（小写；模型未加载时为空数组） */
+  get animNames(): string[] {
+    return this.person ? Object.keys(this.person.actions) : [];
+  }
+
+  /**
+   * 把角色模型的动画切换为指定 clip（名称不区分大小写）。
+   * 手动指定后自动动画状态机暂停（位置 / 朝向仍随玩家同步），直到调用 releaseAnim()。
+   * @param name clip 名称
+   * @param opts.fade 淡入时长（秒，默认 0.22）
+   * @param opts.loop 是否循环（默认 true；false 表示播放一次）
+   * @param opts.clampWhenFinished 配合 loop=false：播完停在末帧（默认 false，播完回到起始姿态）
+   * @returns 是否切换成功（角色未加载或该 clip 不存在时为 false）
+   */
+  playAnim(name: string, opts: { fade?: number; loop?: boolean; clampWhenFinished?: boolean } = {}): boolean {
+    if (!this.person) return false;
+    const { fade, loop = true, clampWhenFinished = false } = opts;
+    const actionOpts: PlayActionOptions = {
+      fade,
+      clampWhenFinished,
+      loop: loop ? THREE.LoopRepeat : THREE.LoopOnce
+    };
+    return this.person.playAction(name, actionOpts);
+  }
+
+  /** 结束手动动画、恢复自动动画状态机（淡回待机后由玩家状态接管） */
+  releaseAnim(fade: number = 0.22): void {
+    this.person?.releaseAction(fade);
   }
 
   resetToSpawn(): void {

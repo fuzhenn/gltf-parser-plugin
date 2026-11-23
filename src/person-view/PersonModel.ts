@@ -11,6 +11,8 @@
  *   // Z-UP 世界传 upAxis: 'z'，模型会自动立起并绕世界上轴旋转
  *   await person.load();                    // 载入模型与动画
  *   scene.add(person.root);                 // 由外部把角色根节点挂到场景
+ *   person.playAction('wave', { loop: THREE.LoopOnce }); // 手动播放指定 clip（暂停自动状态机）
+ *   person.releaseAction();                 // 恢复自动状态机
  *   person.update(dt, player);              // 由 Player.update 内部每帧调用（advanceAnim 默认 true）
  * ------------------------------------------------------------
  */
@@ -66,6 +68,16 @@ export interface PersonOptions {
   facing?: '+z' | '-z';
 }
 
+/** 手动播放动画的可选项 */
+export interface PlayActionOptions {
+  /** 淡入时长（秒，默认 0.22） */
+  fade?: number;
+  /** 循环模式：默认 THREE.LoopRepeat；THREE.LoopOnce 表示播放一次（其余模式见 three 文档） */
+  loop?: THREE.AnimationActionLoopStyles;
+  /** 配合 LoopOnce 使用：播完后停在末帧（默认 false，播完回到起始姿态） */
+  clampWhenFinished?: boolean;
+}
+
 /** 把角度归一到 (-PI, PI] */
 function shortestAngle(a: number): number {
   return Math.atan2(Math.sin(a), Math.cos(a));
@@ -86,6 +98,8 @@ export class Person {
   actions: Record<string, THREE.AnimationAction> = {};
   /** 当前播放的动作 */
   current: THREE.AnimationAction | null = null;
+  /** 是否处于手动指定动画状态（true 时 update 不再按玩家状态自动切换动画） */
+  manualAnim = false;
   /** 角色朝向（面向移动方向） */
   yaw = 0;
   /** 各动画状态使用的 clip 名称 */
@@ -113,6 +127,37 @@ export class Person {
     if (this.current) next.crossFadeFrom(this.current, fade, true);
     next.play();
     this.current = next;
+  }
+
+  /**
+   * 手动播放指定 clip（名称不区分大小写），并暂停自动动画状态机
+   * （暂停后 update 仍同步位置 / 朝向，但不再切换动画）。
+   * @returns 是否找到并播放了该 clip（模型未加载或名称不存在时返回 false，且不改变当前状态）
+   */
+  playAction(name: string, opts: PlayActionOptions = {}): boolean {
+    const { fade = 0.22, loop = THREE.LoopRepeat, clampWhenFinished = false } = opts;
+    const next = this.actions[name.toLowerCase()];
+    if (!next) return false;
+    this.manualAnim = true;
+    next.setLoop(loop, loop === THREE.LoopOnce ? 1 : Infinity);
+    next.clampWhenFinished = clampWhenFinished;
+    if (next === this.current) {
+      /* 同名动作重新播放（用于 LoopOnce 动作的再次触发） */
+      next.reset().setEffectiveWeight(1).play();
+    } else {
+      next.reset();
+      if (this.current) next.crossFadeFrom(this.current, fade, true);
+      next.play();
+    }
+    this.current = next;
+    return true;
+  }
+
+  /** 结束手动动画、恢复自动状态机（默认淡回待机，随后由 update 按玩家状态切换） */
+  releaseAction(fade: number = 0.22): void {
+    if (!this.manualAnim) return;
+    this.manualAnim = false;
+    this.setAction(this.animClips.idle, fade);
   }
 
   /** 载入角色模型，并准备 idle / walking / running / jump 动画（已加载时直接返回，防止重复创建模型实例） */
@@ -184,7 +229,8 @@ export class Person {
     if (zUp) this.root.rotation.z = this.yaw;   // 绕世界上轴旋转
     else this.root.rotation.y = this.yaw;
 
-    if (anim) this.setAction(anim);
+    /* 手动指定动画期间只同步位置 / 朝向，不覆盖动画（见 playAction / releaseAction） */
+    if (anim && !this.manualAnim) this.setAction(anim);
     if (advanceAnim && this.mixer) this.mixer.update(dt);
   }
 }
