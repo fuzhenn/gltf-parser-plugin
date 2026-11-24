@@ -52,11 +52,14 @@ function readPropertyData(
 
     try {
       // 优先命中插件级缓存，未命中再整行解码并回写
-      return getOrLoadFeatureData(featureDataCache, partId, () =>
-        structuralMetadata.getPropertyTableData(
-          propertyTableIndex,
-          fid,
-        ) as Record<string, unknown>,
+      return getOrLoadFeatureData(
+        featureDataCache,
+        partId,
+        () =>
+          structuralMetadata.getPropertyTableData(
+            propertyTableIndex,
+            fid,
+          ) as Record<string, unknown>,
       );
     } catch {
       return featureIdAttribute === 1 ? { _pid: partId, pid: partId } : null;
@@ -134,10 +137,10 @@ function getPropertyDataOnMeshByPartId(
   featureDataCache?: FeatureDataCache,
 ): Record<string, unknown> | null {
   const channel = featureIdAttributeToChannel(featureIdAttribute);
-  const idMap = getPartIdMap(mesh, channel);
-  if (!idMap || idMap[partId] === undefined) return null;
-
+  const idMap = getPartIdMap(mesh, channel)!;
   const fid = idMap[partId]!;
+  if (!idMap || fid === undefined) return null;
+
   const resolved = resolveFeatureChannelOnMesh(mesh, channel);
   if (!resolved) return null;
 
@@ -152,10 +155,10 @@ function getPropertyDataOnMeshByPartId(
   }
 
   try {
-    const cacheKey = `${propertyTableIndex}-${partId}`;
+    const cacheKey = propertyTableIndex * 1e9 + partId;
     let data;
     let cache = mesh.userData["_propertyCache"] as Map<
-      string,
+      number,
       Record<string, unknown>
     >;
     if (!cache) {
@@ -163,15 +166,17 @@ function getPropertyDataOnMeshByPartId(
       mesh.userData["_propertyCache"] = cache;
     }
 
-    if (cache.has(cacheKey)) {
-      data = cache.get(cacheKey)!;
-    } else {
+    data = cache.get(cacheKey)!;
+    if (!data) {
       // 优先命中插件级缓存，未命中再整行解码并回写
-      data = getOrLoadFeatureData(featureDataCache, partId, () =>
-        structuralMetadata.getPropertyTableData(
-          propertyTableIndex,
-          fid,
-        ) as Record<string, unknown>,
+      data = getOrLoadFeatureData(
+        featureDataCache,
+        partId,
+        () =>
+          structuralMetadata.getPropertyTableData(
+            propertyTableIndex,
+            fid,
+          ) as Record<string, unknown>,
       );
       cache.set(cacheKey, data);
     }

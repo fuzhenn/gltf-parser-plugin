@@ -18,20 +18,24 @@ export type StyleConditionEvaluator = (
   data: Record<string, unknown>,
 ) => boolean;
 
+const conditionFunctionCache = new Map<string, StyleConditionEvaluator>();
+
 /**
  * 编译单个表达式；失败返回 null
  */
 export function compileStyleCondition(
   expr: string,
 ): StyleConditionEvaluator | null {
-  const trimmed = expr.trim();
-  if (!trimmed) return null;
+  const func = conditionFunctionCache.get(expr);
+  if (func) return func;
   try {
-    return new Function(
+    const fn = new Function(
       "data",
       `var d = data != null && typeof data === "object" ? data : {};
-with (d) { return Boolean(${trimmed}); }`,
+with (d) { return Boolean(${expr}); }`,
     ) as StyleConditionEvaluator;
+    conditionFunctionCache.set(expr, fn);
+    return fn;
   } catch {
     return null;
   }

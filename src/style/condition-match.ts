@@ -7,7 +7,7 @@ import {
   type StyleShowInput,
 } from "./appearance";
 import {
-  getPartIdMapForFeatureAttribute,
+  getPartIdsForFeatureAttribute,
   getPropertyDataFromUserData,
   type FeatureDataCache,
 } from "../features";
@@ -31,20 +31,19 @@ function collectPartIdsByPredicate(
   const cached = getCachedMatchedFeatureIds(tileMesh, cacheKey);
   if (cached) return cached;
 
-  const idMap = getPartIdMapForFeatureAttribute(tileMesh, featureIdAttribute);
+  const partIds = getPartIdsForFeatureAttribute(tileMesh, featureIdAttribute);
   const result = new Set<number>();
-  if (idMap) {
-    for (const key in idMap) {
-      const partId = Number(key);
+  if (partIds) {
+    for (const partId of partIds) {
       const propertyData = getPropertyDataFromUserData(
         tileMesh.userData,
-        partId,
+        +partId,
         featureIdAttribute,
         oidPathMap,
         featureDataCache,
       );
       if (propertyData != null && keep(propertyData)) {
-        result.add(partId);
+        result.add(+partId);
       }
     }
   }

@@ -48,10 +48,7 @@ function buildChannelPartIdMap(
     try {
       // 轻量请求：只解码 partId 字段，避免整行解码开销
       const table = structuralMetadata.tableAccessors[propertyTableIndex];
-      const partId = table.getPropertyValue(
-        field,
-        featureId
-      );
+      const partId = table.getPropertyValue(field, featureId);
 
       // 命中缓存直接复用，否则整行解码一次并写入缓存
       const featureData = getOrLoadFeatureData(
@@ -117,4 +114,21 @@ export function getPartIdMapForFeatureAttribute(
   return userData[CHANNEL_CONFIG[channel].mapKey] as
     | Record<number, number>
     | undefined;
+}
+
+export function getPartIdsForFeatureAttribute(
+  source: Mesh | Record<string, unknown>,
+  featureIdAttribute: number,
+): string[] {
+  const userData =
+    source instanceof Mesh
+      ? source.userData
+      : (source as Record<string, unknown>);
+  const channel = featureIdAttributeToChannel(featureIdAttribute);
+  const key = CHANNEL_CONFIG[channel].partIdsKey;
+  if (!userData[key]) {
+    const idMap = getPartIdMapForFeatureAttribute(userData, featureIdAttribute);
+    userData[key] = Object.keys(idMap || {});
+  }
+  return userData[key];
 }

@@ -14,11 +14,13 @@ export const CHANNEL_CONFIG = {
     featureIndex: 0,
     mapKey: "_tile_oidMap",
     namePrefix: "merged_features",
+    partIdsKey: "_tile_oidPartIds",
   },
   pid: {
     featureIndex: 1,
     mapKey: "_tile_pidMap",
     namePrefix: "merged_pids",
+    partIdsKey: "_tile_pidPartIds",
   },
 } as const;
 
