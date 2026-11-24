@@ -20,9 +20,12 @@ import {
   attachSplitMeshToTileMeshParent,
   disposeSplitGeometry,
   getOrCreateSplitMeshGroup,
+  getSharedSplitGeometry,
   getSplitMeshGroup,
+  releaseSharedSplitGeometry,
   removeMatchedFeatureIdsCache,
   removeSplitMeshGroup,
+  setSharedSplitGeometry,
 } from "./split-cache";
 import {
   resolveMatchedPartIdsOnTileMesh,
@@ -133,18 +136,32 @@ export class MeshCollector {
         }
         if (effective.size === 0) continue;
 
-        const splitMesh = buildSplitMeshForTileMesh(
+        // 组内命中集一致 → 合并几何一致：首个构建的几何登记为组共享，后续
+        // 槽位复用（每槽仅独享材质，color/opacity 原地写，几何内存 1/N）
+        const shared = getSharedSplitGeometry(tileMesh, this._groupKey);
+        const result = buildSplitMeshForTileMesh(
           tileMesh,
           effective,
           this.featureIdAttribute,
           appearance,
           this._materialBuilder,
           this._featureDataCache,
+          shared,
         );
-        if (splitMesh) {
-          attachSplitMeshToTileMeshParent(tileMesh, splitMesh);
-          getOrCreateSplitMeshGroup(tileMesh, this._groupKey)[i] = splitMesh;
+        if (!result) continue;
+
+        if (shared) {
+          if (result.mesh.geometry !== shared) {
+            // mesh 工厂替换了几何 → 共享输入失去主人，释放并让本组退化为
+            // 每槽独享（工厂行为按约定一致，shared 已无 mesh 引用）
+            releaseSharedSplitGeometry(tileMesh, this._groupKey);
+          }
+        } else if (result.geometry) {
+          setSharedSplitGeometry(tileMesh, this._groupKey, result.geometry);
         }
+
+        attachSplitMeshToTileMeshParent(tileMesh, result.mesh);
+        getOrCreateSplitMeshGroup(tileMesh, this._groupKey)[i] = result.mesh;
       }
     }
   }
@@ -202,10 +219,13 @@ export class MeshCollector {
   }
 
   /** 释放单个 split mesh（摘出场景 + 释放独有几何 + dispose 独享材质；
+   *  组共享几何的 mesh 跳过几何释放，几何随组缓存条目统一释放；
    *  用户传入的 material 实例无所有权标记，不 dispose） */
-  private _releaseSplitMesh(splitMesh: Mesh): void {
+  private _releaseSplitMesh(tileMesh: Mesh, splitMesh: Mesh): void {
     splitMesh.removeFromParent();
-    disposeSplitGeometry(splitMesh);
+    if (splitMesh.geometry !== getSharedSplitGeometry(tileMesh, this._groupKey)) {
+      disposeSplitGeometry(splitMesh);
+    }
     disposeOwnedStyleMaterial(splitMesh.material);
   }
 
@@ -215,7 +235,7 @@ export class MeshCollector {
     if (!group) return;
     for (let i = count; i < group.length; i++) {
       const mesh = group[i];
-      if (mesh) this._releaseSplitMesh(mesh);
+      if (mesh) this._releaseSplitMesh(tileMesh, mesh);
     }
     if (group.length > count) {
       group.length = count;
@@ -271,7 +291,7 @@ export class MeshCollector {
       const group = getSplitMeshGroup(tileMesh, this._groupKey);
       if (group) {
         for (const mesh of group) {
-          if (mesh) this._releaseSplitMesh(mesh);
+          if (mesh) this._releaseSplitMesh(tileMesh, mesh);
         }
         removeSplitMeshGroup(tileMesh, this._groupKey);
       }
