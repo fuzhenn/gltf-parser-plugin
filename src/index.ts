@@ -1,7 +1,7 @@
 export { GLTFParserPlugin } from "./plugin";
 export { Player } from "./person-view/PlayerController";
 export type { GameConfig, PlayerOptions } from "./person-view/PlayerController";
-export type { AnimClipNames, PlayActionOptions } from "./person-view/PersonModel";
+export type { AnimClipNames, PlayActionOptions, PersonAnimEvent, PersonAnimEventType, PersonAnimHandler } from "./person-view/PersonModel";
 export { ViewerControls } from "./viewer-control/ViewerControls";
 export type { DistanceMeasureOptions, DistanceMeasurement } from "./viewer-control/DistanceMeasure";
 export type { AngleMeasureOptions, AngleMeasurement } from "./viewer-control/AngleMeasure";

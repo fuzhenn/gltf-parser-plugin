@@ -14,6 +14,13 @@
  *   person.playAction('wave', { loop: THREE.LoopOnce }); // 手动播放指定 clip（暂停自动状态机）
  *   person.releaseAction();                 // 恢复自动状态机
  *   person.update(dt, player);              // 由 Player.update 内部每帧调用（advanceAnim 默认 true）
+ *
+ * 动画事件（on 返回取消订阅函数）：
+ *   const off = person.on('animchange', (e) => {
+ *     console.log(e.previousClip, '->', e.clip, 'state =', e.state, e.manual ? '(手动)' : '(自动)');
+ *   });
+ *   person.on('animfinish', (e) => console.log('播放结束', e.clip));
+ *   off();                                  // 取消订阅
  * ------------------------------------------------------------
  */
 import * as THREE from 'three';
@@ -83,6 +90,36 @@ function shortestAngle(a: number): number {
   return Math.atan2(Math.sin(a), Math.cos(a));
 }
 
+/**
+ * 动画事件类型（需要通过 on 订阅关注的播放状态）：
+ *   animstart  —— 动画开始播放（首个动作，或同名动作重新播放）；
+ *   animchange —— 动画切换（自动状态机 idle / walking / running / jump 之间，或手动播放另一个 clip）；
+ *   animloop   —— 当前动作完成一次循环（循环动画每次绕回开头都会触发）；
+ *   animfinish —— 当前动作播放结束（LoopOnce 播完，含 clampWhenFinished 停在末帧的情况）。
+ */
+export type PersonAnimEventType = 'animstart' | 'animchange' | 'animloop' | 'animfinish';
+
+/** 动画事件对象 */
+export interface PersonAnimEvent {
+  /** 事件类型 */
+  type: PersonAnimEventType;
+  /** 触发事件的动画动作 */
+  action: THREE.AnimationAction;
+  /** 动画 clip 名称（模型内置原始名称，大小写保持原样） */
+  clip: string;
+  /** 动画状态名：自动状态为 idle / walking / running / jump，手动播放时为 clip 名称（小写） */
+  state: string;
+  /** 切换前的 clip 名称（仅 animchange 非空，其余为 null） */
+  previousClip: string | null;
+  /** 切换前的动画动作（仅 animchange 非空，其余为 null） */
+  previousAction: THREE.AnimationAction | null;
+  /** 是否由手动播放（playAction）触发；false 表示自动状态机 */
+  manual: boolean;
+}
+
+/** 动画事件回调 */
+export type PersonAnimHandler = (event: PersonAnimEvent) => void;
+
 export class Person {
   url: string;
   /** 角色模型根节点挂载到的父对象 */
@@ -108,6 +145,8 @@ export class Person {
   scale: number;
   /** 模型原生朝向约定 */
   facing: '+z' | '-z';
+  /** 动画事件回调表（事件类型 -> 回调列表） */
+  private _animHandlers: Partial<Record<PersonAnimEventType, PersonAnimHandler[]>> = {};
 
   constructor({ url, parent, walkSpeed, upAxis = 'y', animClips, scale = 1, facing = '+z' }: PersonOptions) {
     this.url = url;
@@ -119,14 +158,79 @@ export class Person {
     this.facing = facing;
   }
 
+  /* ================= 动画事件 ================= */
+
+  /**
+   * 订阅动画播放状态事件。
+   * @param type 事件类型：animstart / animchange / animloop / animfinish
+   * @param handler 回调（参数见 PersonAnimEvent）
+   * @returns 取消订阅函数
+   */
+  on(type: PersonAnimEventType, handler: PersonAnimHandler): () => void {
+    const list = this._animHandlers[type] ?? (this._animHandlers[type] = []);
+    list.push(handler);
+    return () => this.off(type, handler);
+  }
+
+  /** 移除某个动画事件回调（不传 handler 则移除该类型全部回调） */
+  off(type: PersonAnimEventType, handler?: PersonAnimHandler): void {
+    if (!handler) { delete this._animHandlers[type]; return; }
+    const list = this._animHandlers[type];
+    if (!list) return;
+    const i = list.indexOf(handler);
+    if (i >= 0) list.splice(i, 1);
+    if (!list.length) delete this._animHandlers[type];
+  }
+
+  /** 派发动画事件（无订阅者时直接返回，零开销；回调内的订阅变更不影响本次派发） */
+  private _emitAnim(type: PersonAnimEventType, action: THREE.AnimationAction, previous: THREE.AnimationAction | null, manual: boolean): void {
+    const list = this._animHandlers[type];
+    if (!list || !list.length) return;
+    const event: PersonAnimEvent = {
+      type,
+      action,
+      clip: action.getClip().name,
+      state: this._stateOf(action),
+      previousClip: previous ? previous.getClip().name : null,
+      previousAction: previous,
+      manual
+    };
+    for (const fn of list.slice()) fn(event);
+  }
+
+  /** 由动画动作推导状态名：自动状态取 idle / walking / running / jump，其余（手动 clip）取 clip 名（小写） */
+  private _stateOf(action: THREE.AnimationAction): string {
+    const clip = action.getClip().name.toLowerCase();
+    for (const key of Object.keys(this.animClips) as Array<keyof AnimClipNames>) {
+      if (this.animClips[key].toLowerCase() === clip) return key;
+    }
+    return clip;
+  }
+
+  /** mixer 循环回调：只关注当前动作（crossFade 中淡出的旧动作不派发） */
+  private readonly _onMixerLoop = (e: { action: THREE.AnimationAction }): void => {
+    if (e.action !== this.current) return;
+    this._emitAnim('animloop', e.action, null, this.manualAnim);
+  };
+
+  /** mixer 结束回调（LoopOnce 播完）：只关注当前动作 */
+  private readonly _onMixerFinished = (e: { action: THREE.AnimationAction }): void => {
+    if (e.action !== this.current) return;
+    this._emitAnim('animfinish', e.action, null, this.manualAnim);
+  };
+
+  /* ================= 动画切换 ================= */
+
   /** 切换动画：淡入新动作、淡出旧动作（名称不区分大小写） */
   setAction(name: string, fade: number = 0.22): void {
     const next = this.actions[name.toLowerCase()];
     if (!next || next === this.current) return;
+    const prev = this.current;
     next.reset();
-    if (this.current) next.crossFadeFrom(this.current, fade, true);
+    if (prev) next.crossFadeFrom(prev, fade, true);
     next.play();
     this.current = next;
+    this._emitAnim(prev ? 'animchange' : 'animstart', next, prev, false);
   }
 
   /**
@@ -141,15 +245,18 @@ export class Person {
     this.manualAnim = true;
     next.setLoop(loop, loop === THREE.LoopOnce ? 1 : Infinity);
     next.clampWhenFinished = clampWhenFinished;
-    if (next === this.current) {
+    const prev = this.current;
+    this.current = next;
+    if (next === prev) {
       /* 同名动作重新播放（用于 LoopOnce 动作的再次触发） */
       next.reset().setEffectiveWeight(1).play();
+      this._emitAnim('animstart', next, null, true);
     } else {
       next.reset();
-      if (this.current) next.crossFadeFrom(this.current, fade, true);
+      if (prev) next.crossFadeFrom(prev, fade, true);
       next.play();
+      this._emitAnim(prev ? 'animchange' : 'animstart', next, prev, true);
     }
-    this.current = next;
     return true;
   }
 
@@ -182,6 +289,9 @@ export class Person {
     this.parent.add(root);
 
     const mixer = new THREE.AnimationMixer(model);
+    /* 循环 / 播放结束事件由 mixer 派发，转发为 Person 的动画事件（只关注当前动作） */
+    mixer.addEventListener('loop', this._onMixerLoop);
+    mixer.addEventListener('finished', this._onMixerFinished);
     const actions: Record<string, THREE.AnimationAction> = {};
     for (const clip of gltf.animations) actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
     this.root = root;
