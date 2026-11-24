@@ -13,6 +13,10 @@ type SplitMeshGroupCache = Map<string, Mesh[]>;
 /** 挂在 tileMesh.userData 上，按组 key 缓存 split mesh 数组（组内按条件位置下标存放） */
 const SPLIT_MESH_GROUPS_CACHE_KEY = "_splitMeshGroupsCache";
 
+type SplitGroupGeometryCache = Map<string, BufferGeometry>;
+/** 挂在 tileMesh.userData 上，按组 key 缓存组内共享的 split 合并几何 */
+const SPLIT_GROUP_GEOMETRIES_CACHE_KEY = "_splitGroupGeometriesCache";
+
 /** 冻结幽灵体在 split 缓存中的保留 key 前缀，按条件区分（buildSplitCacheKey 输出恒以 f+数字开头，不会撞） */
 export const FROZEN_SPLIT_KEY_PREFIX = "_frozen";
 
@@ -112,12 +116,61 @@ export function getOrCreateSplitMeshGroup(
   return group;
 }
 
-/** 删除某组的 split mesh 缓存条目（仅摘除缓存记录，不释放 mesh） */
+/** 删除某组的 split mesh 缓存条目（摘缓存记录 + 释放组共享几何；mesh 释放归调用方） */
 export function removeSplitMeshGroup(
   tileMesh: Mesh,
   groupKey: string,
 ): void {
+  releaseSharedSplitGeometry(tileMesh, groupKey);
   removeCacheEntry(tileMesh, groupKey, SPLIT_MESH_GROUPS_CACHE_KEY);
+}
+
+export function getSharedSplitGeometry(
+  tileMesh: Mesh,
+  groupKey: string,
+): BufferGeometry | undefined {
+  return (
+    tileMesh.userData[SPLIT_GROUP_GEOMETRIES_CACHE_KEY] as
+      | SplitGroupGeometryCache
+      | undefined
+  )?.get(groupKey);
+}
+
+export function setSharedSplitGeometry(
+  tileMesh: Mesh,
+  groupKey: string,
+  geometry: BufferGeometry,
+): void {
+  let map = tileMesh.userData[SPLIT_GROUP_GEOMETRIES_CACHE_KEY] as
+    | SplitGroupGeometryCache
+    | undefined;
+  if (!map) {
+    map = new Map();
+    tileMesh.userData[SPLIT_GROUP_GEOMETRIES_CACHE_KEY] = map;
+  }
+  map.set(groupKey, geometry);
+}
+
+/** 释放并摘除组共享几何（组销毁，或工厂替换几何导致共享退化时调用） */
+export function releaseSharedSplitGeometry(
+  tileMesh: Mesh,
+  groupKey: string,
+): void {
+  const map = tileMesh.userData[SPLIT_GROUP_GEOMETRIES_CACHE_KEY] as
+    | SplitGroupGeometryCache
+    | undefined;
+  if (!map) return;
+  const geometry = map.get(groupKey);
+  if (geometry) {
+    disposeUnsharedGeometryResources(
+      geometry,
+      tileMesh.geometry as BufferGeometry | undefined,
+    );
+    map.delete(groupKey);
+  }
+  if (map.size === 0) {
+    delete tileMesh.userData[SPLIT_GROUP_GEOMETRIES_CACHE_KEY];
+  }
 }
 
 export function attachSplitMeshToTileMeshParent(
@@ -130,8 +183,30 @@ export function attachSplitMeshToTileMeshParent(
 }
 
 /**
- * 仅释放不与瓦片 `geometry` 共享的 index / attributes。
+ * 释放合并 split geometry 独有（非共享）的 GPU 资源：逐项对照瓦片几何，
+ * 与瓦片共享的 index / attributes 不动，独有的才 dispose（顶点属性与瓦片
+ * 全量共享，整块 geometry.dispose() 会连带释放瓦片属性的 GPU buffer，
+ * 迫使瓦片重新上传）。
  */
+export function disposeUnsharedGeometryResources(
+  geometry: BufferGeometry,
+  tileGeom?: BufferGeometry,
+): void {
+  const idx = geometry.index;
+  if (idx && idx !== tileGeom?.index) {
+    idx.dispose();
+    geometry.setIndex(null);
+  }
+
+  if (!tileGeom) return;
+  for (const name of Object.keys(geometry.attributes)) {
+    const attr = geometry.attributes[name];
+    if (!attr || attr === tileGeom.getAttribute(name)) continue;
+    geometry.deleteAttribute(name);
+    if (attr instanceof BufferAttribute) attr.dispose();
+  }
+}
+
 export function disposeSplitGeometry(mesh: Mesh): void {
   const geom = mesh.geometry;
   if (!geom) return;
@@ -139,19 +214,7 @@ export function disposeSplitGeometry(mesh: Mesh): void {
   const tileGeom = mesh.userData?._originalMesh?.geometry as
     | BufferGeometry
     | undefined;
-  const idx = geom.index;
-  if (idx && idx !== tileGeom?.index) {
-    idx.dispose();
-    geom.setIndex(null);
-  }
-
-  if (!tileGeom) return;
-  for (const name of Object.keys(geom.attributes)) {
-    const attr = geom.attributes[name];
-    if (!attr || attr === tileGeom.getAttribute(name)) continue;
-    geom.deleteAttribute(name);
-    if (attr instanceof BufferAttribute) attr.dispose();
-  }
+  disposeUnsharedGeometryResources(geom, tileGeom);
 }
 
 /** 按前缀清扫 split 缓存条目（摘 mesh + 释放几何），供冻结整组替换与 collector 整组释放复用 */

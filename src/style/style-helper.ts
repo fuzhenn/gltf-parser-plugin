@@ -299,7 +299,7 @@ export class StyleHelper {
         );
         if (matchedPartIds.size === 0) continue;
 
-        const frozenMesh = buildSplitMeshForTileMesh(
+        const frozen = buildSplitMeshForTileMesh(
           tileMesh,
           matchedPartIds,
           channel,
@@ -307,9 +307,9 @@ export class StyleHelper {
           this._materialBuilder,
           this._featureDataCache,
         );
-        if (frozenMesh) {
-          attachSplitMeshToTileMeshParent(tileMesh, frozenMesh);
-          setCachedSplitMeshOnTileMesh(tileMesh, splitKey, frozenMesh);
+        if (frozen) {
+          attachSplitMeshToTileMeshParent(tileMesh, frozen.mesh);
+          setCachedSplitMeshOnTileMesh(tileMesh, splitKey, frozen.mesh);
         }
       }
     }
