@@ -8,6 +8,7 @@ import {
   setCachedSplitMeshOnTileMesh,
 } from "./split-cache";
 import {
+  buildCollectorGroupKey,
   buildMatchCacheKey,
   buildShowHiddenCacheKey,
   buildSplitCacheKey,
@@ -32,6 +33,7 @@ import {
   resolveShowContent,
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
+  type StyleCondition,
   type StyleConfig,
   type StyleShowInput,
 } from "./appearance";
@@ -72,22 +74,33 @@ export class StyleHelper {
 
   setStyle(style: StyleConfig | null, scenes: Object3D[]): MeshCollector[] {
     this.style = style;
-    const keep = new Set(
-      (style?.conditions ?? []).map((c) => buildSplitCacheKey(c)),
-    );
+
+    // 按组 key 分组：同组 condition 仅 color/opacity 不同，整组共用一个 collector。
+    const groups = new Map<string, StyleCondition[]>();
+    for (const condition of style?.conditions ?? []) {
+      const key = buildCollectorGroupKey(condition);
+      const bucket = groups.get(key);
+      if (bucket) bucket.push(condition);
+      else groups.set(key, [condition]);
+    }
+
     const added: MeshCollector[] = [];
 
     for (const [key, collector] of this._collectors) {
-      if (keep.has(key)) continue;
+      if (groups.has(key)) continue;
       for (const scene of scenes) collector.dispose(scene);
       this._collectors.delete(key);
     }
 
-    for (const condition of style?.conditions ?? []) {
-      const key = buildSplitCacheKey(condition);
-      if (this._collectors.has(key)) continue;
+    for (const [key, groupConditions] of groups) {
+      const existing = this._collectors.get(key);
+      if (existing) {
+        // 组内按位置对齐替换条件：实际外观落地由代数过期后的 applyStyle 统一执行
+        existing.updateConditions(groupConditions);
+        continue;
+      }
       const collector = new MeshCollector({
-        condition,
+        conditions: groupConditions,
         materialBuilder: this._materialBuilder,
         interactionFilter: this._interactionFilter,
         getOidPathMap: this._getOidPathMap,
@@ -194,8 +207,9 @@ export class StyleHelper {
     const splitMeshes: Mesh[] = [];
     for (const tileMesh of collectTileMeshesFromScene(scene)) {
       for (const collector of this._collectors.values()) {
-        const mesh = collector.getSplitMesh(tileMesh);
-        if (mesh) splitMeshes.push(mesh);
+        for (const mesh of collector.getSplitMeshes(tileMesh)) {
+          splitMeshes.push(mesh);
+        }
       }
     }
     return splitMeshes;

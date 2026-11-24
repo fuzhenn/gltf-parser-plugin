@@ -9,6 +9,10 @@ const SPLIT_MESHES_CACHE_KEY = "_splitMeshesCache";
 /** 挂在 tileMesh.userData 上，按 condition key 缓存命中的 partId 集合 */
 const MATCHED_FEATURE_IDS_CACHE_KEY = "_matchedFeatureIdsCache";
 
+type SplitMeshGroupCache = Map<string, Mesh[]>;
+/** 挂在 tileMesh.userData 上，按组 key 缓存 split mesh 数组（组内按条件位置下标存放） */
+const SPLIT_MESH_GROUPS_CACHE_KEY = "_splitMeshGroupsCache";
+
 /** 冻结幽灵体在 split 缓存中的保留 key 前缀，按条件区分（buildSplitCacheKey 输出恒以 f+数字开头，不会撞） */
 export const FROZEN_SPLIT_KEY_PREFIX = "_frozen";
 
@@ -22,7 +26,8 @@ function getCacheMap<K, V>(mesh: Mesh, mapKey: string): Map<K, V> {
   return map;
 }
 
-export function getSplitMeshesCache(tileMesh: Mesh): SplitMeshCache {
+/** 懒初始化地取挂载在 mesh.userData 上的缓存 Map（仅冻结写入路径使用） */
+function getSplitMeshesCache(tileMesh: Mesh): SplitMeshCache {
   return getCacheMap(tileMesh, SPLIT_MESHES_CACHE_KEY);
 }
 
@@ -30,13 +35,6 @@ export function getMatchedFeatureIdsCache(
   tileMesh: Mesh,
 ): MatchedFeatureIdsCache {
   return getCacheMap(tileMesh, MATCHED_FEATURE_IDS_CACHE_KEY);
-}
-
-export function getCachedSplitMeshFromTileMesh(
-  tileMesh: Mesh,
-  cacheKey: string,
-): Mesh | null {
-  return getSplitMeshesCache(tileMesh).get(cacheKey) ?? null;
 }
 
 export function setCachedSplitMeshOnTileMesh(
@@ -76,15 +74,50 @@ function removeCacheEntry(
   }
 }
 
-export function removeSplitMeshCache(tileMesh: Mesh, cacheKey: string): void {
-  removeCacheEntry(tileMesh, cacheKey, SPLIT_MESHES_CACHE_KEY);
-}
-
 export function removeMatchedFeatureIdsCache(
   tileMesh: Mesh,
   cacheKey: string,
 ): void {
   removeCacheEntry(tileMesh, cacheKey, MATCHED_FEATURE_IDS_CACHE_KEY);
+}
+
+/** 读取某组的 split mesh 数组（只读，不存在返回 undefined） */
+export function getSplitMeshGroup(
+  tileMesh: Mesh,
+  groupKey: string,
+): Mesh[] | undefined {
+  const map = tileMesh.userData[SPLIT_MESH_GROUPS_CACHE_KEY] as
+    | SplitMeshGroupCache
+    | undefined;
+  return map?.get(groupKey);
+}
+
+/** 取（懒创建）某组的 split mesh 数组，组内按条件位置下标存放 */
+export function getOrCreateSplitMeshGroup(
+  tileMesh: Mesh,
+  groupKey: string,
+): Mesh[] {
+  let map = tileMesh.userData[SPLIT_MESH_GROUPS_CACHE_KEY] as
+    | SplitMeshGroupCache
+    | undefined;
+  if (!map) {
+    map = new Map();
+    tileMesh.userData[SPLIT_MESH_GROUPS_CACHE_KEY] = map;
+  }
+  let group = map.get(groupKey);
+  if (!group) {
+    group = [];
+    map.set(groupKey, group);
+  }
+  return group;
+}
+
+/** 删除某组的 split mesh 缓存条目（仅摘除缓存记录，不释放 mesh） */
+export function removeSplitMeshGroup(
+  tileMesh: Mesh,
+  groupKey: string,
+): void {
+  removeCacheEntry(tileMesh, groupKey, SPLIT_MESH_GROUPS_CACHE_KEY);
 }
 
 export function attachSplitMeshToTileMeshParent(
@@ -121,22 +154,8 @@ export function disposeSplitGeometry(mesh: Mesh): void {
   }
 }
 
-export function releaseConditionCache(
-  tileMesh: Mesh,
-  matchKey: string,
-  splitKey: string,
-): void {
-  const splitMesh = getCachedSplitMeshFromTileMesh(tileMesh, splitKey);
-  if (splitMesh) {
-    splitMesh.removeFromParent();
-    disposeSplitGeometry(splitMesh);
-  }
-  removeSplitMeshCache(tileMesh, splitKey);
-  removeMatchedFeatureIdsCache(tileMesh, matchKey);
-}
-
-/** 清扫 tile mesh 上所有以 prefix 开头的冻结 split 缓存（摘 mesh + 释放几何），用于冻结条件数组整体替换 */
-export function releaseFrozenSplitCaches(
+/** 按前缀清扫 split 缓存条目（摘 mesh + 释放几何），供冻结整组替换与 collector 整组释放复用 */
+export function releaseSplitMeshCachesByPrefix(
   tileMesh: Mesh,
   prefix: string,
 ): void {
@@ -154,4 +173,12 @@ export function releaseFrozenSplitCaches(
   if (map.size === 0) {
     delete tileMesh.userData[SPLIT_MESHES_CACHE_KEY];
   }
+}
+
+/** 清扫 tile mesh 上所有以 prefix 开头的冻结 split 缓存（摘 mesh + 释放几何），用于冻结条件数组整体替换 */
+export function releaseFrozenSplitCaches(
+  tileMesh: Mesh,
+  prefix: string,
+): void {
+  releaseSplitMeshCachesByPrefix(tileMesh, prefix);
 }

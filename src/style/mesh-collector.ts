@@ -1,4 +1,4 @@
-import type { Mesh, Object3D } from "three";
+import type { Material, Mesh, Object3D } from "three";
 import {
   resolveShowFeatureIdAttribute,
   resolveStyleConditionFeatureIdAttribute,
@@ -12,58 +12,78 @@ import type { MaterialBuilder } from "../types";
 import type { PartInteractionFilter } from "../interaction";
 
 import {
+  buildCollectorGroupKey,
   buildMatchCacheKey,
   buildShowHiddenCacheKey,
-  buildSplitCacheKey,
 } from "./cache-keys";
 import {
   attachSplitMeshToTileMeshParent,
-  getCachedSplitMeshFromTileMesh,
-  releaseConditionCache,
+  disposeSplitGeometry,
+  getOrCreateSplitMeshGroup,
+  getSplitMeshGroup,
   removeMatchedFeatureIdsCache,
-  setCachedSplitMeshOnTileMesh,
+  removeSplitMeshGroup,
 } from "./split-cache";
 import {
   resolveMatchedPartIdsOnTileMesh,
   resolveShowHiddenPartIdsOnTileMesh,
 } from "./condition-match";
 import { buildSplitMeshForTileMesh } from "./split-builder";
+import {
+  applyStyleColorOpacity,
+  disposeOwnedStyleMaterial,
+} from "./material-resolver";
 import { collectTileMeshesFromScene } from "../features";
 
+/**
+ * 一个 collector 对应一组「同 key 条件」（buildCollectorGroupKey 相同）。
+ * 组 key 含条件表达式 + material 引用 + mesh 回调 + TRS 位姿 + refine，且不含
+ * color/opacity —— 因此组内 condition 表达式必然一致（命中集一致）、几何来源
+ * 一致，唯一可能不同的就是 color/opacity。组内按位置对齐维护 split mesh
+ * （tileMesh 上按组 key 缓存一个 Mesh 数组，条件位置即数组下标），
+ * 外观变化原地写 color/opacity，不重建几何。
+ */
 export class MeshCollector {
   readonly featureIdAttribute: number;
-  private _condition: StyleCondition;
+  private _conditions: StyleCondition[];
+  private readonly _groupKey: string;
   private readonly _refine: StyleRefine;
   private readonly _materialBuilder?: MaterialBuilder;
   private readonly _interactionFilter?: PartInteractionFilter;
   private readonly _getOidPathMap?: () => Map<number, string>;
   private readonly _featureDataCache?: FeatureDataCache;
   private readonly _matchCacheKey: string;
-  private readonly _splitCacheKey: string;
   private _show: StyleShowInput | null = null;
   private _showChannel?: number;
   private _showHiddenKey: string | null = null;
 
   constructor(params: {
-    condition: StyleCondition;
+    conditions: StyleCondition[];
     materialBuilder?: MaterialBuilder;
     interactionFilter?: PartInteractionFilter;
     show?: StyleShowInput;
     getOidPathMap?: () => Map<number, string>;
     featureDataCache?: FeatureDataCache;
   }) {
-    this._condition = params.condition;
-    this._refine = params.condition[1]?.refine ?? "replace";
+    this._conditions = params.conditions;
+    this._groupKey = buildCollectorGroupKey(params.conditions[0]);
+    this._refine = params.conditions[0][1]?.refine ?? "replace";
     this._materialBuilder = params.materialBuilder;
     this._interactionFilter = params.interactionFilter;
     this._getOidPathMap = params.getOidPathMap;
     this._featureDataCache = params.featureDataCache;
-    this._matchCacheKey = buildMatchCacheKey(params.condition[0]);
-    this._splitCacheKey = buildSplitCacheKey(params.condition);
+    this._matchCacheKey = buildMatchCacheKey(params.conditions[0][0]);
     this.featureIdAttribute = resolveStyleConditionFeatureIdAttribute(
-      params.condition[0],
+      params.conditions[0][0],
     );
     this.setShow(params.show);
+  }
+
+  /**
+   * setStyle 复用 collector 时调用：同组条件按位置对齐整体替换。
+   */
+  updateConditions(conditions: StyleCondition[]): void {
+    this._conditions = conditions;
   }
 
   /** show 变更时由 StyleHelper 调用（collector 按条件 key 复用，show 状态需同步更新） */
@@ -79,13 +99,14 @@ export class MeshCollector {
 
   applyStyle(scene: Object3D): void {
     const tileMeshes = collectTileMeshesFromScene(scene);
-    const splitKey = this._splitCacheKey;
+    const count = this._conditions.length;
+    const oidPathMap = this._getOidPathMap?.();
 
     for (const tileMesh of tileMeshes) {
-      const oidPathMap = this._getOidPathMap?.();
+      // 组内条件表达式一致 → 条件求值与生效集计算每 tileMesh 只做一次
       const matchedPartIds = resolveMatchedPartIdsOnTileMesh(
         tileMesh,
-        this._condition,
+        this._conditions[0],
         this._matchCacheKey,
         this.featureIdAttribute,
         oidPathMap,
@@ -97,22 +118,33 @@ export class MeshCollector {
         oidPathMap,
       );
 
-      // 本方法仅在 scene 代数过期（setStyle/freeze/show 变化或新瓦片）时执行：
-      // 直接拆旧 split 重建，不做逐 mesh 精细比对（均为低频操作，简单优先）
-      releaseConditionCache(tileMesh, this._matchCacheKey, splitKey);
-      if (effective.size === 0) continue;
+      // 清扫数量收缩后越界的旧缓存条目（低频路径）
+      this._releaseOutOfRangeSplitMeshes(tileMesh, count);
 
-      const splitMesh = buildSplitMeshForTileMesh(
-        tileMesh,
-        effective,
-        this.featureIdAttribute,
-        this._condition[1],
-        this._materialBuilder,
-        this._featureDataCache,
-      );
-      if (splitMesh) {
-        attachSplitMeshToTileMeshParent(tileMesh, splitMesh);
-        setCachedSplitMeshOnTileMesh(tileMesh, splitKey, splitMesh);
+      for (let i = 0; i < count; i++) {
+        const appearance = this._conditions[i][1];
+        const cached = getSplitMeshGroup(tileMesh, this._groupKey)?.[i];
+
+        if (cached) {
+          // 快速路径：材质独享（构建时 clone 一次），原地写条件声明的
+          // color/opacity，零分配零编译，几何与缓存结构不动
+          applyStyleColorOpacity(cached.material as Material, appearance);
+          continue;
+        }
+        if (effective.size === 0) continue;
+
+        const splitMesh = buildSplitMeshForTileMesh(
+          tileMesh,
+          effective,
+          this.featureIdAttribute,
+          appearance,
+          this._materialBuilder,
+          this._featureDataCache,
+        );
+        if (splitMesh) {
+          attachSplitMeshToTileMeshParent(tileMesh, splitMesh);
+          getOrCreateSplitMeshGroup(tileMesh, this._groupKey)[i] = splitMesh;
+        }
       }
     }
   }
@@ -169,17 +201,55 @@ export class MeshCollector {
     return effective ?? matched;
   }
 
-  getSplitMesh(tileMesh: Mesh): Mesh | null {
-    return getCachedSplitMeshFromTileMesh(tileMesh, this._splitCacheKey);
+  /** 释放单个 split mesh（摘出场景 + 释放独有几何 + dispose 独享材质；
+   *  用户传入的 material 实例无所有权标记，不 dispose） */
+  private _releaseSplitMesh(splitMesh: Mesh): void {
+    splitMesh.removeFromParent();
+    disposeSplitGeometry(splitMesh);
+    disposeOwnedStyleMaterial(splitMesh.material);
   }
 
-  /** 把本条件在该 tile mesh 上命中的 featureId 原地累加进 out，避免中间 Set 分配 */
+  /** 清扫下标 >= count 的越界缓存 mesh（conditions 数量收缩后残留） */
+  private _releaseOutOfRangeSplitMeshes(tileMesh: Mesh, count: number): void {
+    const group = getSplitMeshGroup(tileMesh, this._groupKey);
+    if (!group) return;
+    for (let i = count; i < group.length; i++) {
+      const mesh = group[i];
+      if (mesh) this._releaseSplitMesh(mesh);
+    }
+    if (group.length > count) {
+      group.length = count;
+      if (count === 0) removeSplitMeshGroup(tileMesh, this._groupKey);
+    }
+  }
+
+  /** 返回本组在该 tile mesh 上的全部 split mesh（按组内位置序） */
+  getSplitMeshes(tileMesh: Mesh): Mesh[] {
+    const group = getSplitMeshGroup(tileMesh, this._groupKey);
+    if (!group) return [];
+    const meshes: Mesh[] = [];
+    for (let i = 0; i < group.length; i++) {
+      const mesh = group[i];
+      if (!mesh) continue;
+      // 同步 color/opacity：updateConditions 替换条件数组后，按位置把
+      // conditions[i][1] 声明的值原地写到独享材质上（零分配，立即生效）
+      const appearance = this._conditions[i]?.[1];
+      if (appearance) {
+        applyStyleColorOpacity(mesh.material as Material, appearance);
+      }
+      meshes.push(mesh);
+    }
+    return meshes;
+  }
+
+  /** 把本组条件在该 tile mesh 上命中的 featureId 原地累加进 out，避免中间 Set 分配 */
   addMatchedFeatureIds(tileMesh: Mesh, out: Set<number>): void {
     // refine: add → split 仅叠加显示，命中部分不从 tile mesh index
     if (this._refine === "add") return;
+    // 组内条件表达式一致（组 key 保证），单次求值即为全组命中
     const partIds = resolveMatchedPartIdsOnTileMesh(
       tileMesh,
-      this._condition,
+      this._conditions[0],
       this._matchCacheKey,
       this.featureIdAttribute,
       this._getOidPathMap?.(),
@@ -197,10 +267,15 @@ export class MeshCollector {
   }
 
   dispose(scene: Object3D) {
-    const matchKey = this._matchCacheKey;
-    const splitKey = this._splitCacheKey;
     for (const tileMesh of collectTileMeshesFromScene(scene)) {
-      releaseConditionCache(tileMesh, matchKey, splitKey);
+      const group = getSplitMeshGroup(tileMesh, this._groupKey);
+      if (group) {
+        for (const mesh of group) {
+          if (mesh) this._releaseSplitMesh(mesh);
+        }
+        removeSplitMeshGroup(tileMesh, this._groupKey);
+      }
+      removeMatchedFeatureIdsCache(tileMesh, this._matchCacheKey);
       if (this._showHiddenKey) {
         removeMatchedFeatureIdsCache(tileMesh, this._showHiddenKey);
       }

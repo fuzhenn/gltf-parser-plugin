@@ -12,8 +12,6 @@ import {
   type StyleMaterialMaps,
   type StyleVec3Input,
 } from "./appearance";
-import { toColor, type ColorInput } from "../utils/color-input";
-import { MaterialBuilder } from "../types";
 
 /** 从构件材质提取贴图，供 material 回调使用 */
 export function extractStyleMaterialMaps(
@@ -40,30 +38,20 @@ export function extractStyleMaterialMaps(
 }
 
 /**
- * color-only（及 color+opacity）路径的进程级缓存：`hex_op` → 默认 `MeshStandardMaterial`。
- *
- * 同色同透明度多 mesh 共享同一 Material 实例，避免每 mesh `new` 一份。
+ * 独享材质的所有权标记：挂在 mesh.material.userData 上。
+ * 仅 clone / 工厂产物（插件自己创建的实例）会被标记，释放 split mesh 时据此
+ * dispose 材质；用户传入的 `material` 实例不标记，绝不 dispose。
  */
-const defaultColorMaterialCache = new Map<string, Material>();
+const STYLE_OWNED_MATERIAL_KEY = "_gltfParserStyleOwnedMaterial";
 
-/**
- * `material` 实例 + 同级 `color` / `opacity` 的缓存：原始 Material → (复合 key → 克隆体)。
- *
- * - 克隆是为了**不污染用户传入的 Material 实例**；
- * - 用 `WeakMap` 持有原始 Material 作为外层 key，原始 Material 被 GC 时
- *   缓存条目自动回收，避免内存泄漏。
- */
-const colorOverrideMaterialCache = new WeakMap<
-  Material,
-  Map<string, Material>
->();
+function markStyleOwnedMaterial(mat: Material): void {
+  const rec = mat as unknown as { userData?: Record<string, unknown> };
+  if (!rec.userData) rec.userData = {};
+  rec.userData[STYLE_OWNED_MATERIAL_KEY] = true;
+}
 
 function clampOpacity01(o: number): number {
   return Math.max(0, Math.min(1, o));
-}
-
-function colorHex(c: ColorInput): number {
-  return toColor(c).getHex();
 }
 
 function materialHasColor(mat: Material): mat is Material & { color: Color } {
@@ -75,135 +63,66 @@ function materialSupportsOpacity(mat: Material): boolean {
   return typeof (mat as unknown as { opacity?: unknown }).opacity === "number";
 }
 
-function overrideMaterialCacheKey(
-  colorInput: ColorInput | undefined,
-  opacityOverride: number | undefined,
-): string {
-  const h = colorInput !== undefined ? String(colorHex(colorInput)) : "_";
-  const o =
-    opacityOverride !== undefined
-      ? clampOpacity01(opacityOverride).toFixed(4)
-      : "_";
-  return `${h},${o}`;
-}
-
-function getDefaultColorMaterial(
-  c: ColorInput,
-  opacity: number | undefined,
-  materialBuilder: MaterialBuilder,
-): Material {
-  const hex = colorHex(c);
-  const op = opacity != null ? clampOpacity01(opacity) : 1;
-  const key = `${hex}_${op}`;
-  let m = defaultColorMaterialCache.get(key);
-  if (!m) {
-    const color = new Color(hex);
-    m = materialBuilder({
-      pbrMetallicRoughness: {
-        baseColorFactor: [color.r, color.g, color.b, op],
-      },
-    });
-    defaultColorMaterialCache.set(key, m);
-  }
-  return m;
-}
-
-function applyAppearanceOverridesToMaterialInstance(
-  mat: Material,
-  colorInput: ColorInput | undefined,
-  opacityOverride: number | undefined,
-): Material {
-  const wantColor = colorInput !== undefined;
-  const wantOpacity = opacityOverride !== undefined;
-  const canColor = wantColor && materialHasColor(mat);
-  const canOpacity = wantOpacity && materialSupportsOpacity(mat);
-  if (!canColor && !canOpacity) return mat;
-
-  const key = overrideMaterialCacheKey(
-    canColor ? colorInput : undefined,
-    canOpacity ? opacityOverride : undefined,
-  );
-  let perMat = colorOverrideMaterialCache.get(mat);
-  if (!perMat) {
-    perMat = new Map();
-    colorOverrideMaterialCache.set(mat, perMat);
-  }
-  let cloned = perMat.get(key);
-  if (!cloned) {
-    cloned = mat.clone();
-    if (canColor) {
-      (cloned as Material & { color: Color }).color.setHex(
-        colorHex(colorInput!),
-      );
-    }
-    if (canOpacity) {
-      const o = clampOpacity01(opacityOverride!);
-      (cloned as Material & { opacity: number }).opacity = o;
-      (cloned as Material & { transparent?: boolean }).transparent = o < 1;
-    }
-    perMat.set(key, cloned);
-  }
-  return cloned;
-}
-
 /**
- * 解析单个 mesh 最终要使用的 Material 实例。
+ * 解析单个 mesh 最终要使用的 Material 实例。**仅在构建 split mesh 时调用一次**，
+ * 之后的 color/opacity 更新走 {@link applyStyleColorOpacity} 原地写入，不再 resolve。
  *
- * `color` / `opacity` 与 `material` 同级；`material` 本身不含内嵌 color/opacity 字段。
- * 带 `color` 的默认材质路径靠 {@link defaultColorMaterialCache} 共享实例；
- * 改写实例材质靠 {@link colorOverrideMaterialCache}。回调返回的材质在提供 `color` /
- * `opacity` 时**直接 mutate**（约定每次返回新实例）。
+ * - `material` 未声明 → clone 瓦片原材质（独享，标记所有权）；
+ * - `material` 为函数 → 调用工厂（约定每次返回新实例 → 标记所有权，可释放）；
+ * - `material` 为实例 → 直接使用用户实例（不标记，绝不 dispose）。
+ *
+ * color/opacity 不在此处应用，统一由 {@link applyStyleColorOpacity} 写入。
  */
 export function resolveStyleMaterial(
   appearance: StyleAppearance,
   originalMaterial: Material,
-  materialBuilder: MaterialBuilder,
 ): Material {
-  const colorInput = appearance.color;
-  const opacityRaw = appearance.opacity;
-  // 未声明 opacity 时保持 undefined（不改写透明度），不能规范化成 1，
-  // 否则下方"是否需要改写"的判断永远成立，材质实例会被 clone 并强制 transparent=false
-  const opacityOverride =
-    opacityRaw != null ? clampOpacity01(opacityRaw) : undefined;
-
   if (appearance.material === undefined) {
-    if (colorInput !== undefined) {
-      return getDefaultColorMaterial(
-        colorInput,
-        opacityOverride,
-        materialBuilder,
-      );
-    }
-    if (opacityOverride !== undefined) {
-      return applyAppearanceOverridesToMaterialInstance(
-        originalMaterial,
-        undefined,
-        opacityOverride,
-      );
-    }
-    return originalMaterial;
+    const owned = originalMaterial.clone();
+    markStyleOwnedMaterial(owned);
+    return owned;
   }
 
   if (typeof appearance.material === "function") {
     const mat = appearance.material(extractStyleMaterialMaps(originalMaterial));
-    if (colorInput !== undefined && materialHasColor(mat)) {
-      mat.color.setHex(colorHex(colorInput));
-    }
-    if (opacityOverride !== undefined && materialSupportsOpacity(mat)) {
-      mat.opacity = opacityOverride;
-      mat.transparent = opacityOverride < 1;
-    }
+    markStyleOwnedMaterial(mat);
     return mat;
   }
 
-  if (colorInput !== undefined || opacityOverride !== undefined) {
-    return applyAppearanceOverridesToMaterialInstance(
-      appearance.material,
-      colorInput,
-      opacityOverride,
-    );
-  }
   return appearance.material;
+}
+
+/**
+ * 把 appearance 声明的 color/opacity **原地写入**独享材质（高频路径：
+ * applyStyle 快速分支与 getSplitMeshes 同步均调用，零分配零编译）。
+ * 仅写声明的字段：color 未声明不动颜色，opacity 未声明不动透明度；
+ * 材质数组材质不支持原地 c/o，直接跳过。
+ */
+export function applyStyleColorOpacity(
+  mat: Material,
+  appearance: StyleAppearance,
+): void {
+  if (Array.isArray(mat)) return;
+  const colorInput = appearance.color;
+  const opacity =
+    appearance.opacity != null ? clampOpacity01(appearance.opacity) : undefined;
+
+  if (colorInput !== undefined && materialHasColor(mat)) {
+    mat.color.set(colorInput);
+  }
+  if (opacity !== undefined && materialSupportsOpacity(mat)) {
+    (mat as Material & { opacity: number }).opacity = opacity;
+    (mat as Material & { transparent?: boolean }).transparent = opacity < 1;
+  }
+}
+
+/** 释放带所有权标记的独享材质（用户传入的实例材质无标记，不 dispose） */
+export function disposeOwnedStyleMaterial(
+  material: Material | Material[],
+): void {
+  if (Array.isArray(material)) return;
+  const rec = material as unknown as { userData?: Record<string, unknown> };
+  if (rec.userData?.[STYLE_OWNED_MATERIAL_KEY]) material.dispose();
 }
 
 /** 将 {@link StyleVec3Input}（Vector3 或 [x,y,z]）写入 target，原地修改 */
