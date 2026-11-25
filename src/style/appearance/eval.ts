@@ -18,20 +18,24 @@ export type StyleConditionEvaluator = (
   data: Record<string, unknown>,
 ) => boolean;
 
+const conditionFunctionCache = new Map<string, StyleConditionEvaluator>();
+
 /**
  * 编译单个表达式；失败返回 null
  */
 export function compileStyleCondition(
   expr: string,
 ): StyleConditionEvaluator | null {
-  const trimmed = expr.trim();
-  if (!trimmed) return null;
+  const func = conditionFunctionCache.get(expr);
+  if (func) return func;
   try {
-    return new Function(
+    const fn = new Function(
       "data",
       `var d = data != null && typeof data === "object" ? data : {};
-with (d) { return Boolean(${trimmed}); }`,
+with (d) { return Boolean(${expr}); }`,
     ) as StyleConditionEvaluator;
+    conditionFunctionCache.set(expr, fn);
+    return fn;
   } catch {
     return null;
   }
@@ -46,11 +50,10 @@ export function buildStyleConditionEvaluatorMap(config: {
 }): Map<string, StyleConditionEvaluator> {
   const strings = new Set<string>();
   const showContent = resolveShowContent(config.show);
-  if (showContent?.trim()) strings.add(showContent.trim());
+  if (showContent) strings.add(showContent);
   for (const [cond] of config.conditions ?? []) {
     const content = resolveStyleConditionContent(cond);
-    if (typeof content === "string" && content.trim())
-      strings.add(content.trim());
+    if (typeof content === "string") strings.add(content);
   }
   const map = new Map<string, StyleConditionEvaluator>();
   for (const s of strings) {
@@ -68,12 +71,11 @@ export function evaluateStyleCondition(
   const resolved = resolveStyleConditionContent(expr);
   if (resolved === true) return true;
   if (resolved === false) return false;
-  if (typeof resolved !== "string" || !resolved.trim()) return true;
+  if (typeof resolved !== "string") return true;
 
-  const trimmed = resolved.trim();
   const data = propertyData ?? {};
 
-  const fromMap = evaluators?.get(trimmed);
+  const fromMap = evaluators?.get(resolved);
   if (fromMap) {
     try {
       return fromMap(data);
@@ -82,7 +84,7 @@ export function evaluateStyleCondition(
     }
   }
 
-  const fn = compileStyleCondition(trimmed);
+  const fn = compileStyleCondition(resolved);
   if (!fn) return false;
   try {
     return fn(data);

@@ -3,7 +3,7 @@ import {
   CHANNEL_CONFIG,
   featureIdAttributeToChannel,
 } from "../features/channel";
-import { getPartIdMapForFeatureAttribute } from "../features/id-map";
+import { getPartIdMapForFeatureAttribute, lookupFeatureId } from "../features/id-map";
 import {
   getOrLoadFeatureData,
   type FeatureDataCache,
@@ -73,7 +73,7 @@ function getMatchingInstanceIndices(
 
   const targetFids = new Set<number>();
   for (const partId of idSet) {
-    const fid = idMap[partId];
+    const fid = lookupFeatureId(idMap, partId);
     if (fid !== undefined) targetFids.add(fid);
   }
   if (targetFids.size === 0) return [];
@@ -113,7 +113,7 @@ function createSplitInstancedMesh(
 
   const idsOnMesh: number[] = [];
   for (const partId of idSet) {
-    if (idMap[partId] !== undefined) idsOnMesh.push(partId);
+    if (lookupFeatureId(idMap, partId) !== undefined) idsOnMesh.push(partId);
   }
   idsOnMesh.sort((a, b) => a - b);
   if (idsOnMesh.length === 0) return null;
@@ -149,17 +149,18 @@ function createSplitInstancedMesh(
   const featureConfig = (instanceFeatures as InstanceFeatures | undefined)
     ?.featureIds?.[featureIdAttribute];
   let propertyData: unknown = null;
+  const primaryFid = lookupFeatureId(idMap, primaryId);
   if (
     structuralMetadata &&
     featureConfig?.propertyTable !== undefined &&
-    idMap[primaryId] !== undefined
+    primaryFid !== undefined
   ) {
     try {
       // 优先命中插件级缓存，未命中再整行解码并回写
       propertyData = getOrLoadFeatureData(featureDataCache, primaryId, () =>
         structuralMetadata.getPropertyTableData(
           featureConfig.propertyTable,
-          idMap[primaryId]!,
+          primaryFid,
         ) as Record<string, unknown>,
       );
     } catch {

@@ -14,11 +14,13 @@ export const CHANNEL_CONFIG = {
     featureIndex: 0,
     mapKey: "_tile_oidMap",
     namePrefix: "merged_features",
+    partIdsKey: "_tile_oidPartIds",
   },
   pid: {
     featureIndex: 1,
     mapKey: "_tile_pidMap",
     namePrefix: "merged_pids",
+    partIdsKey: "_tile_pidPartIds",
   },
 } as const;
 
@@ -50,9 +52,9 @@ export function resolveFeatureChannelOnMesh(
   const geometry = meshFeatures.geometry ?? mesh.geometry;
   if (!geometry) return null;
 
-  const cfg = CHANNEL_CONFIG[channel];
   const featureIds = meshFeatures.featureIds ?? [];
-  const featureIdConfig = featureIds[cfg.featureIndex];
+  const featureIndex = channel === "oid" ? 0 : 1;
+  const featureIdConfig = featureIds[featureIndex];
 
   if (featureIdConfig != null) {
     // 与原实现一致：attribute 未声明时查 `_feature_id_undefined`（必然 miss），

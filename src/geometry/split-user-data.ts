@@ -4,7 +4,7 @@ import {
   resolveFeatureChannelOnMesh,
   type PartIdChannel,
 } from "../features/channel";
-import { getPartIdMap } from "../features/id-map";
+import { getPartIdMap, lookupFeatureId } from "../features/id-map";
 import {
   getOrLoadFeatureData,
   type FeatureDataCache,
@@ -29,7 +29,7 @@ export function addMeshUserData(
 
   const idsOnMesh: number[] = [];
   for (const partId of idSet) {
-    if (idMap[partId] !== undefined) {
+    if (lookupFeatureId(idMap, partId) !== undefined) {
       idsOnMesh.push(partId);
     }
   }
@@ -41,17 +41,18 @@ export function addMeshUserData(
   const propertyTableIndex = resolved.featureIdConfig?.propertyTable;
 
   let propertyData: unknown = null;
+  const primaryFid = lookupFeatureId(idMap, primaryId);
   if (
     structuralMetadata &&
     propertyTableIndex !== undefined &&
-    idMap[primaryId] !== undefined
+    primaryFid !== undefined
   ) {
     try {
       // 优先命中插件级缓存，未命中再整行解码并回写
       propertyData = getOrLoadFeatureData(featureDataCache, primaryId, () =>
         structuralMetadata.getPropertyTableData(
           propertyTableIndex,
-          idMap[primaryId]!,
+          primaryFid,
         ) as Record<string, unknown>,
       );
     } catch {

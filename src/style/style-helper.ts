@@ -20,9 +20,11 @@ import {
 import { buildSplitMeshForTileMesh } from "./split-builder";
 import {
   collectTileMeshesFromScene,
+  forEachPartId,
   getPartIdMapForFeatureAttribute,
   isTileInstancedMesh,
   isTileMesh,
+  lookupFeatureId,
   type FeatureDataCache,
 } from "../features";
 import {
@@ -244,11 +246,11 @@ export class StyleHelper {
     if (!filter?.hasFrozen()) return;
     const idMap = getPartIdMapForFeatureAttribute(source, channel);
     if (!idMap) return;
-    for (const partId of Object.keys(idMap)) {
-      if (!filter.isFrozen(channel, Number(partId))) continue;
-      const fid = idMap[Number(partId)];
+    forEachPartId(idMap, (partId) => {
+      if (!filter.isFrozen(channel, partId)) return;
+      const fid = lookupFeatureId(idMap, partId);
       if (fid !== undefined) out.add(fid);
-    }
+    });
   }
 
   /** 收集该 mesh 上被 show 隐藏的 fids（keep-set 补集语义，按 show 自身通道） */
@@ -266,7 +268,7 @@ export class StyleHelper {
     const idMap = getPartIdMapForFeatureAttribute(source, this._showChannel);
     if (!idMap) return;
     for (const partId of hidden) {
-      const fid = idMap[partId];
+      const fid = lookupFeatureId(idMap, partId);
       if (fid !== undefined) out.add(fid);
     }
   }
