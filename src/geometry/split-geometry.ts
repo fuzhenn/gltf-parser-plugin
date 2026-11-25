@@ -6,7 +6,7 @@ import {
   resolveFeatureChannelOnMesh,
   type PartIdChannel,
 } from "../features/channel";
-import { getPartIdMap } from "../features/id-map";
+import { getPartIdMap, lookupFeatureId } from "../features/id-map";
 import { createSplitIndexArray } from "./index-arrays";
 import { getFeatureIdIndexCache, getFeatureSplitSourceIndex } from "./index-visibility";
 
@@ -38,7 +38,7 @@ function resolveMergedSplitContext(
 
   const targetFids = new Set<number>();
   for (const partId of idSet) {
-    const fid = idMap[partId];
+    const fid = lookupFeatureId(idMap, partId);
     if (fid !== undefined) {
       targetFids.add(fid);
     }

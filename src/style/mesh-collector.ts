@@ -6,7 +6,10 @@ import {
   type StyleRefine,
   type StyleShowInput,
 } from "./appearance";
-import { getPartIdMapForFeatureAttribute } from "../features";
+import {
+  getPartIdMapForFeatureAttribute,
+  lookupFeatureId,
+} from "../features";
 import type { FeatureDataCache } from "../features";
 import type { MaterialBuilder } from "../types";
 import type { PartInteractionFilter } from "../interaction";
@@ -281,7 +284,7 @@ export class MeshCollector {
     );
     if (!idMap) return;
     for (const partId of partIds) {
-      const fid = idMap[partId];
+      const fid = lookupFeatureId(idMap, partId);
       if (fid !== undefined) out.add(fid);
     }
   }

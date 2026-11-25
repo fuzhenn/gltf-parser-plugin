@@ -37,13 +37,13 @@ function collectPartIdsByPredicate(
     for (const partId of partIds) {
       const propertyData = getPropertyDataFromUserData(
         tileMesh.userData,
-        +partId,
+        partId,
         featureIdAttribute,
         oidPathMap,
         featureDataCache,
       );
       if (propertyData != null && keep(propertyData)) {
-        result.add(+partId);
+        result.add(partId);
       }
     }
   }

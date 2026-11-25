@@ -5,7 +5,12 @@ import {
   featureIdAttributeToChannel,
   resolveFeatureChannelOnMesh,
 } from "./channel";
-import { getPartIdMap, getPartIdMapForFeatureAttribute } from "./id-map";
+import {
+  getPartIdMap,
+  getPartIdMapForFeatureAttribute,
+  getPartIdsFromPartIdMap,
+  lookupFeatureId,
+} from "./id-map";
 import {
   getOrLoadFeatureData,
   type FeatureDataCache,
@@ -41,7 +46,7 @@ function readPropertyData(
     const idMap = getPartIdMapForFeatureAttribute(userData, featureIdAttribute);
     if (!structuralMetadata || !idMap) return null;
 
-    const fid = idMap[partId];
+    const fid = lookupFeatureId(idMap, partId);
     if (fid === undefined) return null;
 
     const propertyTableIndex =
@@ -103,8 +108,10 @@ function collectPartIdsFromSourceUserData(
 ): number[] {
   const idMap = getPartIdMapForFeatureAttribute(userData, featureIdAttribute);
   if (!idMap) return [];
-  return Object.keys(idMap).map(Number);
+  return getPartIdsFromPartIdMap(idMap);
 }
+
+const scratchMesh = {} as Mesh;
 
 /**
  * 从单个 mesh（或其 userData）读取零件属性，仅用本 mesh 的 idMap/pidMap + structuralMetadata。
@@ -118,12 +125,10 @@ function getPropertyDataFromMeshUserData(
   const meshFeatures = userData.meshFeatures as
     | { geometry?: BufferGeometry }
     | undefined;
-  const mesh = {
-    userData,
-    geometry: meshFeatures?.geometry,
-  } as Mesh;
+  scratchMesh.userData = userData;
+  scratchMesh.geometry = meshFeatures?.geometry as BufferGeometry;
   return getPropertyDataOnMeshByPartId(
-    mesh,
+    scratchMesh,
     partId,
     featureIdAttribute,
     featureDataCache,
@@ -137,9 +142,11 @@ function getPropertyDataOnMeshByPartId(
   featureDataCache?: FeatureDataCache,
 ): Record<string, unknown> | null {
   const channel = featureIdAttributeToChannel(featureIdAttribute);
-  const idMap = getPartIdMap(mesh, channel)!;
-  const fid = idMap[partId]!;
-  if (!idMap || fid === undefined) return null;
+  const idMap = getPartIdMap(mesh, channel);
+  if (!idMap) return null;
+
+  const fid = lookupFeatureId(idMap, partId);
+  if (fid === undefined) return null;
 
   const resolved = resolveFeatureChannelOnMesh(mesh, channel);
   if (!resolved) return null;
@@ -155,32 +162,16 @@ function getPropertyDataOnMeshByPartId(
   }
 
   try {
-    const cacheKey = propertyTableIndex * 1e9 + partId;
-    let data;
-    let cache = mesh.userData["_propertyCache"] as Map<
-      number,
-      Record<string, unknown>
-    >;
-    if (!cache) {
-      cache = new Map();
-      mesh.userData["_propertyCache"] = cache;
-    }
-
-    data = cache.get(cacheKey)!;
-    if (!data) {
-      // 优先命中插件级缓存，未命中再整行解码并回写
-      data = getOrLoadFeatureData(
-        featureDataCache,
-        partId,
-        () =>
-          structuralMetadata.getPropertyTableData(
-            propertyTableIndex,
-            fid,
-          ) as Record<string, unknown>,
-      );
-      cache.set(cacheKey, data);
-    }
-    return data;
+    // 优先命中插件级缓存（partId → 整行数据），未命中再整行解码并回写
+    return getOrLoadFeatureData(
+      featureDataCache,
+      partId,
+      () =>
+        structuralMetadata.getPropertyTableData(
+          propertyTableIndex,
+          fid,
+        ) as Record<string, unknown>,
+    );
   } catch {
     return channel === "pid" ? { _pid: partId, pid: partId } : null;
   }

@@ -11,6 +11,8 @@ import type {
   MetadataTypedArray,
 } from "./types";
 import type { FeatureDataCache } from "./feature-data-cache";
+import { setFeatureData } from "./feature-data-cache";
+import { buildPartIdMapFromEntries, type PartIdMap } from "./id-map";
 
 const EXT_INSTANCE_FEATURES = "EXT_instance_features";
 const EXT_STRUCTURAL_METADATA = "EXT_structural_metadata";
@@ -100,7 +102,7 @@ export function buildInstanceOidMap(
   structuralMetadata: StructuralMetadata,
   featureIndex = 0,
   featureDataCache?: FeatureDataCache,
-): Record<number, number> | null {
+): PartIdMap | null {
   const ext = nodeData.extensions?.[EXT_INSTANCE_FEATURES];
   const instanceData = nodeData.instanceData;
   const featureConfig = ext?.featureIds?.[featureIndex];
@@ -120,7 +122,8 @@ export function buildInstanceOidMap(
     ): Record<string, unknown>;
   };
 
-  const idMap: Record<number, number> = {};
+  const partIdEntries: number[] = [];
+  const fidEntries: number[] = [];
   const processedFeatureIds = new Set<number>();
 
   for (let instanceIndex = 0; instanceIndex < instanceData.count; instanceIndex++) {
@@ -138,12 +141,13 @@ export function buildInstanceOidMap(
       const oid = row._oid as number;
       if (oid === undefined) continue;
       // 读取前未知 partId，读后回填插件级缓存供后续调用复用
-      featureDataCache?.set(oid, row);
-      idMap[oid] = featureId;
+      setFeatureData(featureDataCache, oid, row);
+      partIdEntries.push(oid);
+      fidEntries.push(featureId);
     } catch {
       continue;
     }
   }
 
-  return Object.keys(idMap).length > 0 ? idMap : null;
+  return buildPartIdMapFromEntries(partIdEntries, fidEntries);
 }

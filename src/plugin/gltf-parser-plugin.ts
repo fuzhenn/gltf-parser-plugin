@@ -21,6 +21,7 @@ import type {
 import { StyleHelper } from "../style";
 import {
   buildPartIdToFeatureIdMap,
+  createFeatureDataCache,
   queryFeatureFromIntersection,
   type FeatureInfo,
 } from "../features";
@@ -41,10 +42,7 @@ export class GLTFParserPlugin {
   private readonly _parseScheduler: TileParseScheduler;
 
   /** 全局 featureData 缓存：partId → 属性表整行数据，跨 mesh / 跨通道复用 */
-  private readonly _featureDataCache = new Map<
-    number,
-    Record<string, unknown>
-  >();
+  private readonly _featureDataCache = createFeatureDataCache();
 
   private readonly _structureHelper = new StructureHelper(
     () => this._tiles,

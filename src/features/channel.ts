@@ -52,9 +52,9 @@ export function resolveFeatureChannelOnMesh(
   const geometry = meshFeatures.geometry ?? mesh.geometry;
   if (!geometry) return null;
 
-  const cfg = CHANNEL_CONFIG[channel];
   const featureIds = meshFeatures.featureIds ?? [];
-  const featureIdConfig = featureIds[cfg.featureIndex];
+  const featureIndex = channel === "oid" ? 0 : 1;
+  const featureIdConfig = featureIds[featureIndex];
 
   if (featureIdConfig != null) {
     // 与原实现一致：attribute 未声明时查 `_feature_id_undefined`（必然 miss），
