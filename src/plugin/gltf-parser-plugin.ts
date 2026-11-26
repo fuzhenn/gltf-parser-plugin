@@ -9,6 +9,7 @@ import type { Box3, Intersection, Object3D, Plane, Vector3 } from "three";
 import { GLTFWorkerLoader, defaultMaterialBuilder } from "../loader";
 import {
   setMaxWorkers,
+  setSchemaCacheEnabled,
   resolveFetchOptions,
   TileParseScheduler,
 } from "../utils";
@@ -64,8 +65,11 @@ export class GLTFParserPlugin {
   constructor(options: GLTFParserPluginOptions) {
     this._options = options;
 
+    console.log("GLTFParserPlugin initialized");
+
     // --- Worker pool setup ---
     setMaxWorkers(this._options.maxWorkers);
+    setSchemaCacheEnabled(!!this._options.useIndexedDB);
 
     // --- 时间片调度器：同时解析的瓦片 buffer 总量不超过预算（默认 1MB）---
     this._parseScheduler = new TileParseScheduler(

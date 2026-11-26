@@ -1,15 +1,42 @@
 // Import inline Worker (Vite will compile and bundle the worker code into a base64 data URL)
 import GLTFWorkerClass from "../worker/index?worker&inline";
 import { resolveFetchOptions } from "./fetch-options";
+import { tileCache } from "../cache";
 
 // Worker pool management
 let workerPool: Worker[] = [];
 let maxWorkers = 1;
 let currentWorkerIndex = 0;
+let schemaCacheEnabled = false;
 
 // ---- Global schema cache (shared across all workers) ----
 
 const schemaCache = new Map<string, Promise<any>>();
+
+/**
+ * L2 miss -> IndexedDB -> network
+ */
+async function loadSchema(url: string, requestInit: RequestInit) {
+  if (schemaCacheEnabled) {
+    const cached = await tileCache.getSchema(url);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const res = await fetch(url, requestInit);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch schema: ${res.status} ${res.statusText}`);
+  }
+  const data = await res.json();
+
+  if (schemaCacheEnabled) {
+    tileCache.setSchema(url, data).catch((err: unknown) => {
+      console.warn("[GLTFParserPlugin] Failed to cache schema:", err);
+    });
+  }
+  return data;
+}
 
 /**
  * Attach a schema request handler to a Worker.
@@ -30,20 +57,11 @@ function setupSchemaHandler(worker: Worker): void {
 
     let promise = schemaCache.get(url);
     if (!promise) {
-      promise = fetch(url, requestInit)
-        .then((res) => {
-          if (!res.ok) {
-            throw new Error(
-              `Failed to fetch schema: ${res.status} ${res.statusText}`,
-            );
-          }
-          return res.json();
-        })
-        .catch((err) => {
-          // Remove from cache on failure so it can be retried next time
-          schemaCache.delete(url);
-          throw err;
-        });
+      promise = loadSchema(url, requestInit).catch((err) => {
+        // Remove from cache on failure so it can be retried next time
+        schemaCache.delete(url);
+        throw err;
+      });
       schemaCache.set(url, promise);
     }
 
@@ -67,6 +85,13 @@ function setupSchemaHandler(worker: Worker): void {
 export function setMaxWorkers(count?: number): void {
   const cap = navigator.hardwareConcurrency || 4;
   maxWorkers = Math.max(1, Math.min(count ?? cap, cap));
+}
+
+/**
+ * Enable persisting schema JSON to IndexedDB (must be called before initialization)
+ */
+export function setSchemaCacheEnabled(enabled: boolean): void {
+  schemaCacheEnabled = enabled;
 }
 
 /**
