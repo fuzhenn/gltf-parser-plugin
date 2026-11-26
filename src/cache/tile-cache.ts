@@ -1,6 +1,6 @@
 // IndexedDB constants
 const DB_NAME = "GLTFParserPluginTilesCache";
-const DB_VERSION = 2;
+const DB_VERSION = 1;
 const STORE_NAME = "tiles";
 const SCHEMA_STORE_NAME = "schemas";
 

@@ -65,8 +65,6 @@ export class GLTFParserPlugin {
   constructor(options: GLTFParserPluginOptions) {
     this._options = options;
 
-    console.log("GLTFParserPlugin initialized");
-
     // --- Worker pool setup ---
     setMaxWorkers(this._options.maxWorkers);
     setSchemaCacheEnabled(!!this._options.useIndexedDB);
