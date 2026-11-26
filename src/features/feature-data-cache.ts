@@ -15,22 +15,17 @@ export type FeatureData = Record<string, unknown>;
 export type FeatureDataCache = (FeatureData | undefined)[];
 
 export function createFeatureDataCache(): FeatureDataCache {
-  return [];
+  return new Array(100000);
 }
 
-/** 写入一行数据（正向越界时几何扩容） */
-export function setFeatureData(
-  cache: FeatureDataCache | undefined,
+/** 写入一行数据 */
+export function setFeatureData<T>(
+  cache: (T | undefined)[] | undefined,
   partId: number,
-  data: FeatureData,
+  data: T,
 ): void {
   if (!cache) return;
 
-  if (partId >= cache.length) {
-    let newLength = cache.length || 16;
-    while (newLength <= partId) newLength *= 2;
-    cache.length = newLength;
-  }
   cache[partId] = data;
 }
 

@@ -17,6 +17,12 @@ import {
 } from "./split-cache";
 
 /**
+ * partId → keep 谓词结果（数组直接寻址，undefined 表示未计算）。
+ * 同一谓词下 partId 跨 tile mesh 复用；无属性数据的 partId 不入缓存。
+ */
+export type KeepResultCache = Int8Array;
+
+/**
  * 按 cacheKey 缓存地遍历 tile mesh 的 partId，用 keep 谓词收集集合。
  * 供条件命中（正取）与 show 隐藏（补集取反）共用。
  */
@@ -27,22 +33,30 @@ function collectPartIdsByPredicate(
   keep: (propertyData: Record<string, unknown> | null) => boolean,
   oidPathMap?: Map<number, string>,
   featureDataCache?: FeatureDataCache,
+  keepCache?: KeepResultCache,
 ): Set<number> {
   const cached = getCachedMatchedFeatureIds(tileMesh, cacheKey);
   if (cached) return cached;
 
   const partIds = getPartIdsForFeatureAttribute(tileMesh, featureIdAttribute);
   const result = new Set<number>();
-  if (partIds) {
-    for (const partId of partIds) {
-      const propertyData = getPropertyDataFromUserData(
-        tileMesh.userData,
-        partId,
-        featureIdAttribute,
-        oidPathMap,
-        featureDataCache,
-      );
-      if (propertyData != null && keep(propertyData)) {
+  if (partIds && keepCache) {
+    for (let i = 0; i < partIds.length; i++) {
+      const partId = partIds[i];
+      let kept = keepCache[partId];
+      if (kept === 0) {
+        const propertyData = getPropertyDataFromUserData(
+          tileMesh.userData,
+          partId,
+          featureIdAttribute,
+          oidPathMap,
+          featureDataCache,
+        );
+        if (propertyData == null) continue;
+        kept = keep(propertyData) ? 1 : -1;
+        keepCache[partId] = kept;
+      }
+      if (kept === 1) {
         result.add(partId);
       }
     }
@@ -62,6 +76,7 @@ export function resolveMatchedPartIdsOnTileMesh(
   featureIdAttribute: number,
   oidPathMap?: Map<number, string>,
   featureDataCache?: FeatureDataCache,
+  keepCache?: KeepResultCache,
 ): Set<number> {
   const evaluators = buildStyleConditionEvaluatorMap({
     conditions: [condition],
@@ -74,6 +89,7 @@ export function resolveMatchedPartIdsOnTileMesh(
       evaluateStyleCondition(condition[0], propertyData, evaluators),
     oidPathMap,
     featureDataCache,
+    keepCache,
   );
 }
 
@@ -89,6 +105,7 @@ export function resolveShowHiddenPartIdsOnTileMesh(
   featureIdAttribute: number,
   oidPathMap?: Map<number, string>,
   featureDataCache?: FeatureDataCache,
+  keepCache?: KeepResultCache,
 ): Set<number> {
   const evaluators = buildStyleConditionEvaluatorMap({ show });
   const showExpr = resolveShowContent(show)!;
@@ -100,5 +117,6 @@ export function resolveShowHiddenPartIdsOnTileMesh(
       !evaluateStyleCondition(showExpr, propertyData, evaluators),
     oidPathMap,
     featureDataCache,
+    keepCache,
   );
 }
