@@ -33,6 +33,7 @@ import {
 import {
   resolveMatchedPartIdsOnTileMesh,
   resolveShowHiddenPartIdsOnTileMesh,
+  type KeepResultCache,
 } from "./condition-match";
 import { buildSplitMeshForTileMesh } from "./split-builder";
 import {
@@ -62,6 +63,10 @@ export class MeshCollector {
   private _show: StyleShowInput | null = null;
   private _showChannel?: number;
   private _showHiddenKey: string | null = null;
+  /** 条件表达式的 partId → 结果缓存（组内表达式一致，collector 生命周期内有效） */
+  private readonly _matchKeepCache: KeepResultCache = new Int8Array(100000);
+  /** show 表达式的 partId → 结果缓存（show 内容变更即换 key 并清空） */
+  private _showHiddenKeepCache: KeepResultCache = new Int8Array(100000);
 
   constructor(params: {
     conditions: StyleCondition[];
@@ -99,8 +104,12 @@ export class MeshCollector {
       this._show == null
         ? undefined
         : resolveShowFeatureIdAttribute(this._show);
-    this._showHiddenKey =
+    const showHiddenKey =
       this._show == null ? null : buildShowHiddenCacheKey(this._show);
+    if (showHiddenKey !== this._showHiddenKey) {
+      this._showHiddenKey = showHiddenKey;
+      this._showHiddenKeepCache.fill(0);
+    }
   }
 
   applyStyle(scene: Object3D): void {
@@ -117,6 +126,7 @@ export class MeshCollector {
         this.featureIdAttribute,
         oidPathMap,
         this._featureDataCache,
+        this._matchKeepCache,
       );
       const effective = this._filterHiddenOnTileMesh(
         tileMesh,
@@ -210,6 +220,7 @@ export class MeshCollector {
         this._showChannel!,
         oidPathMap,
         this._featureDataCache,
+        this._showHiddenKeepCache,
       );
       if (hidden.size > 0) {
         for (const partId of matched) {
@@ -277,6 +288,7 @@ export class MeshCollector {
       this.featureIdAttribute,
       this._getOidPathMap?.(),
       this._featureDataCache,
+      this._matchKeepCache,
     );
     const idMap = getPartIdMapForFeatureAttribute(
       tileMesh,
