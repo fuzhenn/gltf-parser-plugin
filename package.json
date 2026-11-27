@@ -28,7 +28,7 @@
   "author": "maptalks",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "26.6.6",
+    "@types/node": "26.6.11",
     "@types/three": "0.187.0",
     "@typescript-eslint/eslint-plugin": "8.74.0",
     "@typescript-eslint/parser": "8.74.0",
@@ -38,7 +38,7 @@
     "typescript": "^7.0.2",
     "vite": "8.3.8",
     "vite-plugin-dts": "5.1.2",
-    "vitest": "5.1.1"
+    "vitest": "5.1.2"
   },
   "dependencies": {
     "3d-tiles-renderer": "0.5.4",
